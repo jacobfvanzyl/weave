@@ -1,0 +1,43 @@
+---
+source: protocol/tests/wire.rs
+expression: "json!({\n    \"request\": message(&ListSessionsRequest {}), \"response\":\n    round_trip(&ListSessionsResponse\n    {\n        sessions:\n        vec![Session { layout: None, ..session() }, Session\n        {\n            directory: \"/Users/jaco/notes\".into(), revision: 0, layout: None,\n            git: None, created_at: 1_760_180_000_000, updated_at: None,\n            threads: vec![weave_host_protocol::threads::ThreadId::new(\"s-9\")],\n            terminals: Vec::new(),\n        },],\n    }),\n})"
+---
+{
+  "request": {
+    "method": "sessions/list",
+    "params": {}
+  },
+  "response": {
+    "sessions": [
+      {
+        "directory": "/Users/jaco/Projects/weave.feature-auth",
+        "revision": 7,
+        "git": {
+          "repo": "/Users/jaco/Projects/weave",
+          "worktree": "/Users/jaco/Projects/weave.feature-auth",
+          "branch": "feature/auth",
+          "remote": "github.com/jacobfvanzyl/weave"
+        },
+        "createdAt": 1760180000000,
+        "updatedAt": 1760180030000,
+        "threads": [
+          "s-2",
+          "s-1"
+        ],
+        "terminals": [
+          "t-5f3a",
+          "t-77c1"
+        ]
+      },
+      {
+        "directory": "/Users/jaco/notes",
+        "revision": 0,
+        "createdAt": 1760180000000,
+        "threads": [
+          "s-9"
+        ],
+        "terminals": []
+      }
+    ]
+  }
+}

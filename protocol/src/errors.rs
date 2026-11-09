@@ -55,6 +55,13 @@ pub const HOST_UNAVAILABLE: i32 = -32081;
 /// A turn's end, not a request's: the Host stopped or crashed while the turn ran, so it was cut
 /// off. A headless thread's turn is continued once the Host takes it up again (WVE-144).
 pub const INTERRUPTED: i32 = -32082;
+/// The directory has no Session (WVE-202).
+pub const NO_SESSION: i32 = -32083;
+/// `sessions/set`'s `ifRevision` isn't the Session's revision any more; `data.revision` is.
+pub const REVISION_CONFLICT: i32 = -32084;
+/// A thread in the Session runs a turn or waits on a request, or a terminal in it runs a
+/// command; `data.threads` and `data.terminals` say which.
+pub const SESSION_BUSY: i32 = -32085;
 
 pub fn unauthenticated(why: impl Into<String>) -> Error {
     Error::new(UNAUTHENTICATED, why)
@@ -220,6 +227,40 @@ pub fn host_stopping() -> Error {
 /// How a turn the Host stopped or crashed under ends.
 pub fn interrupted() -> Error {
     Error::new(INTERRUPTED, "the weave Host stopped while this turn ran")
+}
+
+pub fn no_session(directory: &Path) -> Error {
+    Error::new(
+        NO_SESSION,
+        format!("{} has no Session", directory.display()),
+    )
+}
+
+pub fn revision_conflict(revision: u64) -> Error {
+    Error::new(
+        REVISION_CONFLICT,
+        format!("the Session's layout is at revision {revision} now; merge and set it again"),
+    )
+    .data(serde_json::json!({"revision": revision}))
+}
+
+pub fn session_busy(threads: &[ThreadId], terminals: &[String]) -> Error {
+    let ids: Vec<String> = threads.iter().map(ToString::to_string).collect();
+    let mut busy = Vec::new();
+    if !ids.is_empty() {
+        busy.push(format!(
+            "a thread in this Session is running a turn or waiting on a request: {}",
+            ids.join(", ")
+        ));
+    }
+    if !terminals.is_empty() {
+        busy.push(format!(
+            "a terminal in this Session is running a command: {}",
+            terminals.join(", ")
+        ));
+    }
+    Error::new(SESSION_BUSY, busy.join("; "))
+        .data(serde_json::json!({"threads": ids, "terminals": terminals}))
 }
 
 /// Whether `error` carries `code`.

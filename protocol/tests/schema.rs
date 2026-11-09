@@ -28,6 +28,7 @@ use weave_host_protocol::host;
 use weave_host_protocol::mcp;
 use weave_host_protocol::pending;
 use weave_host_protocol::queue;
+use weave_host_protocol::sessions;
 use weave_host_protocol::terminals;
 use weave_host_protocol::threads;
 use weave_host_protocol::tools;
@@ -142,6 +143,12 @@ fn schema() -> Value {
         "terminals/write" => terminals::WriteTerminalRequest,
         "terminals/format" => terminals::FormatTerminalRequest,
         "terminals/attach" => terminals::AttachTerminalRequest,
+        "sessions/list" => sessions::ListSessionsRequest,
+        "sessions/get" => sessions::GetSessionRequest,
+        "sessions/set" => sessions::SetSessionRequest,
+        "sessions/watch" => sessions::WatchSessionsRequest,
+        "sessions/unwatch" => sessions::UnwatchSessionsRequest,
+        "sessions/end" => sessions::EndSessionRequest,
         "thread/report" => threads::ReportThreadRequest,
         "service/declareTools" => tools::DeclareToolsRequest,
         "service/answerTool" => tools::AnswerToolRequest,
@@ -157,6 +164,8 @@ fn schema() -> Value {
         "agents/updateAvailable" => agents::UpdateAvailableNotification,
         "terminals/updated" => terminals::TerminalUpdatedNotification,
         "terminals/removed" => terminals::TerminalRemovedNotification,
+        "sessions/updated" => sessions::SessionUpdatedNotification,
+        "sessions/ended" => sessions::SessionEndedNotification,
         "service/toolCall" => tools::ToolCallNotification,
         "service/hostCall" => tools::HostCallNotification,
         "service/toolCallCancelled" => tools::ToolCallCancelledNotification,
@@ -274,6 +283,9 @@ fn schema() -> Value {
                 "unknownTurn": errors::UNKNOWN_TURN,
                 "hostUnavailable": errors::HOST_UNAVAILABLE,
                 "interrupted": errors::INTERRUPTED,
+                "noSession": errors::NO_SESSION,
+                "revisionConflict": errors::REVISION_CONFLICT,
+                "sessionBusy": errors::SESSION_BUSY,
             },
             "features": {
                 "steer": turns::STEER_FEATURE,
@@ -292,9 +304,11 @@ fn schema() -> Value {
                 "otherHosts": threads::OTHER_HOSTS_FEATURE,
                 "mcpServers": mcp::FEATURE,
                 "carry": dispatcher::CARRY_FEATURE,
+                "sessions": sessions::FEATURE,
             },
             "files": {"maxEntries": files::MAX_ENTRIES},
             "threads": {"maxTitle": threads::MAX_TITLE},
+            "sessions": {"maxLayout": sessions::MAX_LAYOUT, "layoutVersion": sessions::layout::VERSION},
             "requestKeys": {"maxKey": turns::MAX_KEY},
             "clientTools": {"clipboardWrite": tools::CLIPBOARD_WRITE},
             "hostTools": {

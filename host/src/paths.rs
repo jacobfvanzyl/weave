@@ -72,6 +72,12 @@ impl DaemonPaths {
         self.dir.join("threads")
     }
 
+    /// Sessions' layouts, one file each (WVE-202). Not `sessions`, where Hosts of the Host
+    /// protocol's version 2 kept journals.
+    pub fn sessions(&self) -> PathBuf {
+        self.dir.join("layouts")
+    }
+
     /// The Host's id and the devices it accepts remote clients from.
     pub fn devices(&self) -> PathBuf {
         self.dir.join("devices.json")

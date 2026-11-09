@@ -212,6 +212,30 @@ expression: schema()
       "params": "AttachTerminalRequest",
       "result": "AttachTerminalResponse"
     },
+    "sessions/list": {
+      "params": "ListSessionsRequest",
+      "result": "ListSessionsResponse"
+    },
+    "sessions/get": {
+      "params": "GetSessionRequest",
+      "result": "SessionResponse"
+    },
+    "sessions/set": {
+      "params": "SetSessionRequest",
+      "result": "SessionResponse"
+    },
+    "sessions/watch": {
+      "params": "WatchSessionsRequest",
+      "result": "WatchSessionsResponse"
+    },
+    "sessions/unwatch": {
+      "params": "UnwatchSessionsRequest",
+      "result": "Empty"
+    },
+    "sessions/end": {
+      "params": "EndSessionRequest",
+      "result": "Empty"
+    },
     "thread/report": {
       "params": "ReportThreadRequest",
       "result": "Empty"
@@ -236,6 +260,8 @@ expression: schema()
     "agents/updateAvailable": "UpdateAvailableNotification",
     "terminals/updated": "TerminalUpdatedNotification",
     "terminals/removed": "TerminalRemovedNotification",
+    "sessions/updated": "SessionUpdatedNotification",
+    "sessions/ended": "SessionEndedNotification",
     "service/toolCall": "ToolCallNotification",
     "service/hostCall": "HostCallNotification",
     "service/toolCallCancelled": "ToolCallCancelledNotification"
@@ -401,7 +427,10 @@ expression: schema()
       "terminalUnavailable": -32079,
       "unknownTurn": -32080,
       "hostUnavailable": -32081,
-      "interrupted": -32082
+      "interrupted": -32082,
+      "noSession": -32083,
+      "revisionConflict": -32084,
+      "sessionBusy": -32085
     },
     "features": {
       "steer": "turn/steer",
@@ -419,13 +448,18 @@ expression: schema()
       "turnIds": "turnIds",
       "otherHosts": "otherHosts",
       "mcpServers": "mcpServers",
-      "carry": "carry"
+      "carry": "carry",
+      "sessions": "sessions"
     },
     "files": {
       "maxEntries": 2000
     },
     "threads": {
       "maxTitle": 200
+    },
+    "sessions": {
+      "maxLayout": 1048576,
+      "layoutVersion": 1
     },
     "requestKeys": {
       "maxKey": 200
@@ -7598,6 +7632,430 @@ expression: schema()
         "expiresAt"
       ]
     },
+    "ListSessionsRequest": {
+      "type": "object",
+      "description": "`sessions/list`: the Host's Sessions, by directory, without their layouts."
+    },
+    "ListSessionsResponse": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostSession"
+          }
+        }
+      },
+      "required": [
+        "sessions"
+      ]
+    },
+    "HostSession": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string",
+          "description": "What it's known by: a worktree, or a directory outside a repository; symlinks resolved."
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Its layout's revision: 0 before any client set one, then one more with every write."
+        },
+        "layout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionLayout"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its layout, as the last client to set it wrote it; absent before any did, and in\n`sessions/list`. The Host never reads it: [`layout::Layout`] is the shape clients agree\non."
+        },
+        "git": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitLocation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where in a git repository it is; absent outside one."
+        },
+        "createdAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "updatedAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When its layout was last set; absent before any client set one."
+        },
+        "threads": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionId"
+          },
+          "description": "The threads the Host has a record of in it, open or not, most recently active first, so\na client can place one no Block shows. `threads/watch` follows them.",
+          "default": []
+        },
+        "terminals": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Its terminals' ids, oldest first. `terminals/watch` follows them.",
+          "default": []
+        }
+      },
+      "required": [
+        "directory",
+        "revision",
+        "createdAt"
+      ],
+      "description": "A Session as clients see it. `HostSession` in the schema, apart from ACP's sessions."
+    },
+    "SessionLayout": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The shape it was written in: [`VERSION`]."
+        },
+        "tabs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionTab"
+          },
+          "description": "In order. Which is in front is each device's own."
+        }
+      },
+      "required": [
+        "version",
+        "tabs"
+      ],
+      "description": "A Session's tabs."
+    },
+    "SessionTab": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Permanent and opaque, unique in the layout."
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The person's name for it; clients name an untitled tab from what it shows."
+        },
+        "root": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionNode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its tree of panes; absent for an empty tab."
+        },
+        "floating": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionFloating"
+          },
+          "description": "Blocks over the tree, last on top."
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "SessionNode": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SessionSplit",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "row"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "Side by side, left to right."
+        },
+        {
+          "$ref": "#/$defs/SessionSplit",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "column"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "One above another, top to bottom."
+        },
+        {
+          "$ref": "#/$defs/SessionStack",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "stack"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "One behind another, like tabs within a pane. Which is in front is each device's own."
+        },
+        {
+          "$ref": "#/$defs/SessionBlock",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "block"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ],
+      "description": "A pane, or panes side by side, one above another, or one behind another."
+    },
+    "SessionSplit": {
+      "type": "object",
+      "properties": {
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionNode"
+          }
+        },
+        "sizes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "description": "Each child's share of the space, in the children's order, relative to the others';\nequal shares when absent."
+        }
+      },
+      "required": [
+        "children"
+      ]
+    },
+    "SessionBlock": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Permanent and opaque, unique in the layout."
+        },
+        "type": {
+          "type": "string",
+          "description": "A reverse-DNS name, such as `weave.thread` (`props.threadId`) or `weave.terminal`\n(`props.terminalId`). A client without the type shows the type and props as text."
+        },
+        "props": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "What the type needs, as it defines."
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "description": "What one pane shows. It points at something on the Session's Host, such as a thread or a\nterminal, and owns nothing: closing it hides what it shows, which keeps running."
+    },
+    "SessionStack": {
+      "type": "object",
+      "properties": {
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionBlock"
+          }
+        }
+      },
+      "required": [
+        "children"
+      ]
+    },
+    "SessionFloating": {
+      "type": "object",
+      "properties": {
+        "block": {
+          "$ref": "#/$defs/SessionBlock"
+        },
+        "frame": {
+          "$ref": "#/$defs/SessionFrame"
+        }
+      },
+      "required": [
+        "block",
+        "frame"
+      ],
+      "description": "A Block over a tab's tree."
+    },
+    "SessionFrame": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number",
+          "format": "double"
+        },
+        "y": {
+          "type": "number",
+          "format": "double"
+        },
+        "width": {
+          "type": "number",
+          "format": "double"
+        },
+        "height": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "description": "Where a floating Block is, as fractions of its tab's width and height from its top left."
+    },
+    "GetSessionRequest": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string",
+          "description": "Any directory: its Session is that of the deepest worktree it's in, or of the directory\nitself outside a repository."
+        }
+      },
+      "required": [
+        "directory"
+      ],
+      "description": "`sessions/get`: the Session `directory` is in, with its layout. `no_session` when it has\nnone."
+    },
+    "SessionResponse": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/HostSession"
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "SetSessionRequest": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string"
+        },
+        "layout": {
+          "$ref": "#/$defs/SessionLayout"
+        },
+        "ifRevision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The revision the client's layout was made from: 0 for a Session without one yet."
+        }
+      },
+      "required": [
+        "directory",
+        "layout"
+      ],
+      "description": "`sessions/set`: a new layout for the Session `directory` is in, made first if it has none.\nThe newest write wins: the layout replaces whatever was there, under the next revision, and\nevery client watching the Session is sent it. With `ifRevision`, only when that is still\nthe Session's revision, else `revision_conflict` with the current one, so a client can merge\nrather than overwrite. Refused, as invalid params, over [`MAX_LAYOUT`] bytes."
+    },
+    "WatchSessionsRequest": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "`sessions/watch`: the Session `directory` is in, or with no `directory` every Session, as\n`sessions/get` gives them; then a [`SessionUpdatedNotification`] when one is made or its\nlayout is set, and a [`SessionEndedNotification`] when one ends, until the connection ends\nor the client sends `sessions/unwatch`. A directory with no Session yet may be watched, and\nanswers no Session."
+    },
+    "WatchSessionsResponse": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The directory watched, as the Host resolved it; absent when watching every Session."
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostSession"
+          },
+          "description": "With their layouts."
+        }
+      },
+      "required": [
+        "sessions"
+      ]
+    },
+    "UnwatchSessionsRequest": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "`sessions/unwatch`: stop what `sessions/watch` sends for `directory`, as its answer gave it,\nor for every Session without one."
+    },
+    "EndSessionRequest": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "directory"
+      ],
+      "description": "`sessions/end`: end the Session `directory` is in, forgetting its layout. Its threads and\nterminals are left as they are, and a thread or terminal starting there later makes it\nagain. Refused while a thread in it runs a turn or waits on a request, or a terminal in it\nruns a command (`session_busy`); `no_session` when it has none."
+    },
     "ReportThreadRequest": {
       "type": "object",
       "properties": {
@@ -9722,6 +10180,30 @@ expression: schema()
         "scope"
       ],
       "description": "`terminals/removed`, to clients watching its scope: a terminal ended."
+    },
+    "SessionUpdatedNotification": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/HostSession"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "description": "`sessions/updated`, to clients watching it: a Session was made, or its layout set. It\ncarries the layout."
+    },
+    "SessionEndedNotification": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "directory"
+      ],
+      "description": "`sessions/ended`, to clients watching it: a Session ended, with its worktree, its directory\nor by `sessions/end`."
     },
     "ToolCallNotification": {
       "type": "object",

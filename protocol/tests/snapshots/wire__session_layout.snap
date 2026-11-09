@@ -1,0 +1,79 @@
+---
+source: protocol/tests/wire.rs
+expression: session_layout()
+---
+{
+  "version": 1,
+  "tabs": [
+    {
+      "id": "tab-1",
+      "title": "auth",
+      "root": {
+        "kind": "row",
+        "children": [
+          {
+            "kind": "block",
+            "id": "b-1",
+            "type": "weave.thread",
+            "props": {
+              "threadId": "s-1"
+            }
+          },
+          {
+            "kind": "column",
+            "children": [
+              {
+                "kind": "block",
+                "id": "b-2",
+                "type": "weave.terminal",
+                "props": {
+                  "terminalId": "t-5f3a"
+                }
+              },
+              {
+                "kind": "stack",
+                "children": [
+                  {
+                    "id": "b-3",
+                    "type": "weave.thread",
+                    "props": {
+                      "threadId": "s-2"
+                    }
+                  },
+                  {
+                    "id": "b-4",
+                    "type": "com.example.notes"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "sizes": [
+          2.0,
+          1.0
+        ]
+      },
+      "floating": [
+        {
+          "block": {
+            "id": "b-5",
+            "type": "weave.terminal",
+            "props": {
+              "terminalId": "t-77c1"
+            }
+          },
+          "frame": {
+            "x": 0.6,
+            "y": 0.05,
+            "width": 0.35,
+            "height": 0.4
+          }
+        }
+      ]
+    },
+    {
+      "id": "tab-2"
+    }
+  ]
+}

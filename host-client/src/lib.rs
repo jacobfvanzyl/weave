@@ -44,6 +44,8 @@ use weave_host_protocol::hello::HelloRequest;
 use weave_host_protocol::hello::HelloResponse;
 use weave_host_protocol::pending::PendingAddedNotification;
 use weave_host_protocol::pending::PendingResolvedNotification;
+use weave_host_protocol::sessions::SessionEndedNotification;
+use weave_host_protocol::sessions::SessionUpdatedNotification;
 use weave_host_protocol::terminals::TerminalRemovedNotification;
 use weave_host_protocol::terminals::TerminalUpdatedNotification;
 use weave_host_protocol::threads::AttachThreadRequest;
@@ -77,6 +79,10 @@ pub enum HostEvent {
     TerminalUpdated(Box<TerminalUpdatedNotification>),
     /// A terminal ended, in a scope this client watches.
     TerminalRemoved(TerminalRemovedNotification),
+    /// A Session was made or its layout set, while this client watches it.
+    SessionUpdated(Box<SessionUpdatedNotification>),
+    /// A Session ended, while this client watches it.
+    SessionEnded(SessionEndedNotification),
     /// A thread's agent called a tool this service declared (`service/toolCall`); answer it
     /// with `service/answerTool`.
     ToolCall(Box<ToolCallNotification>),
@@ -178,6 +184,8 @@ impl HostConnection {
         let on_thread_removed = events.clone();
         let on_terminal_updated = events.clone();
         let on_terminal_removed = events.clone();
+        let on_session_updated = events.clone();
+        let on_session_ended = events.clone();
         let on_tool_call = events.clone();
         let on_tool_call_cancelled = events.clone();
         let on_host_call = events.clone();
@@ -254,6 +262,21 @@ impl HostConnection {
             .on_receive_notification(
                 async move |notification: TerminalRemovedNotification, _cx| {
                     let _ = on_terminal_removed.send(HostEvent::TerminalRemoved(notification));
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |notification: SessionUpdatedNotification, _cx| {
+                    let _ =
+                        on_session_updated.send(HostEvent::SessionUpdated(Box::new(notification)));
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |notification: SessionEndedNotification, _cx| {
+                    let _ = on_session_ended.send(HostEvent::SessionEnded(notification));
                     Ok(())
                 },
                 agent_client_protocol::on_receive_notification!(),

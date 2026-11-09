@@ -258,6 +258,7 @@ pub fn config_with(dir: PathBuf, journals: bool) -> DaemonConfig {
     });
     DaemonConfig {
         journals: journals.then(|| dir.join("journals")),
+        sessions: None,
         idle_grace: Duration::from_secs(60),
         drain_timeout: weave_host::DEFAULT_DRAIN_TIMEOUT,
         blank_grace: Duration::from_secs(60),

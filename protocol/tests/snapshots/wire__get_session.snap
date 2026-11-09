@@ -1,0 +1,109 @@
+---
+source: protocol/tests/wire.rs
+expression: "json!({\n    \"request\":\n    message(&GetSessionRequest\n    { directory: \"/Users/jaco/Projects/weave.feature-auth/app\".into(), }),\n    \"response\": round_trip(&SessionResponse { session: session() }),\n})"
+---
+{
+  "request": {
+    "method": "sessions/get",
+    "params": {
+      "directory": "/Users/jaco/Projects/weave.feature-auth/app"
+    }
+  },
+  "response": {
+    "session": {
+      "directory": "/Users/jaco/Projects/weave.feature-auth",
+      "revision": 7,
+      "layout": {
+        "version": 1,
+        "tabs": [
+          {
+            "id": "tab-1",
+            "title": "auth",
+            "root": {
+              "kind": "row",
+              "children": [
+                {
+                  "kind": "block",
+                  "id": "b-1",
+                  "type": "weave.thread",
+                  "props": {
+                    "threadId": "s-1"
+                  }
+                },
+                {
+                  "kind": "column",
+                  "children": [
+                    {
+                      "kind": "block",
+                      "id": "b-2",
+                      "type": "weave.terminal",
+                      "props": {
+                        "terminalId": "t-5f3a"
+                      }
+                    },
+                    {
+                      "kind": "stack",
+                      "children": [
+                        {
+                          "id": "b-3",
+                          "type": "weave.thread",
+                          "props": {
+                            "threadId": "s-2"
+                          }
+                        },
+                        {
+                          "id": "b-4",
+                          "type": "com.example.notes"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "sizes": [
+                2.0,
+                1.0
+              ]
+            },
+            "floating": [
+              {
+                "block": {
+                  "id": "b-5",
+                  "type": "weave.terminal",
+                  "props": {
+                    "terminalId": "t-77c1"
+                  }
+                },
+                "frame": {
+                  "x": 0.6,
+                  "y": 0.05,
+                  "width": 0.35,
+                  "height": 0.4
+                }
+              }
+            ]
+          },
+          {
+            "id": "tab-2"
+          }
+        ]
+      },
+      "git": {
+        "repo": "/Users/jaco/Projects/weave",
+        "worktree": "/Users/jaco/Projects/weave.feature-auth",
+        "branch": "feature/auth",
+        "remote": "github.com/jacobfvanzyl/weave"
+      },
+      "createdAt": 1760180000000,
+      "updatedAt": 1760180030000,
+      "threads": [
+        "s-2",
+        "s-1"
+      ],
+      "terminals": [
+        "t-5f3a",
+        "t-77c1"
+      ]
+    }
+  }
+}

@@ -25,6 +25,7 @@
 //! - [`mcp`]: the MCP servers a thread's agent was given, and how each one is.
 //! - [`terminals`]: terminals on the Host's computer, which clients show beside a thread, and
 //!   their streams.
+//! - [`sessions`]: Sessions, one directory each, and the layout clients show them in.
 //! - [`host`]: the Host's status, and stopping it.
 //! - [`dispatcher`]: the Dispatcher's own API, which its CLI asks over its socket.
 //! - [`projects`]: which of the Projects the Dispatcher keeps a thread is in.
@@ -47,6 +48,7 @@ pub mod projects;
 pub mod queue;
 pub mod reports;
 mod role;
+pub mod sessions;
 pub mod terminals;
 pub mod threads;
 pub mod tools;

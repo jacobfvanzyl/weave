@@ -2472,3 +2472,178 @@ fn terminals() {
         })
     );
 }
+
+/// A Session's layout as the app writes it: tabs of rows, columns and stacks with Blocks at the
+/// leaves, and a floating Block.
+fn session_layout() -> serde_json::Value {
+    use weave_host_protocol::sessions::layout::Block;
+    use weave_host_protocol::sessions::layout::Floating;
+    use weave_host_protocol::sessions::layout::Frame;
+    use weave_host_protocol::sessions::layout::Layout;
+    use weave_host_protocol::sessions::layout::Node;
+    use weave_host_protocol::sessions::layout::Split;
+    use weave_host_protocol::sessions::layout::Stack;
+    use weave_host_protocol::sessions::layout::Tab;
+    use weave_host_protocol::sessions::layout::VERSION;
+
+    let block = |id: &str, block_type: &str, props: Value| Block {
+        id: id.to_owned(),
+        block_type: block_type.to_owned(),
+        props: props.as_object().cloned().unwrap_or_default(),
+    };
+    round_trip(&Layout {
+        version: VERSION,
+        tabs: vec![
+            Tab {
+                id: "tab-1".to_owned(),
+                title: Some("auth".to_owned()),
+                root: Some(Node::Row(Split {
+                    children: vec![
+                        Node::Block(block("b-1", "weave.thread", json!({"threadId": "s-1"}))),
+                        Node::Column(Split {
+                            children: vec![
+                                Node::Block(block(
+                                    "b-2",
+                                    "weave.terminal",
+                                    json!({"terminalId": "t-5f3a"}),
+                                )),
+                                Node::Stack(Stack {
+                                    children: vec![
+                                        block("b-3", "weave.thread", json!({"threadId": "s-2"})),
+                                        block("b-4", "com.example.notes", json!({})),
+                                    ],
+                                }),
+                            ],
+                            sizes: None,
+                        }),
+                    ],
+                    sizes: Some(vec![2.0, 1.0]),
+                })),
+                floating: vec![Floating {
+                    block: block("b-5", "weave.terminal", json!({"terminalId": "t-77c1"})),
+                    frame: Frame {
+                        x: 0.6,
+                        y: 0.05,
+                        width: 0.35,
+                        height: 0.4,
+                    },
+                }],
+            },
+            Tab {
+                id: "tab-2".to_owned(),
+                title: None,
+                root: None,
+                floating: Vec::new(),
+            },
+        ],
+    })
+}
+
+fn session() -> weave_host_protocol::sessions::Session {
+    weave_host_protocol::sessions::Session {
+        directory: "/Users/jaco/Projects/weave.feature-auth".into(),
+        revision: 7,
+        layout: Some(session_layout()),
+        git: Some(GitLocation {
+            repo: "/Users/jaco/Projects/weave".into(),
+            worktree: "/Users/jaco/Projects/weave.feature-auth".into(),
+            branch: Some("feature/auth".to_owned()),
+            remote: Some("github.com/jacobfvanzyl/weave".to_owned()),
+        }),
+        created_at: 1_760_180_000_000,
+        updated_at: Some(1_760_180_030_000),
+        threads: vec![
+            weave_host_protocol::threads::ThreadId::new("s-2"),
+            weave_host_protocol::threads::ThreadId::new("s-1"),
+        ],
+        terminals: vec!["t-5f3a".to_owned(), "t-77c1".to_owned()],
+    }
+}
+
+#[test]
+fn sessions() {
+    use weave_host_protocol::sessions::EndSessionRequest;
+    use weave_host_protocol::sessions::GetSessionRequest;
+    use weave_host_protocol::sessions::ListSessionsRequest;
+    use weave_host_protocol::sessions::ListSessionsResponse;
+    use weave_host_protocol::sessions::Session;
+    use weave_host_protocol::sessions::SessionEndedNotification;
+    use weave_host_protocol::sessions::SessionResponse;
+    use weave_host_protocol::sessions::SessionUpdatedNotification;
+    use weave_host_protocol::sessions::SetSessionRequest;
+    use weave_host_protocol::sessions::UnwatchSessionsRequest;
+    use weave_host_protocol::sessions::WatchSessionsRequest;
+    use weave_host_protocol::sessions::WatchSessionsResponse;
+
+    insta::assert_json_snapshot!("session_layout", session_layout());
+    insta::assert_json_snapshot!(
+        "list_sessions",
+        json!({
+            "request": message(&ListSessionsRequest {}),
+            "response": round_trip(&ListSessionsResponse {
+                sessions: vec![
+                    Session {
+                        layout: None,
+                        ..session()
+                    },
+                    // Made by a thread, before any client set its layout.
+                    Session {
+                        directory: "/Users/jaco/notes".into(),
+                        revision: 0,
+                        layout: None,
+                        git: None,
+                        created_at: 1_760_180_000_000,
+                        updated_at: None,
+                        threads: vec![weave_host_protocol::threads::ThreadId::new("s-9")],
+                        terminals: Vec::new(),
+                    },
+                ],
+            }),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "get_session",
+        json!({
+            "request": message(&GetSessionRequest {
+                directory: "/Users/jaco/Projects/weave.feature-auth/app".into(),
+            }),
+            "response": round_trip(&SessionResponse { session: session() }),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "set_session_request",
+        message(&SetSessionRequest {
+            directory: "/Users/jaco/Projects/weave.feature-auth".into(),
+            layout: session_layout(),
+            if_revision: Some(6),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "watch_sessions",
+        json!({
+            "one": message(&WatchSessionsRequest {
+                directory: Some("/Users/jaco/Projects/weave.feature-auth/app".into()),
+            }),
+            "every": message(&WatchSessionsRequest::default()),
+            "response": round_trip(&WatchSessionsResponse {
+                directory: Some("/Users/jaco/Projects/weave.feature-auth".into()),
+                sessions: vec![session()],
+            }),
+            "unwatch": message(&UnwatchSessionsRequest {
+                directory: Some("/Users/jaco/Projects/weave.feature-auth".into()),
+            }),
+            "end": message(&EndSessionRequest {
+                directory: "/Users/jaco/notes".into(),
+            }),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "session_notifications",
+        json!([
+            message(&SessionUpdatedNotification { session: session() }),
+            message(&SessionEndedNotification {
+                directory: "/Users/jaco/Projects/weave.feature-auth".into(),
+            }),
+        ])
+    );
+}

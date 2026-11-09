@@ -608,9 +608,12 @@ impl App {
                 self.panes.retain(|pane| pane.terminal != removed.id);
                 Vec::new()
             }
-            // What the TUI doesn't ask for: watching threads, and calls to a service.
+            // What the TUI doesn't ask for: watching threads and Sessions, and calls to a
+            // service.
             HostEvent::ThreadUpdated(_)
             | HostEvent::ThreadRemoved(_)
+            | HostEvent::SessionUpdated(_)
+            | HostEvent::SessionEnded(_)
             | HostEvent::ToolCall(_)
             | HostEvent::HostCall(_)
             | HostEvent::ToolCallCancelled(_) => Vec::new(),

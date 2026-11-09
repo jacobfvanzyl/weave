@@ -45,6 +45,7 @@ pub mod paths;
 mod queue;
 mod serve_entry;
 mod service_tools;
+mod sessions;
 pub mod socket;
 pub mod terminals;
 mod thread;
@@ -135,6 +136,8 @@ const DRAIN_POLL: Duration = Duration::from_millis(200);
 pub struct DaemonConfig {
     /// Where thread journals are written; `None` keeps them in memory only.
     pub journals: Option<PathBuf>,
+    /// Where Sessions' layouts are kept (WVE-202); `None` keeps them in memory only.
+    pub sessions: Option<PathBuf>,
     /// How long a thread nothing needs stays open.
     pub idle_grace: Duration,
     /// How long stopping waits for running turns to end.
@@ -194,6 +197,7 @@ impl DaemonConfig {
     pub fn in_process(config_file: Option<PathBuf>) -> Self {
         Self {
             journals: None,
+            sessions: None,
             idle_grace: DEFAULT_IDLE_GRACE,
             drain_timeout: DEFAULT_DRAIN_TIMEOUT,
             blank_grace: DEFAULT_BLANK_GRACE,
@@ -221,6 +225,7 @@ impl DaemonConfig {
     pub fn persistent(paths: &DaemonPaths, service: Service, environment: Environment) -> Self {
         Self {
             journals: Some(paths.journals()),
+            sessions: Some(paths.sessions()),
             environment,
             service,
             traces: paths.dir.join("traces"),
@@ -323,9 +328,19 @@ pub(crate) struct Shared {
     drain: Mutex<Option<Drain>>,
     /// Terminals, when the Host has an owner for them.
     pub(crate) terminals: Option<Arc<terminals::Terminals>>,
+    /// Sessions and their layouts (WVE-202).
+    pub(crate) sessions: sessions::Sessions,
     /// Held while a report takes up the thread it's for, so that two reports at once don't
     /// take it up twice (`host_tools::tell`).
     pub(crate) taking_up_for_reports: tokio::sync::Mutex<()>,
+}
+
+/// A thread in a Session, as [`Shared::session_contents`] lists it.
+struct SessionThread {
+    thread_id: ThreadId,
+    last_activity: u64,
+    /// While it's open.
+    activity: Option<Activity>,
 }
 
 /// A drain before the Host stops.
@@ -711,6 +726,118 @@ impl Shared {
             .collect()
     }
 
+    /// The Session a directory is in: the deepest worktree it's in, or the directory itself
+    /// outside a repository, with symlinks resolved; and where in a repository that is.
+    pub(crate) async fn session_scope(
+        &self,
+        directory: &Path,
+    ) -> Result<(PathBuf, Option<GitLocation>), Error> {
+        if !directory.is_absolute() || !directory.is_dir() {
+            return Err(Error::invalid_params().data(serde_json::json!(format!(
+                "{} isn't a directory",
+                directory.display()
+            ))));
+        }
+        Ok(match self.git.locate(directory).await {
+            Some(location) => (location.worktree.clone(), Some(location)),
+            None => (git::canonical(directory), None),
+        })
+    }
+
+    /// The threads in the Session at `directory`, open or not, most recently active first,
+    /// and its terminals' ids, oldest first.
+    pub(crate) fn session_contents(&self, directory: &Path) -> (Vec<ThreadId>, Vec<String>) {
+        let mut threads = self.threads_in_session(directory);
+        threads.sort_by_key(|thread| std::cmp::Reverse(thread.last_activity));
+        let threads = threads.into_iter().map(|thread| thread.thread_id).collect();
+        (threads, self.terminals_in_session(directory, false))
+    }
+
+    /// What in the Session at `directory` is busy: threads running a turn or waiting on a
+    /// request, and terminals running a command.
+    pub(crate) fn session_busy(&self, directory: &Path) -> (Vec<ThreadId>, Vec<String>) {
+        let threads = self
+            .threads_in_session(directory)
+            .into_iter()
+            .filter(|thread| {
+                thread
+                    .activity
+                    .is_some_and(|activity| activity != Activity::Idle)
+            })
+            .map(|thread| thread.thread_id)
+            .collect();
+        (threads, self.terminals_in_session(directory, true))
+    }
+
+    /// Make the Session at `directory` if there's none, as a thread or terminal starts there.
+    pub(crate) fn make_session(&self, directory: &Path, git: Option<GitLocation>) {
+        self.sessions.make(directory, git, &|directory| {
+            self.session_contents(directory)
+        });
+    }
+
+    /// The ids of the terminals in the Session at `directory`, oldest first; with `busy`, only
+    /// those running a command.
+    fn terminals_in_session(&self, directory: &Path, busy: bool) -> Vec<String> {
+        let Some(terminals) = &self.terminals else {
+            return Vec::new();
+        };
+        terminals
+            .list(directory)
+            .into_iter()
+            .filter(|terminal| {
+                !busy
+                    || terminal
+                        .command
+                        .as_ref()
+                        .is_some_and(|command| command.running)
+            })
+            .map(|terminal| terminal.id)
+            .collect()
+    }
+
+    /// The threads the Host has a record of in the Session at `directory`, but blank ones.
+    fn threads_in_session(&self, directory: &Path) -> Vec<SessionThread> {
+        let threads: Vec<(SessionThread, PathBuf, Option<GitLocation>)> = {
+            let registry = self.registry();
+            let open = registry
+                .threads
+                .values()
+                .filter(|thread| !thread.is_blank())
+                .map(ThreadHandle::summary)
+                .map(|summary| {
+                    let thread = SessionThread {
+                        thread_id: summary.thread_id,
+                        last_activity: summary.last_activity_ms,
+                        activity: Some(summary.activity),
+                    };
+                    (thread, summary.cwd, summary.git)
+                });
+            let dormant = registry
+                .known
+                .iter()
+                .filter(|(thread_id, _)| !registry.threads.contains_key(*thread_id))
+                .map(|(thread_id, recorded)| {
+                    let thread = SessionThread {
+                        thread_id: thread_id.clone(),
+                        last_activity: recorded.last_activity_ms,
+                        activity: None,
+                    };
+                    (thread, recorded.cwd.clone(), recorded.git.clone())
+                });
+            open.chain(dormant).collect()
+        };
+        // Resolved outside the registry, which isn't held while the file system is asked.
+        threads
+            .into_iter()
+            .filter(|(_, cwd, git)| match git {
+                Some(git) => git.worktree == directory,
+                None => git::canonical(cwd) == directory,
+            })
+            .map(|(thread, _, _)| thread)
+            .collect()
+    }
+
     /// Let the worktree at `path` (symlinks resolved) go before it's removed: refused while a
     /// thread in it runs a turn or waits on a request, otherwise closing the threads open in
     /// it, blank ones included. Those it closed.
@@ -963,6 +1090,7 @@ impl Daemon {
             JOURNAL_RETENTION,
         ));
         let terminals = config.terminals.clone().map(terminals::Terminals::new);
+        let config_sessions = config.sessions.clone();
         for retired in &config.retired {
             match std::fs::remove_file(retired) {
                 Ok(()) => {
@@ -995,6 +1123,7 @@ impl Daemon {
                 watchers: Mutex::new(BTreeMap::new()),
                 drain: Mutex::new(None),
                 terminals,
+                sessions: sessions::Sessions::load(config_sessions),
                 taking_up_for_reports: tokio::sync::Mutex::new(()),
             }),
         }

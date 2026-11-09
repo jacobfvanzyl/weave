@@ -2006,6 +2006,14 @@ impl Actor {
         if now == self.reported {
             return;
         }
+        // Prompted for the first time since it opened: its directory has a Session (WVE-202).
+        if now.blank == Some(false) && self.reported.blank != Some(false) {
+            let scope = now.git.as_ref().map_or_else(
+                || crate::git::canonical(&self.cwd),
+                |git| git.worktree.clone(),
+            );
+            self.shared.make_session(&scope, now.git.clone());
+        }
         let notification = ThreadChangedNotification {
             thread_id: self.root.clone(),
             activity: changed(&now.activity, &self.reported.activity),

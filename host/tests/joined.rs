@@ -128,6 +128,7 @@ impl World {
         });
         DaemonConfig {
             journals: None,
+            sessions: None,
             idle_grace: Duration::from_secs(60),
             drain_timeout: weave_host::DEFAULT_DRAIN_TIMEOUT,
             blank_grace: Duration::from_secs(60),

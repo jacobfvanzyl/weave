@@ -94,6 +94,16 @@ use weave_host_protocol::queue::QueuePause;
 use weave_host_protocol::queue::RemoveQueuedRequest;
 use weave_host_protocol::queue::RemoveQueuedResponse;
 use weave_host_protocol::queue::ResumeQueueRequest;
+use weave_host_protocol::sessions::EndSessionRequest;
+use weave_host_protocol::sessions::FEATURE as SESSIONS_FEATURE;
+use weave_host_protocol::sessions::GetSessionRequest;
+use weave_host_protocol::sessions::ListSessionsRequest;
+use weave_host_protocol::sessions::ListSessionsResponse;
+use weave_host_protocol::sessions::SessionResponse;
+use weave_host_protocol::sessions::SetSessionRequest;
+use weave_host_protocol::sessions::UnwatchSessionsRequest;
+use weave_host_protocol::sessions::WatchSessionsRequest;
+use weave_host_protocol::sessions::WatchSessionsResponse;
 use weave_host_protocol::terminals::AttachTerminalRequest;
 use weave_host_protocol::terminals::AttachTerminalResponse;
 use weave_host_protocol::terminals::CloseTerminalRequest;
@@ -316,6 +326,7 @@ async fn serve_as(
         shared.registry().clients -= 1;
     }
     shared.unwatch(connection.id);
+    shared.sessions.forget(connection.id);
     if let Some(terminals) = &shared.terminals {
         terminals.forget(connection.id);
     }
@@ -361,6 +372,7 @@ async fn handlers(
     let on_declare = Arc::clone(connection);
     let on_attach = Arc::clone(connection);
     let on_watch_terminals = Arc::clone(connection);
+    let on_watch_sessions = Arc::clone(connection);
     let on_any = Arc::clone(connection);
     Host.builder()
         .name("weave-host")
@@ -503,6 +515,52 @@ async fn handlers(
         )
         .on_receive_request(
             answer!(connection, unwatch_terminals),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, list_sessions),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, get_session),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, set_session),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, end_session),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: WatchSessionsRequest, responder, cx: ConnectionTo<HostClient>| {
+                let connection = Arc::clone(&on_watch_sessions);
+                let client = cx.clone();
+                cx.spawn(async move {
+                    let directory = match connection.watched_session(request).await {
+                        Ok(directory) => directory,
+                        Err(error) => return responder.respond_with_error(error),
+                    };
+                    let shared = &connection.shared;
+                    shared.sessions.watch(
+                        connection.id,
+                        client,
+                        directory.as_deref(),
+                        &|directory| shared.session_contents(directory),
+                        |sessions| {
+                            responder.respond(WatchSessionsResponse {
+                                directory: directory.clone(),
+                                sessions,
+                            })
+                        },
+                    )
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, unwatch_sessions),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -1033,6 +1091,7 @@ impl Connection {
                 OTHER_HOSTS_FEATURE.to_owned(),
                 MCP_SERVERS_FEATURE.to_owned(),
                 CARRY_FEATURE.to_owned(),
+                SESSIONS_FEATURE.to_owned(),
             ]
             .into_iter()
             .chain(
@@ -1336,6 +1395,7 @@ impl Connection {
         }
         let closed = self.shared.release(&path).await?;
         git.remove(&repository, &path, request.force).await?;
+        self.shared.sessions.end_inside(&path);
         let branch = repository.entries[index].branch.clone();
         let branch_deleted = match &branch {
             Some(branch) => {
@@ -1357,8 +1417,98 @@ impl Connection {
         request: ReleaseWorktreeRequest,
     ) -> Result<ReleaseWorktreeResponse, Error> {
         self.hello_info()?;
-        let closed = self.shared.release(&git::canonical(&request.path)).await?;
+        let path = git::canonical(&request.path);
+        let closed = self.shared.release(&path).await?;
+        // Whatever asked is about to remove it.
+        self.shared.sessions.end_inside(&path);
         Ok(ReleaseWorktreeResponse { closed })
+    }
+
+    /// `sessions/list`: every Session, as the Host reads where each is again, but those whose
+    /// directory is gone, which end.
+    async fn list_sessions(
+        &self,
+        _request: ListSessionsRequest,
+    ) -> Result<ListSessionsResponse, Error> {
+        self.hello_info()?;
+        let shared = &self.shared;
+        shared.sessions.end_gone();
+        for directory in shared.sessions.directories() {
+            let git = shared.git.locate(&directory).await;
+            shared.sessions.located(&directory, git);
+        }
+        Ok(ListSessionsResponse {
+            sessions: shared
+                .sessions
+                .list(&|directory| shared.session_contents(directory)),
+        })
+    }
+
+    /// `sessions/get`: the Session the directory is in, with its layout.
+    async fn get_session(&self, request: GetSessionRequest) -> Result<SessionResponse, Error> {
+        self.hello_info()?;
+        let shared = &self.shared;
+        let (directory, git) = shared.session_scope(&request.directory).await?;
+        shared.sessions.located(&directory, git);
+        let session = shared
+            .sessions
+            .get(&directory, &|directory| shared.session_contents(directory))
+            .ok_or_else(|| errors::no_session(&directory))?;
+        Ok(SessionResponse { session })
+    }
+
+    /// `sessions/set`: a new layout for the Session the directory is in; the newest write wins.
+    async fn set_session(&self, request: SetSessionRequest) -> Result<SessionResponse, Error> {
+        self.hello_info()?;
+        let shared = &self.shared;
+        let (directory, git) = shared.session_scope(&request.directory).await?;
+        let session = shared.sessions.set(
+            &directory,
+            request.layout,
+            request.if_revision,
+            git,
+            &|directory| shared.session_contents(directory),
+        )?;
+        Ok(SessionResponse { session })
+    }
+
+    /// `sessions/end`: forget the Session the directory is in, unless something in it is busy.
+    async fn end_session(&self, request: EndSessionRequest) -> Result<Empty, Error> {
+        self.hello_info()?;
+        let shared = &self.shared;
+        // A directory that's gone is its own Session's, if it has one.
+        let directory = match shared.session_scope(&request.directory).await {
+            Ok((directory, _)) => directory,
+            Err(_) => git::canonical(&request.directory),
+        };
+        let (threads, terminals) = shared.session_busy(&directory);
+        if !threads.is_empty() || !terminals.is_empty() {
+            return Err(errors::session_busy(&threads, &terminals));
+        }
+        if !shared.sessions.end(&directory) {
+            return Err(errors::no_session(&directory));
+        }
+        Ok(Empty {})
+    }
+
+    /// The directory `sessions/watch` watches, as the Host resolves it; none for every Session.
+    async fn watched_session(
+        &self,
+        request: WatchSessionsRequest,
+    ) -> Result<Option<PathBuf>, Error> {
+        self.hello_info()?;
+        match request.directory {
+            Some(directory) => Ok(Some(self.shared.session_scope(&directory).await?.0)),
+            None => Ok(None),
+        }
+    }
+
+    async fn unwatch_sessions(&self, request: UnwatchSessionsRequest) -> Result<Empty, Error> {
+        self.hello_info()?;
+        self.shared
+            .sessions
+            .unwatch(self.id, request.directory.as_deref());
+        Ok(Empty {})
     }
 
     /// The Host's terminals, found, for a client that said hello.
@@ -1376,18 +1526,7 @@ impl Connection {
     /// The scope a directory's terminals belong to: the deepest worktree it's in, or the
     /// directory itself outside a repository, with symlinks resolved.
     async fn scope_of(&self, directory: &Path) -> Result<PathBuf, Error> {
-        if !directory.is_absolute() || !directory.is_dir() {
-            return Err(Error::invalid_params().data(serde_json::json!(format!(
-                "{} isn't a directory",
-                directory.display()
-            ))));
-        }
-        Ok(self
-            .shared
-            .git
-            .locate(directory)
-            .await
-            .map_or_else(|| git::canonical(directory), |location| location.worktree))
+        Ok(self.shared.session_scope(directory).await?.0)
     }
 
     async fn list_terminals(
@@ -1418,11 +1557,11 @@ impl Connection {
 
     async fn new_terminal(&self, request: NewTerminalRequest) -> Result<TerminalResponse, Error> {
         let terminals = self.terminals().await?;
-        let scope = self.scope_of(&request.directory).await?;
+        let (scope, git) = self.shared.session_scope(&request.directory).await?;
         let start = terminals::Start {
             id: terminals::new_id(),
             directory: request.directory,
-            scope,
+            scope: scope.clone(),
             label: request.label,
             opened_from: request.opened_from,
             command: request.command.filter(|command| !command.is_empty()),
@@ -1430,6 +1569,7 @@ impl Connection {
             env: self.shared.config.environment.vars.clone(),
         };
         let terminal = terminals.start(start).await?;
+        self.shared.make_session(&scope, git);
         Ok(TerminalResponse { terminal })
     }
 
