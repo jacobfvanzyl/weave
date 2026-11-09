@@ -120,7 +120,8 @@ Host's tests when the Host stopped listening (WVE-197).
 `tests/projects.rs` runs a Project's life through the socket and through a paired device, and
 checks a Host's removal and a restart.
 `tests/hosts.rs` runs two or three Hosts whose fake agents call Host tools naming each
-other, the relay deafened to lose an answer. `tests/carry.rs` has a paired device reach two
+other, the relay deafened to lose an answer, and name Projects the test adds directly
+(WVE-208). `tests/carry.rs` has a paired device reach two
 Hosts through the Dispatcher, a Host serve nothing where something without the Dispatcher's key
 answers at its address, a terminal's stream through a fake owner that echoes
 (`EchoingOwner`), a client on its socket, what a carried device may not ask a Host, and a replay

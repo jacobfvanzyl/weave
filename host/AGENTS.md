@@ -261,7 +261,8 @@ Dispatcher: Hosts don't pair with each other. A service that declared `hosts`
 (`Devices::declare_tools`, `hosts_service`) gets the Host tool calls given another Host's `host`:
 `host_tools::elsewhere` works the method's request out here (`request`, `start_elsewhere`: the
 caller's directory under the home, `Shared::home`, as `~/…` from the repository's main worktree
-with its `remote`, `counterpart`; the policy within the caller's; the agent's own key; and
+with its `remote`, `counterpart`, or the location there of the Project the caller's directory
+is in, `in_project_there`; the policy within the caller's; the agent's own key; and
 `room`, `[delegation] running` less this Host's busy delegated threads, `busy_here`) and
 `ServiceTools::call_host` sends it as `service/hostCall`, answered by `service/answerTool` as a
 service tool call is. This Host keeps no record of it: the Dispatcher follows the turn and
@@ -272,6 +273,9 @@ expands `~` and checks the checkout's remote, and `Actor::caller` ignores origin
 Host. `Summary::turn_from_host` and `startedByHost` up the starting chain keep turns another
 Host's agent began from reaching further (`host_tools::from_other_host`). Reports that take up a
 closed caller do so one at a time (`Shared::taking_up_for_reports`), or two at once would take it
-up twice. Peer Hosts (ADR 0017, WVE-109) are retired: `Devices::load` drops their pairings with the
+up twice. Projects (WVE-208) are the Dispatcher's: `list_projects` and a `project` given to
+`start_thread` or `list_threads` ask it for them (`host_tools::projects`, `HostCall::ListProjects`),
+and the Host works out the location and filters listings itself (`Scope`, `only_in`), comparing
+real paths here (`real_here`). Peer Hosts (ADR 0017, WVE-109) are retired: `Devices::load` drops their pairings with the
 other devices that paired before WVE-197, and `Daemon::new` removes `DaemonConfig::retired`
 (`peers.json`, `host-key.json`). The tests are the Dispatcher's (`dispatcher/tests/hosts.rs`).

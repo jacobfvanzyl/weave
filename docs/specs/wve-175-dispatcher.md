@@ -258,6 +258,11 @@ answers it with `service/answerTool`. The calling Host keeps no record of it.
   there only while connected to it: a call for a Host it can't reach now fails at once, with
   nothing left to send. `list_hosts` (`hosts/list`) answers with the calling Host's id and every
   other Host, with whether the Dispatcher is connected to it and why not.
+- **Projects** (WVE-208). `list_projects` (`projects/list`, with no `host`) answers with the
+  calling Host's id, every Project as `projects/list` gives it, and every Host joined as
+  `{hostId, name}`, the calling one included. Agents only read Projects. The calling Host works
+  out what an agent's `project` names from it, so the calls it sends on name a directory as
+  before ([Projects](wve-85-host-protocol.md#projects) in the Host protocol).
 - **For the calling thread.** It sends `thread/run`, `queue/add` and `turn/steer` with
   `caller: {threadId, host, hostName}`, the calling thread and its Host, so the turn's origin
   and a new thread's `startedBy` name them. It narrows `thread/run`'s policy to the calling
@@ -608,7 +613,12 @@ directory if one answers, and otherwise the paired one, and says both when neith
   calls fail at once with no Dispatcher, with it away, and for a Host it can't reach, leaving
   nothing to send; a start whose answer was lost lands once and its caller is told; one hop; the
   policy ceiling; delegation limits across Hosts; following again after a Dispatcher restart;
-  a turn the named Host stops under followed into its continuation.
+  a turn the named Host stops under followed into its continuation; with Odin at different
+  paths on two Hosts, an agent lists the Projects, starts threads by Project on each, in a
+  directory inside it too, and lists them by Project, while an unknown Project, one with no
+  location on the Host, and a `cwd` outside it are refused; a thread in a Project starts on
+  another Host in the Project's location there, not the same path under the home, and fails
+  naming the Hosts that have it when it has none there (WVE-208).
 - `tests/devices.rs` (WVE-176), over a loopback WebSocket with a fake Serve: a device pairs with
   a code once, proves its key at hello and lists Hosts and schedules; another key, an unknown
   device, a Host's message, a reused challenge and a hello without one are refused and closed;

@@ -1131,11 +1131,13 @@ answer as JSON text, or a tool error saying why the method failed.
 - `list_agents {}`: `agents/list`, so an agent chooses whom to hand work to. A configured
   agent's optional `description` (`[agents.<id>] description`) says what it's for, the part of
   an A2A Agent Card worth having here.
-- `list_threads {agentId?, cwd?, repo?, activity?}`: `threads/list`.
+- `list_threads {agentId?, cwd?, repo?, activity?, project?}`: `threads/list`. With `project`,
+  only the threads in that Project (see [Projects](#projects)).
 - `read_thread {threadId, turnId?}`: `threads/get`.
-- `start_thread {agentId, prompt, cwd?, threadId?, approve?, otherwise?, key?}`: `thread/run`,
-  starting a delegated thread, or prompting the thread `threadId` names. `prompt` is text;
-  `cwd` defaults to the calling thread's directory; `approve` and `otherwise` are the policy
+- `start_thread {agentId, prompt, project?, cwd?, threadId?, approve?, otherwise?, key?}`:
+  `thread/run`, starting a delegated thread, or prompting the thread `threadId` names. `prompt`
+  is text; `cwd` defaults to the calling thread's directory, and with `project` is relative to
+  the Project's location (see [Projects](#projects)); `approve` and `otherwise` are the policy
   asked for, within the ceiling. It answers with the thread, the turn it started (`turnId`)
   and the policy it runs under.
 - `prompt_thread {threadId, prompt, key?}`: `queue/add`.
@@ -1144,11 +1146,42 @@ answer as JSON text, or a tool error saying why the method failed.
 - `list_hosts {}`: the Dispatcher's `hosts/list` (see [Other Hosts](#other-hosts)): this Host's
   id and the person's other Hosts, each with whether the Dispatcher is connected to it now, or
   why not.
+- `list_projects {}`: the Dispatcher's Projects (see [Projects](#projects)).
 
-Every tool but `rename_thread` and `list_hosts` takes `host`, another Host's id or name as
+Every tool but `rename_thread`, `list_hosts` and `list_projects` takes `host`, another Host's id or name as
 `list_hosts` gives it, to act on that Host instead (see [Other Hosts](#other-hosts)); this
 Host's own id acts here. The tool list stays the same as Hosts come and go; a call naming one
 that can't be reached fails at once with a tool error.
+
+### Projects
+
+The person's Projects (ADR 0031) are the Dispatcher's, and Hosts know nothing of them, so the
+Host tools that name one ask it (WVE-208). Agents read Projects; making and changing them is
+the person's, with `weave projects`.
+
+- **`list_projects`** is `service/hostCall` `{method: "projects/list"}`, with no `host`, which the
+  Dispatcher answers itself, as `hosts/list`: `{hostId, projects, hosts}`, this Host's id, the
+  Projects as the Dispatcher's `projects/list` gives them, and every Host it's paired with as
+  `{hostId, name}`, this one included, so their locations' Hosts have names.
+- **`project`** on `start_thread` and `list_threads` names one, by id or name ignoring case.
+  The calling Host asks for the Projects first, then works out the call as for a directory: it
+  sends no `project` on. An unknown Project fails as a tool error pointing to `list_projects`.
+- **Starting in one.** `start_thread` with `project` works in the Project's location on the Host
+  it starts on, `host`'s or this one's, and fails with a tool error naming the Hosts that have
+  one when that Host doesn't. A `cwd` with it is a directory inside the location, relative to
+  it; an absolute one, one under the home as `~/…`, or one reaching out with `..` is refused. On
+  another Host a git Project's `remote` goes with it, so that Host checks its clone is the same
+  repository.
+- **The path guess goes.** `start_thread` on another Host with neither `cwd` nor `project`, from
+  a thread whose directory is in a Project (as `containing` places it, by real paths), works in
+  that Project's location there, in the same subdirectory as the calling thread is in its own
+  worktree, and fails as above when the Project has none there. Only a directory in no Project
+  gets the counterpart under the home (see [Other Hosts](#other-hosts)).
+- **Listing one.** `list_threads` with `project` lists one Host's threads, `host`'s or this
+  one's, keeping those `containing` places in the Project there: none on a Host where it has no
+  location. With `cwd` or `repo` too, it's refused.
+- Worktrees other than a git Project's main one wait for Sessions (WVE-202): `project` means the
+  main worktree, and an agent names another by its absolute `cwd`, without `project`.
 
 ### Delegated threads
 
@@ -1236,9 +1269,11 @@ Host A (mini)                     Dispatcher                         Host B (stu
   Host works it out, and `caller` is the calling thread, as for a service tool. The service
   answers with `service/answerTool`, the method's answer as JSON text or a tool error, and gets
   `service/toolCallCancelled` when the agent stops waiting. `list_hosts` is `{method:
-  "hosts/list"}`, with no `host`. With no service that reaches the Hosts, or with it away, the
+  "hosts/list"}` and `list_projects` `{method: "projects/list"}`, with no `host`. With no service that reaches the Hosts, or with it away, the
   call fails at once as a tool error saying so; `list_hosts` names this Host's id then.
-- **What the calling Host works out.** For `start_thread` without `cwd`, the calling thread's
+- **What the calling Host works out.** For `start_thread` without `cwd` or `project`, from a
+  thread whose directory is in a Project, that Project's location there (see
+  [Projects](#projects)); from one in no Project, the calling thread's
   directory as it lies under this Host's home, `~/…`, in the repository's main worktree when the
   thread is in another one (whose branch the other Host may not have), and the repository's
   remote as `remote`; a thread outside the home has no such counterpart, and its agent names
