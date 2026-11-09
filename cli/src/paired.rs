@@ -46,8 +46,10 @@ impl Paired {
     }
 }
 
-/// `$XDG_STATE_HOME/weave/client`, by default `~/.local/state/weave/client`.
-fn dir() -> anyhow::Result<PathBuf> {
+/// `$XDG_STATE_HOME/weave/client`, by default `~/.local/state/weave/client`: this computer's
+/// state as a client of the Dispatcher, its pairing and the Projects it last listed
+/// ([`crate::projects`]).
+pub(crate) fn dir() -> anyhow::Result<PathBuf> {
     let state = std::env::var_os("XDG_STATE_HOME")
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from)

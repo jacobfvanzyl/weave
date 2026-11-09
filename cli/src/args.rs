@@ -92,6 +92,10 @@ pub struct WorkspaceArgs {
     /// Don't offer the agent terminals for running commands.
     #[arg(long)]
     no_terminal: bool,
+
+    /// The directory `--project` named, on the Host the thread is on, in place of `--cwd`.
+    #[arg(skip)]
+    in_project: Option<PathBuf>,
 }
 
 /// Which thread to open.
@@ -374,23 +378,22 @@ impl WorkspaceArgs {
         }
     }
 
-    /// The thread's directory on another computer's Host, `host` (WVE-195): `--cwd`, a
-    /// directory there, or else this one's, the same path under the home there (`~/…`), as
-    /// the thread tools name a directory on another Host. A `--cwd` under this computer's home,
-    /// as a shell expands `~/…`, is the same path under the home there too. The Host says so if
-    /// there's none.
+    /// Work in `dir`, a Project's location on the Host the thread is on, as `--project` names
+    /// it (WVE-189), in place of `--cwd`, which it can't be given with.
+    pub fn in_project(&mut self, dir: PathBuf) {
+        self.in_project = Some(dir);
+    }
+
+    /// The thread's directory on another computer's Host, `host` (WVE-195): a Project's
+    /// location there, `--cwd`, a directory there, or else this one's, the same path under the
+    /// home there (`~/…`), as the thread tools name a directory on another Host. A `--cwd` under
+    /// this computer's home, as a shell expands `~/…`, is the same path under the home there
+    /// too. The Host says so if there's none.
     pub fn cwd_on(&self, host: &str) -> anyhow::Result<PathBuf> {
-        if let Some(cwd) = &self.cwd {
-            return there(cwd, "--cwd");
+        if let Some(dir) = &self.in_project {
+            return Ok(dir.clone());
         }
-        let here = self.cwd()?;
-        under_home(&here).with_context(|| {
-            format!(
-                "{} is outside your home, so it has no counterpart on {host}: give --cwd, a \
-                 directory there",
-                here.display()
-            )
-        })
+        directory_on(self.cwd.as_deref(), host, "--cwd")
     }
 
     /// The extra workspace roots on another computer's Host, `host`: each as given when it's
@@ -417,15 +420,37 @@ impl WorkspaceArgs {
             .collect()
     }
 
-    /// The absolute session directory ACP requires.
+    /// The absolute session directory ACP requires: a Project's location here, `--cwd`, or this
+    /// directory.
     pub fn cwd(&self) -> anyhow::Result<PathBuf> {
-        let cwd = match &self.cwd {
-            Some(cwd) => cwd.clone(),
-            None => std::env::current_dir()?,
+        let cwd = match (&self.in_project, &self.cwd) {
+            (Some(dir), _) | (None, Some(dir)) => dir.clone(),
+            (None, None) => std::env::current_dir()?,
         };
         cwd.canonicalize()
             .with_context(|| format!("thread directory {}", cwd.display()))
     }
+}
+
+/// A directory on another computer's Host, `host`: `dir`, given with `flag`, a directory there
+/// whole or under `~` (one under this computer's home is the same path under the home there),
+/// or else this one's counterpart under the home there, `~/…`, which there's none of outside
+/// this computer's home.
+pub fn directory_on(dir: Option<&Path>, host: &str, flag: &str) -> anyhow::Result<PathBuf> {
+    if let Some(dir) = dir {
+        return there(dir, flag);
+    }
+    let here = std::env::current_dir()?;
+    let here = here
+        .canonicalize()
+        .with_context(|| format!("directory {}", here.display()))?;
+    under_home(&here).with_context(|| {
+        format!(
+            "{} is outside your home, so it has no counterpart on {host}: give {flag}, a \
+             directory there",
+            here.display()
+        )
+    })
 }
 
 /// `path`, given with `flag` for another computer's Host, if it names a directory there whole:

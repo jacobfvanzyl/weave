@@ -16,7 +16,9 @@ use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::StopReason;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
+use weave_host_protocol::dispatcher::Project;
 use weave_host_protocol::host::StatusRequest;
+use weave_host_protocol::projects::containing;
 use weave_host_protocol::queue::AddQueuedRequest;
 use weave_host_protocol::queue::AddQueuedResponse;
 use weave_host_protocol::threads::Activity;
@@ -47,12 +49,14 @@ use weave_host_protocol::turns::TURN_IDS_FEATURE;
 use crate::args::prompt_text;
 use crate::clock::ago;
 use crate::clock::now_ms;
+use crate::dispatcher;
 use crate::exit;
 use crate::exit::Status;
 use crate::host::Again;
 use crate::host::Target;
 use crate::host::control_with_events;
 use crate::host::paths;
+use crate::projects;
 use crate::turn::Follower;
 use crate::turn::Link;
 use crate::turn::Outcome;
@@ -74,6 +78,17 @@ pub struct ThreadsArgs {
     /// through the Dispatcher.
     #[arg(long, global = true, value_name = "HOST")]
     host: Option<String>,
+
+    /// List only the threads in this Project, as `weave threads list --project` does.
+    #[arg(long, value_name = "PROJECT")]
+    project: Option<String>,
+}
+
+/// The Project `weave threads list --project` lists the threads of, among all of them, which
+/// [`containing`] needs to tell when a thread is in a Project inside it.
+struct InProject {
+    id: String,
+    projects: Vec<Project>,
 }
 
 #[derive(Subcommand)]
@@ -139,6 +154,12 @@ struct ListArgs {
     /// Only the threads that carry this label; given again, those that carry every one.
     #[arg(long = "label", value_name = "LABEL")]
     labels: Vec<String>,
+
+    /// Only the threads in this Project, by its name or id as `weave projects` lists them: in
+    /// its location on the Host, a repository's worktrees included, and not in a Project inside
+    /// it.
+    #[arg(long, value_name = "PROJECT")]
+    project: Option<String>,
 
     /// Print them as JSON.
     #[arg(long)]
@@ -232,6 +253,24 @@ pub async fn command(args: ThreadsArgs) -> anyhow::Result<ExitCode> {
     let command = args
         .command
         .unwrap_or_else(|| ThreadsCommand::List(ListArgs::default()));
+    let project = match &command {
+        ThreadsCommand::List(list) => list.project.as_ref().or(args.project.as_ref()),
+        _ => args.project.as_ref(),
+    };
+    let in_project = match (project, &command) {
+        (None, _) => None,
+        (Some(project), ThreadsCommand::List(_)) => {
+            let listed = projects::list(&dispatcher::paths()?).await?;
+            if let Some(note) = listed.going_by(now_ms()) {
+                eprintln!("weave: {note}");
+            }
+            Some(InProject {
+                id: listed.find(project)?.id.clone(),
+                projects: listed.projects,
+            })
+        }
+        (Some(_), _) => bail!("--project picks the threads `weave threads list` lists"),
+    };
     let (connected, again) = match target {
         Target::Shared(paths) => (control_with_events(&paths).await?, Again::Shared(paths)),
         Target::Carried(carry) => (
@@ -281,24 +320,38 @@ pub async fn command(args: ThreadsArgs) -> anyhow::Result<ExitCode> {
     };
     let result = match command {
         ThreadsCommand::Watch => watch(&connection, events).await,
-        command => run(&connection, command).await.map(|()| Status::Success),
+        command => run(&connection, command, in_project.as_ref())
+            .await
+            .map(|()| Status::Success),
     };
     connection.shutdown().await;
     result.map(ExitCode::from)
 }
 
-async fn run(connection: &HostConnection, command: ThreadsCommand) -> anyhow::Result<()> {
+async fn run(
+    connection: &HostConnection,
+    command: ThreadsCommand,
+    in_project: Option<&InProject>,
+) -> anyhow::Result<()> {
     match command {
         ThreadsCommand::List(ListArgs {
             activity,
             labels,
             json,
+            project: _,
         }) => {
             let mut threads = open(connection).await?;
             if let Some(activity) = activity {
                 threads.retain(|thread| thread.activity.is_some_and(|is| name(is) == activity));
             }
             threads.retain(|thread| labels.iter().all(|label| thread.labels.contains(label)));
+            if let Some(in_project) = in_project {
+                let host_id = &connection.hello().host.id;
+                threads.retain(|thread| {
+                    containing(&in_project.projects, host_id, thread)
+                        .is_some_and(|project| project.id == in_project.id)
+                });
+            }
             if json {
                 println!("{}", serde_json::to_string_pretty(&threads)?);
             } else {

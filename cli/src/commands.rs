@@ -7,6 +7,7 @@ pub mod daemon;
 pub mod devices;
 pub mod dispatcher;
 pub mod hosts;
+pub mod projects;
 pub mod run;
 pub mod schedules;
 pub mod terminals;

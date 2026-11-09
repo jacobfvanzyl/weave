@@ -223,6 +223,15 @@ impl Target {
         Ok(Self::Shared(paths()?))
     }
 
+    /// The Host `--project` names a directory on: the one on another computer, or else this
+    /// computer's.
+    pub fn on(&self) -> crate::projects::On<'_> {
+        match self {
+            Self::Carried(carry) => crate::projects::On::Host(&carry.host),
+            Self::Shared(_) | Self::InProcess => crate::projects::On::Here,
+        }
+    }
+
     /// The Host on another computer, when it's one.
     pub fn carried(&self) -> Option<&Carry> {
         match self {

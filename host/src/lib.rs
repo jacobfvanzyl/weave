@@ -1322,6 +1322,19 @@ pub fn recorded_thread(paths: &DaemonPaths, thread_id: &ThreadId) -> Option<Reco
     journal::recorded(&paths.journals(), thread_id)
 }
 
+/// The id of the Host in `paths`, which the Dispatcher knows it by, as its directory keeps it:
+/// none before it first ran. Read from disk, so the Host needn't be running: `--project` finds
+/// the Project's location on this computer's Host by it (WVE-189).
+pub fn own_id(paths: &DaemonPaths) -> Option<String> {
+    let bytes = std::fs::read(paths.devices()).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    value
+        .get("hostId")?
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
 /// What the Host in `paths` is known by among the person's Hosts: its id, and the name the
 /// Dispatcher it joined calls it. Read from disk, so the Host needn't be running: a client
 /// asked for a Host by either reaches this one over its socket rather than through the

@@ -756,3 +756,297 @@ fn weave_reaches_a_host_elsewhere_through_the_dispatcher() {
         said(&unknown)
     );
 }
+
+/// A git repository at `dir`, with one commit and `remote` as its origin, away from the
+/// configuration of whoever runs the tests.
+fn repository(dir: &std::path::Path, remote: &str) {
+    std::fs::create_dir_all(dir).expect("its directory");
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["remote", "add", "origin", remote],
+        &["commit", "-q", "--allow-empty", "-m", "start"],
+    ] {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    }
+}
+
+/// `output`'s stdout as `T`, the protocol type `--json` claims to print.
+fn parsed<T: serde::de::DeserializeOwned>(output: &Output) -> T {
+    assert!(output.status.success(), "{}", said(output));
+    serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stdout)))
+}
+
+fn same_place(left: &std::path::Path, right: &std::path::Path) -> bool {
+    left.canonicalize().ok() == right.canonicalize().ok()
+}
+
+/// `weave projects` (WVE-189) against a Dispatcher in the test, through this computer's
+/// pairing: a repository on another computer's Host registered there with `--host`, a clone of
+/// it here offered to it and joined with `--to`, a plain directory, renaming, removing a
+/// location and a Project; `--project` on `weave run` and `weave threads`, and refused where the
+/// Project has no location; and the last listing, while the Dispatcher is away.
+#[test]
+fn projects_name_directories_on_your_hosts() {
+    use weave_host_protocol::Empty;
+    use weave_host_protocol::dispatcher::Project;
+    use weave_host_protocol::dispatcher::ProjectKind;
+    use weave_host_protocol::threads::ThreadListing;
+
+    let mut world = World::new();
+    world.start_host();
+    world.start_host_elsewhere("studio");
+    let (url, code) = world.offer();
+    let paired = world.weave(&[
+        "dispatcher",
+        "connect",
+        &url,
+        &code,
+        "--name",
+        "laptop",
+        "--host",
+    ]);
+    assert!(paired.status.success(), "{}", said(&paired));
+    let elsewhere = world.dir.path().join("elsewhere/home");
+    repository(&elsewhere.join("odin"), "https://github.com/j/odin.git");
+    std::fs::create_dir_all(elsewhere.join("notes")).expect("notes there");
+    let here = world.dir.path().join("here/code/odin");
+    repository(&here, "git@github.com:j/odin.git");
+    std::fs::create_dir_all(here.join("src")).expect("a directory in the clone");
+    let weave_in = |cwd: &std::path::Path, args: &[&str]| {
+        world
+            .command(args)
+            .current_dir(cwd)
+            .output()
+            .expect("run weave")
+    };
+
+    // None yet.
+    let none = world.weave(&["projects"]);
+    assert!(none.status.success(), "{}", said(&none));
+    assert!(
+        said(&none).contains("You have no Projects"),
+        "{}",
+        said(&none)
+    );
+
+    // A repository on studio, registered from here, by its primary worktree there.
+    let odin: Project =
+        parsed(&world.weave(&["projects", "add", "--host", "studio", "~/odin", "--json"]));
+    assert_eq!(
+        (odin.name.as_str(), odin.kind, odin.remote.as_deref()),
+        ("odin", ProjectKind::Git, Some("github.com/j/odin"))
+    );
+    assert_eq!(odin.locations.len(), 1);
+    assert!(
+        same_place(&odin.locations[0].path, &elsewhere.join("odin")),
+        "{odin:?}"
+    );
+    let notes: Project = parsed(&world.weave(&[
+        "projects", "add", "--host", "studio", "~/notes", "--name", "Notes", "--json",
+    ]));
+    assert_eq!(notes.kind, ProjectKind::Directory);
+    assert_eq!(notes.locations[0].path, elsewhere.join("notes"));
+
+    // Its clone here, from a directory in it: with nobody to ask, it says how; with --to, it
+    // joins, by its primary worktree here.
+    let unasked = weave_in(&here.join("src"), &["projects", "add"]);
+    assert!(!unasked.status.success());
+    assert!(
+        said(&unasked)
+            .contains("odin has this repository on studio: `weave projects add --to odin`"),
+        "{}",
+        said(&unasked)
+    );
+    let joined: Project = parsed(&weave_in(
+        &here.join("src"),
+        &["projects", "add", "--to", "ODIN", "--json"],
+    ));
+    assert_eq!(joined.id, odin.id);
+    assert_eq!(joined.locations.len(), 2);
+    assert!(same_place(&joined.locations[1].path, &here), "{joined:?}");
+    let again = weave_in(&here, &["projects", "add"]);
+    assert!(again.status.success(), "{}", said(&again));
+    assert!(
+        said(&again).contains("is odin's already"),
+        "{}",
+        said(&again)
+    );
+    // A second location on one Host, and a directory for a git Project, are refused.
+    let second = weave_in(
+        world.dir.path(),
+        &[
+            "projects", "add", "--host", "studio", "~/notes", "--to", "odin",
+        ],
+    );
+    assert!(!second.status.success());
+    assert!(
+        said(&second).contains("on studio already"),
+        "{}",
+        said(&second)
+    );
+
+    let listed: Vec<Project> = parsed(&world.weave(&["projects", "list", "--json"]));
+    assert_eq!(
+        listed
+            .iter()
+            .map(|project| project.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Notes", "odin"]
+    );
+    let shown = world.weave(&["projects"]);
+    assert!(
+        said(&shown).contains("odin  git, github.com/j/odin"),
+        "{}",
+        said(&shown)
+    );
+    assert!(said(&shown).contains("  studio  "), "{}", said(&shown));
+    let one: Project = parsed(&world.weave(&["projects", "show", "odin", "--json"]));
+    assert_eq!(one, joined);
+
+    // --project: the Project's location on the Host in question, and never another's.
+    let ran = weave_in(
+        world.dir.path(),
+        &[
+            "run",
+            "--host",
+            "studio",
+            "--project",
+            "odin",
+            "--agent",
+            "fake",
+            "--detach",
+            "hi",
+        ],
+    );
+    assert!(ran.status.success(), "{}", said(&ran));
+    let in_notes = weave_in(
+        world.dir.path(),
+        &[
+            "run",
+            "--host",
+            "studio",
+            "--project",
+            "notes",
+            "--agent",
+            "fake",
+            "--detach",
+            "hi",
+        ],
+    );
+    assert!(in_notes.status.success(), "{}", said(&in_notes));
+    let odin_thread = String::from_utf8_lossy(&ran.stdout).trim().to_owned();
+    let threads: Vec<ThreadListing> = parsed(&world.weave(&[
+        "threads",
+        "--host",
+        "studio",
+        "list",
+        "--project",
+        "odin",
+        "--json",
+    ]));
+    assert_eq!(
+        threads
+            .iter()
+            .map(|thread| thread.info.session_id.to_string())
+            .collect::<Vec<_>>(),
+        vec![odin_thread]
+    );
+    assert!(same_place(&threads[0].info.cwd, &elsewhere.join("odin")));
+    let nowhere = weave_in(
+        world.dir.path(),
+        &["run", "--project", "notes", "--agent", "fake", "hi"],
+    );
+    assert!(!nowhere.status.success());
+    assert!(
+        said(&nowhere).contains("Notes has no location on laptop: it's on studio")
+            && said(&nowhere).contains("`weave projects add --to Notes <dir>`"),
+        "{}",
+        said(&nowhere)
+    );
+    let refused = world.weave(&["threads", "read", "s-1", "--project", "odin"]);
+    assert!(!refused.status.success(), "--project only lists");
+    // A schedule runs in the Project's location on its Host.
+    let scheduled = world.weave(&[
+        "schedules",
+        "add",
+        "daily",
+        "--cron",
+        "0 9 * * *",
+        "--host",
+        "studio",
+        "--agent",
+        "fake",
+        "--project",
+        "odin",
+        "--",
+        "hi",
+    ]);
+    assert!(scheduled.status.success(), "{}", said(&scheduled));
+    let schedules: Vec<weave_host_protocol::dispatcher::Schedule> =
+        parsed(&world.weave(&["schedules", "list", "--json"]));
+    assert!(
+        same_place(&schedules[0].run.cwd, &elsewhere.join("odin")),
+        "{schedules:?}"
+    );
+
+    // Renaming, removing a location, and removing a Project.
+    let renamed: Project =
+        parsed(&world.weave(&["projects", "rename", "notes", "journal", "--json"]));
+    assert_eq!(
+        (renamed.id.as_str(), renamed.name.as_str()),
+        (notes.id.as_str(), "journal")
+    );
+    let left: Project = parsed(&world.weave(&[
+        "projects",
+        "update",
+        "odin",
+        "--remove-host",
+        "laptop",
+        "--json",
+    ]));
+    assert_eq!(left.locations.len(), 1);
+    let removed: Empty = parsed(&world.weave(&["projects", "remove", "journal", "--json"]));
+    assert_eq!(removed, Empty {});
+
+    // While the Dispatcher is away, the last listing, and how old it is; --project too.
+    let dispatcher = world.dispatcher.clone();
+    world
+        .runtime
+        .block_on(async move { dispatcher.stop().await });
+    let away = world.weave(&["projects"]);
+    assert!(away.status.success(), "{}", said(&away));
+    assert!(
+        String::from_utf8_lossy(&away.stderr)
+            .contains("The Dispatcher didn't answer, so these are the Projects it listed"),
+        "{}",
+        said(&away)
+    );
+    assert!(
+        String::from_utf8_lossy(&away.stdout).contains("odin  git"),
+        "{}",
+        said(&away)
+    );
+    let away: Vec<Project> = parsed(&world.weave(&["projects", "list", "--json"]));
+    assert_eq!(away, vec![left]);
+    let threads_here = world.weave(&["threads", "list", "--project", "odin", "--json"]);
+    let listed: Vec<ThreadListing> = parsed(&threads_here);
+    assert_eq!(listed, Vec::new(), "odin has no location here any more");
+    assert!(
+        String::from_utf8_lossy(&threads_here.stderr)
+            .contains("The Dispatcher didn't answer, so this goes by the Projects it listed"),
+        "{}",
+        said(&threads_here)
+    );
+}

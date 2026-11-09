@@ -1,4 +1,5 @@
 mod args;
+mod ask;
 mod background;
 mod clock;
 mod commands;
@@ -7,6 +8,7 @@ mod dispatcher;
 mod exit;
 mod host;
 mod paired;
+mod projects;
 mod recent;
 mod rex_threads;
 mod service;
@@ -79,6 +81,12 @@ struct Cli {
     /// home there, unless --cwd names one there.
     #[arg(long, value_name = "HOST", conflicts_with = "no_daemon")]
     host: Option<String>,
+
+    /// Work in a Project, by its name or id as `weave projects` lists them: in its location on
+    /// the Host, a repository's primary worktree. On this computer's Host unless --host names
+    /// another; a Project with no location there is refused.
+    #[arg(long, value_name = "PROJECT", conflicts_with = "cwd")]
+    project: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -98,6 +106,9 @@ enum Command {
     Schedules(schedules::SchedulesArgs),
     /// Your Hosts the Dispatcher starts work on: list them, have one join it, or remove one.
     Hosts(hosts::HostsArgs),
+    /// Your Projects, which the Dispatcher keeps, each with a location on one or more of your
+    /// Hosts: list them, register a directory as one, rename one, or remove one.
+    Projects(commands::projects::ProjectsArgs),
     /// Pair one of your devices, or another computer, with the Dispatcher, through which it
     /// reaches your Hosts. Run it where the Dispatcher runs.
     Pair(devices::PairArgs),
@@ -147,6 +158,9 @@ async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Agents(args) => logged(agents::LOG, agents::command(args)).await,
         Command::Schedules(args) => logged(schedules::LOG, schedules::command(args)).await,
         Command::Hosts(args) => logged(hosts::LOG, hosts::command(args)).await,
+        Command::Projects(args) => {
+            logged(commands::projects::LOG, commands::projects::command(args)).await
+        }
         Command::Pair(args) => logged(devices::LOG, devices::pair(args)).await,
         Command::Devices(args) => logged(devices::LOG, devices::command(args)).await,
         Command::Terminals(args) => logged(terminals::LOG, terminals::command(args)).await,
@@ -216,13 +230,17 @@ fn env_filter(default: &str) -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default))
 }
 
-async fn run_tui(cli: Cli) -> anyhow::Result<()> {
+async fn run_tui(mut cli: Cli) -> anyhow::Result<()> {
     let mode = cli.thread.mode();
     let explicit = cli.agent.choice();
     let recent = Recent::default_location();
     let disabled = cli.agent.load_config()?.daemon.enabled == Some(false);
     let host = cli.host.as_deref();
     let target = Target::choose(host.is_none() && (cli.no_daemon || disabled), host).await?;
+    if let Some(project) = &cli.project {
+        let dir = crate::projects::directory(project, target.on()).await?;
+        cli.workspace.in_project(dir);
+    }
     let chosen = start::choose(
         &mode,
         explicit.clone(),
@@ -466,7 +484,14 @@ mod tests {
         ]));
         assert!(!parses(&["weave", "agents", "login", "--cwd", "/tmp"]));
         // What a command lists by default, it lists by name too.
-        for noun in ["threads", "agents", "schedules", "hosts", "devices"] {
+        for noun in [
+            "threads",
+            "agents",
+            "schedules",
+            "hosts",
+            "devices",
+            "projects",
+        ] {
             assert!(parses(&["weave", noun]), "{noun}");
             assert!(parses(&["weave", noun, "list"]), "{noun}");
         }
@@ -484,6 +509,42 @@ mod tests {
         assert!(!parses(&["weave", "dispatcher", "devices"]));
         assert!(parses(&["weave", "pair", "--json"]));
         assert!(parses(&["weave", "devices", "revoke", "d-1"]));
+        // A Project names the directory, so it can't be given one too (WVE-189).
+        assert!(parses(&["weave", "--project", "odin", "--host", "homelab"]));
+        assert!(!parses(&["weave", "--project", "odin", "--cwd", "/tmp"]));
+        assert!(parses(&["weave", "run", "--project", "odin", "hi"]));
+        assert!(!parses(&[
+            "weave",
+            "run",
+            "--project",
+            "odin",
+            "--cwd",
+            "/tmp",
+            "hi"
+        ]));
+        assert!(parses(&["weave", "threads", "--project", "odin"]));
+        assert!(parses(&[
+            "weave",
+            "threads",
+            "list",
+            "--project",
+            "odin",
+            "--json"
+        ]));
+        assert!(parses(&[
+            "weave", "projects", "add", "--to", "odin", "--host", "homelab"
+        ]));
+        assert!(!parses(&[
+            "weave", "projects", "add", "--to", "odin", "--name", "x"
+        ]));
+        assert!(parses(&[
+            "weave",
+            "projects",
+            "update",
+            "odin",
+            "--remove-host",
+            "homelab"
+        ]));
     }
 
     /// Names commands had before, which messages, scripts and open panes still give.

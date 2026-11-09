@@ -1239,10 +1239,12 @@ impl Connection {
         Ok(Empty {})
     }
 
-    /// `files/list`, off the dispatch loop's thread: a slow disk shouldn't hold it up.
+    /// `files/list`, off the dispatch loop's thread: a slow disk shouldn't hold it up. Its home
+    /// is the one a `~/` directory lands in (`under_home`), so a client on another computer
+    /// can tell where that is (WVE-189).
     async fn list_files(&self, request: ListFilesRequest) -> Result<ListFilesResponse, Error> {
         self.hello_info()?;
-        let home = home();
+        let home = self.shared.home();
         tokio::task::spawn_blocking(move || files::list(&request, &home))
             .await
             .map_err(|error| Error::internal_error().data(error.to_string()))?

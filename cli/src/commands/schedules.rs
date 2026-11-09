@@ -31,6 +31,8 @@ use crate::clock::ago;
 use crate::clock::now_ms;
 use crate::dispatcher;
 use crate::dispatcher::connect;
+use crate::projects;
+use crate::projects::On;
 
 pub const LOG: &str = "warn";
 
@@ -99,6 +101,11 @@ struct AddArgs {
     #[arg(long)]
     cwd: Option<PathBuf>,
 
+    /// Run in a Project, by its name or id as `weave projects` lists them: in its location on
+    /// that Host, a repository's primary worktree. A Project with no location there is refused.
+    #[arg(long, value_name = "PROJECT", conflicts_with = "cwd")]
+    project: Option<String>,
+
     /// Prompt this thread each time, by its id, instead of starting a new one.
     #[arg(long)]
     thread: Option<String>,
@@ -161,7 +168,7 @@ pub async fn command(args: SchedulesArgs) -> anyhow::Result<ExitCode> {
                 }
             }
             SchedulesCommand::Add(add) => {
-                let request = add_request(*add)?;
+                let request = add_request(*add).await?;
                 let schedule = dispatcher.send(request).await?.schedule;
                 println!("Added {}.", summary(&schedule, now_ms()));
             }
@@ -245,11 +252,12 @@ async fn occurrences(
     Ok(())
 }
 
-fn add_request(add: AddArgs) -> anyhow::Result<AddScheduleRequest> {
+async fn add_request(add: AddArgs) -> anyhow::Result<AddScheduleRequest> {
     let prompt = prompt_text(&add.prompt)?;
-    let cwd = match add.cwd {
-        Some(cwd) => cwd,
-        None => std::env::current_dir().context("reading this directory")?,
+    let cwd = match (add.cwd, &add.project) {
+        (Some(cwd), _) => cwd,
+        (None, Some(project)) => projects::directory(project, On::Host(&add.host)).await?,
+        (None, None) => std::env::current_dir().context("reading this directory")?,
     };
     Ok(AddScheduleRequest {
         name: add.name,

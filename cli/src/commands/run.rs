@@ -106,9 +106,15 @@ pub struct RunArgs {
     /// unless --cwd names one there.
     #[arg(long, value_name = "HOST", conflicts_with = "no_daemon")]
     host: Option<String>,
+
+    /// Run it in a Project, by its name or id as `weave projects` lists them: in its location on
+    /// the Host, a repository's primary worktree. On this computer's Host unless --host names
+    /// another; a Project with no location there is refused.
+    #[arg(long, value_name = "PROJECT", conflicts_with = "cwd")]
+    project: Option<String>,
 }
 
-pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
+pub async fn command(mut args: RunArgs) -> anyhow::Result<ExitCode> {
     let prompt = prompt_text(&args.prompt)?;
     let policy = PermissionPolicy::headless(args.approve.kinds()?);
     let mode = args.thread.mode();
@@ -119,6 +125,10 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
     let disabled = args.agent.load_config()?.daemon.enabled == Some(false);
     let on = args.host.as_deref();
     let target = Target::choose(on.is_none() && (args.no_daemon || disabled), on).await?;
+    if let Some(project) = &args.project {
+        let dir = crate::projects::directory(project, target.on()).await?;
+        args.workspace.in_project(dir);
+    }
     let chosen = choose(
         &mode,
         args.agent.choice(),

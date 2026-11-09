@@ -12,9 +12,6 @@
 //! `connect` offers to have that computer's Host join the Dispatcher too, so it starts work
 //! there.
 
-use std::io::BufRead as _;
-use std::io::IsTerminal as _;
-use std::io::Write as _;
 use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -38,6 +35,7 @@ use weave_host_protocol::dispatcher::Reachability;
 use weave_remote::access::RemoteSettings;
 use weave_remote::tailscale::TailscaleServe;
 
+use crate::ask;
 use crate::background;
 use crate::clock::ago;
 use crate::clock::now_ms;
@@ -524,7 +522,7 @@ async fn pair_host_here(
         }
         let wanted = match wanted {
             Some(wanted) => wanted,
-            None if std::io::stdin().is_terminal() => ask(
+            None if ask::can() => ask::ask(
                 "Have this computer's Host join the Dispatcher too, so it starts work here? [Y/n] ",
             )?,
             None => false,
@@ -545,19 +543,6 @@ async fn pair_host_here(
     .await;
     here.shutdown().await;
     result
-}
-
-/// Ask `question` at the terminal: yes unless the answer is no.
-fn ask(question: &str) -> anyhow::Result<bool> {
-    let mut stderr = std::io::stderr();
-    write!(stderr, "{question}")?;
-    stderr.flush()?;
-    let mut answer = String::new();
-    if std::io::stdin().lock().read_line(&mut answer)? == 0 {
-        return Ok(false);
-    }
-    let answer = answer.trim().to_ascii_lowercase();
-    Ok(!matches!(answer.as_str(), "n" | "no"))
 }
 
 /// `weave dispatcher disconnect`: forget the pairing, and the key this computer proved itself
