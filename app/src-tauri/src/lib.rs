@@ -103,6 +103,12 @@ fn relay_close(core: State<'_>, id: u64) {
     core.relay().close(id);
 }
 
+/// Lists the page's commands in the menu bar, with their keys (`src/mac/shell.ts`).
+#[tauri::command]
+fn set_menu(app: tauri::AppHandle, groups: Vec<menu::Group>) -> Result<(), String> {
+    menu::set(&app, &groups).map_err(|error| error.to_string())
+}
+
 /// Whether the page may go to `url` itself: only its own pages, the built app's or, during
 /// development, Vite's on this computer.
 fn own_page(url: &tauri::Url) -> bool {
@@ -133,6 +139,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_deep_link::init())
         .manage(core)
+        .manage(menu::Commands::default())
         .menu(menu::build)
         .on_menu_event(menu::chosen)
         // Closing the window hides it, as a Mac app's main window does: the app stays to
@@ -153,6 +160,7 @@ pub fn run() {
             pair_dispatcher,
             relay_send,
             relay_close,
+            set_menu,
         ])
         .setup(move |app| {
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))

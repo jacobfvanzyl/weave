@@ -1,13 +1,15 @@
-// What the Mac's shell adds around the app (ADR 0032): its menu bar's commands, notifications for
-// threads that need the person or finished while the app isn't in front, and `weave://` links,
-// which open a thread or offer a pairing.
+// What the Mac's shell adds around the app (ADR 0032): its menu bar, built from the app's commands
+// and their keys; notifications for threads that need the person or finished while the app isn't
+// in front; and `weave://` links, which open a thread or offer a pairing.
 import { useEffect, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrent, onOpenUrl } from '@tauri-apps/plugin-deep-link';
 import { isPermissionGranted, onAction, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import type { AppController, ThreadSummary } from '@/app/app-controller';
-import { isCommand, runCommand } from '@/app/commands';
+import { COMMAND_GROUPS, COMMANDS, type CommandSpec, isCommand, runCommand } from '@/app/commands';
+import { requestOpenThread } from '@/app/open-thread';
 import { pairingLink } from '@/host/storage';
 import { noticesFor, threadLink } from './notices';
 import { onMac } from './routes';
@@ -20,10 +22,24 @@ const front = async () => {
   await window.setFocus().catch(() => {});
 };
 
-/** The menu bar's commands, run in the page. */
+/** A command's key as the menu bar takes it: `CmdOrCtrl+Shift+D`. */
+export const accelerator = (keys: string) => keys.split('+').map((part) => part === 'Mod' ? 'CmdOrCtrl' : part).join('+');
+
+/** The app's commands as the menu bar lists them: a menu for each group, in the table's order. */
+export const menuGroups = (commands: readonly CommandSpec[] = COMMANDS) => COMMAND_GROUPS.map((title) => ({
+  title,
+  items: commands.filter(({ group }) => group === title).map(({ id, title: name, keys }) => ({
+    id,
+    title: name,
+    ...(keys ? { accelerator: accelerator(keys) } : {}),
+  })),
+}));
+
+/** The menu bar's commands: it lists the app's, and choosing one, or pressing its key, runs it in the page. */
 function useMenu() {
   useEffect(() => {
     if (!onMac()) return;
+    void invoke('set_menu', { groups: menuGroups() }).catch(() => {});
     const listening = listen<string>('menu', ({ payload }) => {
       if (isCommand(payload)) runCommand(payload);
     });
@@ -31,19 +47,17 @@ function useMenu() {
   }, []);
 }
 
-/** Notifies of threads that need the person, or finished, while the window isn't in front; a click opens the thread. */
+/** Notifies of threads that need the person, or finished, while the window isn't in front; a click shows the thread. */
 function useNotifications(controller: AppController) {
   const before = useRef<readonly ThreadSummary[]>([]);
   const allowed = useRef<boolean | undefined>(undefined);
-  const select = useRef(controller.actions.selectThread);
-  select.current = controller.actions.selectThread;
   const threads = controller.model.threads;
   useEffect(() => {
     if (!onMac()) return;
     const listening = onAction(({ actionId, notification }) => {
       const key = notification?.extra?.thread;
       if (actionId !== 'tap' || typeof key !== 'string') return;
-      select.current(key);
+      requestOpenThread(key);
       void front();
     });
     return () => { void listening.then((listener) => listener.unregister()).catch(() => {}); };
@@ -60,18 +74,16 @@ function useNotifications(controller: AppController) {
   }, [threads]);
 }
 
-/** `weave://thread/…` opens the thread; a pairing link is offered, as the Camera's is on the iPad. */
-function useLinks(controller: AppController) {
+/** `weave://thread/…` shows the thread, in its Session; a pairing link is offered, as the Camera's is on the iPad. */
+function useLinks() {
   const [offer, setOffer] = useState<{ url: string; code: string }>();
-  const select = useRef(controller.actions.selectThread);
-  select.current = controller.actions.selectThread;
   useEffect(() => {
     if (!onMac()) return;
     const take = (urls: string[] | null) => {
       for (const url of urls ?? []) {
         const key = threadLink(url);
         if (key) {
-          select.current(key);
+          requestOpenThread(key);
           void front();
           continue;
         }
@@ -93,5 +105,5 @@ function useLinks(controller: AppController) {
 export function useMacShell(controller: AppController) {
   useMenu();
   useNotifications(controller);
-  return useLinks(controller);
+  return useLinks();
 }
