@@ -3,7 +3,7 @@ import { createAcpShowcaseTranscript, createMarkdownShowcaseTranscript } from '@
 import { type AcpTranscript, type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
 import type { ContentBlock, McpServerStatus, SessionLayout } from '@/host/protocol';
 import { terminalBlock, threadBlock } from '@/session/blocks';
-import { LAYOUT_VERSION, firstLayout, tidy } from '@/session/layout';
+import { LAYOUT_VERSION, layoutWith, tidy } from '@/session/layout';
 import { sessionOfThread } from '@/session/sessions';
 import {
   type AgentChoice,
@@ -279,22 +279,25 @@ const arranged = (): SessionLayout => tidy({
         kind: 'row',
         sizes: [0.55, 0.45],
         children: [
-          { kind: 'stack', children: [threadBlock('protocol-spec', 'b-spec'), threadBlock('steer-tui', 'b-steer')] },
+          { kind: 'block', ...threadBlock('protocol-spec', 'b-spec') },
           {
             kind: 'column',
             children: [
-              { kind: 'stack', children: [terminalBlock('t-tests', 'b-tests')] },
-              { kind: 'stack', children: [threadBlock('alpha-back', 'b-alpha')] },
+              { kind: 'block', ...terminalBlock('t-tests', 'b-tests') },
+              { kind: 'block', ...threadBlock('alpha-back', 'b-alpha') },
             ],
           },
         ],
       },
-      floating: [{ block: terminalBlock('t-block', 'b-block'), frame: { x: 0.3, y: 0.2, width: 0.4, height: 0.4 } }],
+      floating: [
+        { block: terminalBlock('t-block', 'b-block'), frame: { x: 0.3, y: 0.2, width: 0.4, height: 0.4 } },
+        { block: threadBlock('steer-tui', 'b-steer'), frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.6 }, minimized: true },
+      ],
     },
     {
       id: 'tab-notes',
       title: 'Notes',
-      root: { kind: 'stack', children: [{ id: 'b-browser', type: 'weave.browser', props: { url: 'https://example.com/docs' } }] },
+      root: { kind: 'block', id: 'b-browser', type: 'weave.browser', props: { url: 'https://example.com/docs' } },
     },
   ],
 });
@@ -355,8 +358,8 @@ const initialState = (scenario: MockScenario, now: number): MockState => {
 
 /** The fixture repository `path` is in on a Host, by its primary worktree. */
 /**
- * What a Session shows: as someone arranged it, or its open threads in one pane, the one in front
- * first and then the most recently active.
+ * What a Session shows: as someone arranged it, or else the one thread it was started with, which
+ * here is the one in front or the most recently active. Its other threads have no Block yet.
  */
 const layoutOf = (state: MockState, key: string): SessionLayout => {
   const known = state.layouts[key];
@@ -365,7 +368,7 @@ const layoutOf = (state: MockState, key: string): SessionLayout => {
     .filter((thread) => thread.state !== 'closed' && sessionOfThread(thread) === key)
     .sort((left, right) => Number(right.key === state.model.selectedKey) - Number(left.key === state.model.selectedKey)
       || (right.lastActivityAt ?? 0) - (left.lastActivityAt ?? 0));
-  return firstLayout(members.map(({ threadId }) => threadBlock(threadId, `b-${threadId}`)), { id: 'tab-1' });
+  return layoutWith(members.slice(0, 1).map(({ threadId }) => threadBlock(threadId, `b-${threadId}`)), { id: 'tab-1' });
 };
 
 const repositoryOf = (repositories: MockRepositories, hostId: string, path: string) =>

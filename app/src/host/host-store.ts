@@ -31,8 +31,6 @@ import type {
   WorktreeRemoval,
 } from '@/app/app-controller';
 import { sessionKey, sessionOfKey, threadKey } from '@/app/app-controller';
-import { threadBlock } from '@/session/blocks';
-import { threadDirectories } from '@/session/sessions';
 import { ThreadReadState } from '@/app/thread-read-state';
 import { type ClientTool, toolError } from './client-tools';
 import { CONNECTION_CLOSED, ConnectError, HostConnection, HostError, type HostEvent, type OpenedThread } from './connection';
@@ -318,29 +316,6 @@ export class HostStore {
     else throw new Error('The store needs a way to reach the Dispatcher: `socket` or `routes`.');
     this.#sessions = new HostSessions({
       connection: (hostId) => this.#hosts.get(hostId)?.connection,
-      first: (hostId, directory) => {
-        const entry = this.#hosts.get(hostId);
-        if (!entry?.listedThreads) return undefined;
-        // Placed as the list of Sessions places them, so a Session first shows the threads listed in it.
-        const located = entry.threads.map((listing) => ({
-          key: threadKey(hostId, listing.info.sessionId),
-          hostId,
-          cwd: listing.info.cwd,
-          ...(listing.git ? { git: threadGit(listing.git) } : {}),
-        }));
-        const directories = threadDirectories(located, this.#sessions.known());
-        // A thread on screen the list doesn't have yet, as one just started and not yet prompted,
-        // comes first: its Session may be new too, and shows it without anything being saved.
-        const fresh = [...this.#shown].flatMap((key) => {
-          const state = key.startsWith(`${hostId}/`) ? this.#followed.get(key)?.state : undefined;
-          if (!state || entry.threads.some(({ info }) => info.sessionId === state.threadId)) return [];
-          return sessionKey(hostId, state.git?.worktree ?? state.cwd) === sessionKey(hostId, directory) ? [threadBlock(state.threadId)] : [];
-        });
-        return [...fresh, ...entry.threads
-          .filter((listing) => listing.state !== 'closed' && directories.get(threadKey(hostId, listing.info.sessionId)) === directory)
-          .sort((left, right) => (right.lastActivityAt ?? 0) - (left.lastActivityAt ?? 0))
-          .map((listing) => threadBlock(listing.info.sessionId))];
-      },
       changed: () => this.#changed(),
       failed: (message) => {
         this.#error = message;
@@ -502,6 +477,7 @@ export class HostStore {
       return actions;
     },
     updateLayout: (key, change) => this.#updateLayout(key, change),
+    addToSession: (key, added) => this.#addToSession(key, added),
     endSession: (key) => this.#endSession(key),
     refresh: () => this.refresh(),
     pairDispatcher: (input) => this.#pair(input),
@@ -1505,6 +1481,11 @@ export class HostStore {
     this.#sessions.update(hostId, directory, change);
   }
 
+  #addToSession(key: string, added: { threads: string[]; terminals: string[] }) {
+    const { hostId, directory } = sessionOfKey(key);
+    this.#sessions.add(hostId, directory, added);
+  }
+
   /** Lists the Session on screen's terminals, and keeps the list up to date while it's there. */
   async #watchTerminals(shown: ShownSession) {
     const connection = this.#hosts.get(shown.hostId)?.connection;
@@ -2080,15 +2061,15 @@ export class HostStore {
   }
 
   /**
-   * The Session on screen, once its Host has listed its threads: before anyone arranged it, it
-   * shows its open threads in one pane, the most recently active in front.
+   * The Session on screen, once its Host has listed its threads: with no layout yet, an empty
+   * tab, and with what its Host counts as its own.
    */
   #openSession(): { session?: OpenSession } {
     const shown = this.#session;
     const entry = shown ? this.#hosts.get(shown.hostId) : undefined;
     if (!shown || !entry?.listedThreads) return {};
     const { hostId, directory } = shown;
-    const { layout, saved } = this.#sessions.open(hostId, directory);
+    const { layout, saved, own } = this.#sessions.open(hostId, directory);
     return {
       session: {
         key: sessionKey(hostId, directory),
@@ -2096,6 +2077,7 @@ export class HostStore {
         directory,
         layout,
         saved,
+        ...(own ? { own } : {}),
         ...(shown.movedFrom ? { movedFrom: shown.movedFrom } : {}),
         ...(shown.terminals ? { terminals: shown.terminals.list.map(terminalSummary) } : {}),
       },

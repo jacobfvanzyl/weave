@@ -112,12 +112,14 @@ type ShellProps = {
   onRevealed(): void;
   onOpenSession(key?: string): void;
   onOpenThread(key: string): void;
+  /** A thread was started in a directory with no Session shown: its Session's, which it starts. */
+  onCreated(thread: CreatedThread): void;
   onOpenHosts(): void;
   onNewSession(target?: NewThreadTarget): void;
   onEndSession(session: SessionSummary): void;
 };
 
-function PhoneShell({ controller, sessions, session, selected, reveal, onRevealed, onOpenSession, onOpenThread, onOpenHosts, onNewSession, onEndSession, surfaceLink }: ShellProps & {
+function PhoneShell({ controller, sessions, session, selected, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onEndSession, surfaceLink }: ShellProps & {
   surfaceLink?: SurfaceLink;
 }) {
   const { model } = controller;
@@ -132,11 +134,11 @@ function PhoneShell({ controller, sessions, session, selected, reveal, onReveale
   if (!session) return <NoSession controller={controller} selected={selected} known={sessions.some(({ key }) => key === selected)} leading={leading} />;
   return (
     <SessionView key={session.key} controller={controller} session={session} members={membersOf(sessions, session.key)} phone leading={leading}
-      reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} surface={surface} onBack={back} />
+      reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} surface={surface} onBack={back} />
   );
 }
 
-function SplitShell({ controller, sessions, session, selected, reveal, onRevealed, onOpenSession, onOpenThread, onOpenHosts, onNewSession, onEndSession }: ShellProps) {
+function SplitShell({ controller, sessions, session, selected, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onEndSession }: ShellProps) {
   const { setOpenMobile } = useSidebar();
   const leading = <SidebarToggle waiting={waitingSessions(sessions, selected)} />;
   return (
@@ -152,7 +154,7 @@ function SplitShell({ controller, sessions, session, selected, reveal, onReveale
       <SidebarInset className='min-h-0 min-w-0 overflow-hidden'>
         {session
           ? <SessionView key={session.key} controller={controller} session={session} members={membersOf(sessions, session.key)} leading={leading}
-              reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} />
+              reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} />
           : <NoSession controller={controller} selected={selected} known={sessions.some(({ key }) => key === selected)} leading={leading} />}
       </SidebarInset>
     </>
@@ -179,7 +181,9 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
   // one this device last showed.
   const [selected, setSelected] = useState<string | undefined>(() => model.session?.key ?? loadLastSession());
   // The Sessions the Hosts keep, and the one on screen before its Host has made it.
-  const sessions = useMemo(() => sessionSummaries(model, { also: selected }), [model.threads, model.known, model.unread, selected]);
+  // A Session being started here shows before its Host has it: its first Block makes it.
+  const [starting, setStarting] = useState<string>();
+  const sessions = useMemo(() => sessionSummaries(model, { also: starting }), [model.threads, model.known, model.unread, starting]);
   const [reveal, setReveal] = useState<string>();
   // A thread asked for before its Host listed it, as by the link the app was opened with.
   const [wanted, setWanted] = useState<string>();
@@ -211,6 +215,7 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
     setWanted(undefined);
   }, [wanted, sessions]);
   const created = (thread: CreatedThread) => {
+    setStarting(thread.sessionKey);
     setSelected(thread.sessionKey);
     setReveal(thread.key);
   };
@@ -258,6 +263,7 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
     onRevealed: () => setReveal(undefined),
     onOpenSession: setSelected,
     onOpenThread: openThread,
+    onCreated: created,
     onOpenHosts: openHosts,
     onNewSession: (target) => setNewThread(target ?? {}),
     onEndSession: setEnding,

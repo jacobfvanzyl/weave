@@ -1,7 +1,8 @@
-// A Session on screen (ADR 0031, WVE-203): its tabs, and in the tab in front its panes of Blocks.
-// The Mac and the iPad lay a tab out as the document has it; the iPhone shows one Block at a
-// time, a tab's Blocks as chips to move between. What changes the layout goes to the Host for
-// every device; which tab and Block are in front, focus and zoom are this device's own.
+// A Session on screen (ADR 0031, WVE-203): its tabs, and in the tab in front its Blocks, docked
+// or floating. The Mac and the iPad lay a tab out as the document has it; the iPhone shows one
+// Block at a time, a tab's Blocks by name to move between. What changes the layout goes to the
+// Host for every device; which tab is in front, focus and zoom are this device's own. What a
+// Block shows is the Session's from then on (`sessions/add`): nothing else in its directory is.
 import { useEffect, useMemo, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Add01Icon, Cancel01Icon, ComputerTerminal01Icon, BubbleChatIcon } from '@hugeicons/core-free-icons';
@@ -10,7 +11,7 @@ import { useCommand } from '@/app/commands';
 import { type NewThreadTarget, NewThreadDialog } from '@/components/new-thread-dialog';
 import { type BlockContext, TerminalMark, blockType } from '@/components/session/blocks';
 import { NameInput } from '@/components/session/name-input';
-import { type PaneActions, BlockRail, TabPanes } from '@/components/session/panes';
+import { type BlockActions, BlockRail, TabBlocks } from '@/components/session/tab-blocks';
 import { ThreadHeader } from '@/components/thread-view';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
@@ -33,35 +34,41 @@ import {
   type Side,
   type Target,
   addTab,
+  blockBeside,
   findBlock,
   frameBlock,
   layoutBlocks,
+  minimizeBlock,
   newTab,
-  paneBeside,
-  panes,
   placeBlock,
   prune,
   removeBlock,
   removeTab,
   renameTab,
   resizeSplit,
+  roomierSide,
   tabBlocks,
 } from '@/session/layout';
-import { directoryName } from '@/session/sessions';
-import { blockInFront, focusBlock, focusedBlock, showTab, tabInFront, toggleZoom, trimView, useSessionView, zoomedIn, blocksShown } from '@/session/view';
+import { directoryName, threadDirectories } from '@/session/sessions';
+import { blockOnPhone, blocksShown, focusBlock, focusedBlock, showTab, tabInFront, toggleZoom, trimView, useSessionView, zoomedIn } from '@/session/view';
 import type { DeviceSurface } from '@/surface/use-surface';
 import { terminalBusy, terminalName, terminalsInOrder } from '@/terminal/terminals';
 
 const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-/** What a new Block shows: a thread or terminal to start, or one the Session has that no Block shows. */
-function NewBlockDialog({ open, onOpenChange, threads, closed, terminals, canTerminals, onNewThread, onNewTerminal, onThread, onTerminal }: {
+/**
+ * What a new Block shows: a thread or terminal to start, one the Session has that no Block shows,
+ * or one elsewhere in its directory, which a Block brings into the Session.
+ */
+function NewBlockDialog({ open, onOpenChange, threads, closed, terminals, elsewhere, canTerminals, onNewThread, onNewTerminal, onThread, onTerminal }: {
   open: boolean;
   onOpenChange(open: boolean): void;
   /** The Session's open threads no Block shows, and its closed ones. */
   threads: ThreadSummary[];
   closed: ThreadSummary[];
   terminals: TerminalSummary[];
+  /** What's in its directory and not the Session's: started from a terminal, a schedule or another client. */
+  elsewhere: { threads: ThreadSummary[]; terminals: TerminalSummary[] };
   canTerminals: boolean;
   onNewThread(): void;
   onNewTerminal(): void;
@@ -75,7 +82,7 @@ function NewBlockDialog({ open, onOpenChange, threads, closed, terminals, canTer
       <DialogContent className='w-[min(26rem,calc(100%-2rem))] max-w-none sm:max-w-md'>
         <DialogHeader>
           <DialogTitle>New Block</DialogTitle>
-          <DialogDescription>What it shows: something new, or a thread or terminal of this Session that no Block shows. It's placed here on every device.</DialogDescription>
+          <DialogDescription>What it shows: something new, or a thread or terminal of this Session that no Block shows. It docks beside the Block with the keyboard, on every device.</DialogDescription>
         </DialogHeader>
         <div className='grid max-h-[60dvh] gap-3 overflow-y-auto'>
           <div role='group' aria-label='New' className='grid gap-0.5'>
@@ -108,6 +115,25 @@ function NewBlockDialog({ open, onOpenChange, threads, closed, terminals, canTer
               </button>
             ))}
           </div>
+          {(elsewhere.threads.length > 0 || elsewhere.terminals.length > 0) && (
+            <div role='group' aria-label='Elsewhere in this directory' className='grid gap-0.5'>
+              <p className='px-2 text-[0.6875rem] font-medium text-muted-foreground'>Elsewhere in this directory, which a Block brings into the Session</p>
+              {elsewhere.threads.map((thread) => (
+                <button key={thread.key} type='button' className={row} onClick={() => onThread(thread)}>
+                  <HugeiconsIcon icon={BubbleChatIcon} strokeWidth={2} className='size-3.5 shrink-0 text-icon-muted' />
+                  <span className='min-w-0 flex-1 truncate'>{thread.title || 'New thread'}</span>
+                  <span className='shrink-0 text-[0.6875rem] text-muted-foreground'>{thread.activity === 'waiting' ? 'waiting on you' : thread.activity === 'running' ? 'running' : thread.agentName}</span>
+                </button>
+              ))}
+              {elsewhere.terminals.map((terminal) => (
+                <button key={terminal.id} type='button' className={row} onClick={() => onTerminal(terminal)}>
+                  <HugeiconsIcon icon={ComputerTerminal01Icon} strokeWidth={2} className='size-3.5 shrink-0 text-icon-muted' />
+                  <span className='min-w-0 flex-1 truncate'>{terminalName(terminal)}</span>
+                  <TerminalMark terminal={terminal} />
+                </button>
+              ))}
+            </div>
+          )}
           {closed.length > 0 && (
             <div role='group' aria-label='Closed threads' className='grid gap-0.5'>
               <p className='px-2 text-[0.6875rem] font-medium text-muted-foreground'>Closed threads, which open again here</p>
@@ -148,7 +174,7 @@ function useSwipe(onSwipe: (by: number) => void) {
 export type SessionViewProps = {
   controller: AppController;
   session: OpenSession;
-  /** The Session's threads, by key, as the list of Sessions places them. */
+  /** The Session's threads, by key: those started or shown in a Block of it, and those they started. */
   members: readonly string[];
   /** Before the tabs: what shows the sidebar, or the iPhone's way back to the list. */
   leading?: ReactNode;
@@ -159,12 +185,14 @@ export type SessionViewProps = {
   onRevealed?(): void;
   /** Shows a thread that may be in another Session. */
   onOpenThread(key: string): void;
+  /** A thread was started from here in another directory: its own Session's, which it starts. */
+  onCreated?(thread: CreatedThread): void;
   /** The iPhone's Surface (WVE-183), for the thread in front. */
   surface?: DeviceSurface;
   onBack?(): void;
 };
 
-export function SessionView({ controller, session, members, leading, phone = false, reveal, onRevealed, onOpenThread, surface, onBack }: SessionViewProps) {
+export function SessionView({ controller, session, members, leading, phone = false, reveal, onRevealed, onOpenThread, onCreated, surface, onBack }: SessionViewProps) {
   const { model, actions } = controller;
   const { layout } = session;
   const [view, changeView] = useSessionView(session.key);
@@ -172,7 +200,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
   const canTerminals = Boolean(host?.canTerminals);
   const tab = tabInFront(layout, view);
   const zoomed = phone ? undefined : zoomedIn(tab, view);
-  const focused = focusedBlock(tab, phone ? { ...view, zoom: undefined } : view);
+  const focused = phone ? blockOnPhone(tab, view) : focusedBlock(tab, view);
   const update = (change: LayoutChange) => actions.updateLayout?.(session.key, change);
   const focus = (id: string) => changeView((current) => focusBlock(current, layout, id));
 
@@ -186,8 +214,8 @@ export function SessionView({ controller, session, members, leading, phone = fal
     setPending(undefined);
   }, [pending, layout]);
 
-  // The threads on screen are the ones followed: the Block in front of each pane, or on the
-  // iPhone the one Block.
+  // The threads on screen are the ones followed: each Block that shows, or on the iPhone the one
+  // Block.
   const shown = phone ? (focused ? [focused] : []) : blocksShown(tab, view);
   const keyOf = (block: SessionBlock | undefined) => {
     const threadId = block ? threadOf(block) : undefined;
@@ -220,13 +248,40 @@ export function SessionView({ controller, session, members, leading, phone = fal
     if (layoutBlocks(layout).some(gone)) update((current) => prune(current, (block) => !gone(block)));
   }, [liveTerminals, layout]);
 
+  // The Session's own are those its Host lists; a Host from before it kept them counts everything
+  // in the directory. What else is in the directory is elsewhere, until a Block brings it in.
+  const own = session.own;
   const threads = useMemo(() => model.threads.filter(({ key }) => members.includes(key)), [model.threads, members]);
   const hidden = threads.filter(({ threadId }) => !blockOfThread(layout, threadId));
-  const hiddenTerminals = terminalsInOrder(session.terminals ?? []).filter(({ id }) => !blockOfTerminal(layout, id));
+  const unplaced = terminalsInOrder(session.terminals ?? []).filter(({ id }) => !blockOfTerminal(layout, id));
+  const hiddenTerminals = unplaced.filter(({ id }) => !own || own.terminals.includes(id));
   const notShown = hidden.filter(({ state }) => state !== 'closed').length + hiddenTerminals.length;
+  const elsewhere = useMemo(() => {
+    if (!own) return { threads: [], terminals: [] };
+    const directories = threadDirectories(model.threads, model.known ?? []);
+    return {
+      threads: model.threads.filter((thread) => thread.hostId === session.hostId && thread.state !== 'closed' && !members.includes(thread.key)
+        && directories.get(thread.key) === session.directory && !blockOfThread(layout, thread.threadId)),
+      terminals: unplaced.filter(({ id }) => !own.terminals.includes(id)),
+    };
+  }, [model.threads, model.known, members, own, layout, session.terminals]);
+
+  // What a Block shows is the Session's: its Host is told of any it doesn't list yet, as one
+  // just started here, or one brought in from elsewhere in the directory.
+  const strangers = useMemo(() => {
+    if (!own) return { threads: [], terminals: [] };
+    const blocks = layoutBlocks(layout);
+    return {
+      threads: blocks.flatMap((block) => threadOf(block) ?? []).filter((id) => !own.threads.includes(id)),
+      terminals: blocks.flatMap((block) => terminalOf(block) ?? []).filter((id) => !own.terminals.includes(id) && session.terminals?.some((terminal) => terminal.id === id)),
+    };
+  }, [layout, own, session.terminals]);
+  useEffect(() => {
+    if (strangers.threads.length + strangers.terminals.length > 0) actions.addToSession?.(session.key, strangers);
+  }, [session.key, strangers.threads.join('\n'), strangers.terminals.join('\n')]);
 
   const context = (block: SessionBlock): BlockContext => ({
-    // A thread's Block shows its own errors' place once, above the panes.
+    // A thread's Block shows its own errors' place once, above the Blocks.
     controller: { ...controller, model: { ...model, error: undefined } },
     session,
     focused: block.id === focused?.id,
@@ -243,8 +298,16 @@ export function SessionView({ controller, session, members, leading, phone = fal
     return <Body block={block} context={context(block)} />;
   };
 
-  /** Where something new goes without saying: the pane with the keyboard, else the tab. */
-  const here = (): Target => focused && findBlock(layout, focused.id)?.pane ? { into: focused.id } : { tab: tab.id };
+  /**
+   * Where something new goes without saying: docked beside the Block with the keyboard, to its
+   * right while that's wider than tall, else below it; beside the tab's largest when the one with
+   * the keyboard floats.
+   */
+  const here = (): Target => {
+    if (!focused || !findBlock(layout, focused.id)?.path) return { tab: tab.id };
+    const rect = document.querySelector(`[data-session="${CSS.escape(session.key)}"] [data-slot="session-tab"]`)?.getBoundingClientRect();
+    return { beside: focused.id, side: roomierSide(tab, focused.id, rect && rect.height > 0 && rect.width > 0 ? rect.width / rect.height : undefined) };
+  };
 
   const [error, setError] = useState<string>();
   const [adding, setAdding] = useState<{ target: Target }>();
@@ -253,10 +316,19 @@ export function SessionView({ controller, session, members, leading, phone = fal
   const [renaming, setRenaming] = useState<string>();
   const [confirm, setConfirm] = useState<{ title: string; description: string; action: string; run(): void }>();
 
+  /** Gives a Block the layout has the keyboard, bringing it back first if it was put away. */
+  const bring = (block: SessionBlock) => {
+    if (!phone && findBlock(layout, block.id)?.minimized) {
+      update((current) => minimizeBlock(current, block.id, false));
+      setPending({ block: block.id });
+    } else {
+      focus(block.id);
+    }
+  };
   const showThread = (threadId: string, target: Target = here()) => {
     const existing = blockOfThread(layout, threadId);
     if (existing) {
-      focus(existing.id);
+      bring(existing);
       return;
     }
     const block = threadBlock(threadId);
@@ -266,7 +338,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
   const showTerminal = (terminalId: string, target: Target = here()) => {
     const existing = blockOfTerminal(layout, terminalId);
     if (existing) {
-      focus(existing.id);
+      bring(existing);
       return;
     }
     const block = terminalBlock(terminalId);
@@ -285,7 +357,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
   const created = (thread: CreatedThread) => {
     const target = newThread?.target;
     if (thread.sessionKey !== session.key) {
-      onOpenThread(thread.key);
+      onCreated?.(thread);
       return;
     }
     showThread(thread.key.slice(thread.key.indexOf('/') + 1), target);
@@ -391,7 +463,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
   const toggleFloat = (block: SessionBlock) => {
     const found = findBlock(layout, block.id);
     if (!found) return;
-    update((current) => found.pane
+    update((current) => found.path
       ? placeBlock(current, block, { floating: found.tab.id, frame: FLOATING_FRAME })
       : place(current, block, { tab: found.tab.id }));
     setPending({ block: block.id });
@@ -401,26 +473,30 @@ export function SessionView({ controller, session, members, leading, phone = fal
     update((current) => placeBlock(current, block, { newTab: made, after: findBlock(current, block.id)?.tab.id }));
     setPending({ block: block.id });
   };
-  const focusBeside = (side: Side) => {
-    const pane = focused ? paneBeside(tab, focused.id, side) : undefined;
-    if (pane) focus(blockInFront(pane, view).id);
+  const minimize = (block: SessionBlock, minimized: boolean) => {
+    update((current) => minimizeBlock(current, block.id, minimized));
+    if (!minimized) setPending({ block: block.id });
   };
-  /** The next Block of the focused one's pane, or on the iPhone of the tab. */
+  const focusBeside = (side: Side) => {
+    const beside = focused ? blockBeside(tab, focused.id, side) : undefined;
+    if (beside) focus(beside.id);
+  };
+  /** The next of the Blocks the tab shows, or on the iPhone of all it has. */
   const stepBlock = (by: number) => {
     if (!focused) return;
-    const among = phone ? tabBlocks(tab) : findBlock(layout, focused.id)?.pane?.children ?? [];
+    const among = phone ? tabBlocks(tab) : shown;
     const at = among.findIndex(({ id }) => id === focused.id);
     const next = among[(at + by + among.length) % among.length];
     if (next && next.id !== focused.id) focus(next.id);
   };
 
-  const paneActions: PaneActions = {
+  const blockActions: BlockActions = {
     focus,
     close: closeBlock,
     zoom: (id) => changeView((current) => toggleZoom(current, layout, id)),
     split: (id, side) => setAdding({ target: { beside: id, side } }),
-    toNewTab,
     float: toggleFloat,
+    minimize,
     move: (block, target) => {
       update((current) => placeBlock(current, block, target));
       setPending({ block: block.id });
@@ -429,7 +505,8 @@ export function SessionView({ controller, session, members, leading, phone = fal
     frame: (id, frame) => update((current) => frameBlock(current, id, frame)),
   };
 
-  const docked = Boolean(focused && findBlock(layout, focused.id)?.pane);
+  const found = focused ? findBlock(layout, focused.id) : undefined;
+  const docked = Boolean(found?.path);
   useCommand('thread.new', () => startThread());
   useCommand('terminal.new', () => void startTerminal(), canTerminals);
   useCommand('block.add', () => setAdding({ target: here() }));
@@ -440,8 +517,9 @@ export function SessionView({ controller, session, members, leading, phone = fal
   useCommand('tab.previous', () => stepTab(-1), layout.tabs.length > 1);
   useCommand('block.splitRight', () => { if (focused) setAdding({ target: { beside: focused.id, side: 'right' } }); }, docked && !phone);
   useCommand('block.splitDown', () => { if (focused) setAdding({ target: { beside: focused.id, side: 'down' } }); }, docked && !phone);
-  useCommand('block.zoom', () => { if (focused) paneActions.zoom(focused.id); }, Boolean(focused) && !phone);
+  useCommand('block.zoom', () => { if (focused) blockActions.zoom(focused.id); }, Boolean(focused) && !phone);
   useCommand('block.float', () => { if (focused) toggleFloat(focused); }, Boolean(focused) && !phone);
+  useCommand('block.minimize', () => { if (focused) minimize(focused, true); }, Boolean(found?.frame) && !phone);
   useCommand('block.toNewTab', () => { if (focused) toNewTab(focused); }, Boolean(focused));
   useCommand('block.close', () => { if (focused) closeBlock(focused); }, Boolean(focused));
   useCommand('block.focusLeft', () => focusBeside('left'), docked && !phone);
@@ -542,8 +620,8 @@ export function SessionView({ controller, session, members, leading, phone = fal
             {focused && (
               // One Block at a time: the tab's Blocks by name, and the one in front's menu and close.
               <div {...swipe}>
-                <BlockRail blocks={tabBlocks(tab)} front={focused} arrange={false} view={view} focusedId={focused.id}
-                  actions={paneActions} title={title} mark={mark} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={false} />
+                <BlockRail block={focused} among={tabBlocks(tab)} focusedId={focused.id}
+                  actions={blockActions} title={title} mark={mark} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={false} />
               </div>
             )}
             {focused
@@ -551,7 +629,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
               : empty}
           </>
         )
-        : <TabPanes tab={tab} view={view} focusedId={focused?.id} zoomedId={zoomed?.id} actions={paneActions} title={title} mark={mark} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={shown.length > 1} empty={empty} />}
+        : <TabBlocks tab={tab} focusedId={focused?.id} zoomedId={zoomed?.id} actions={blockActions} title={title} mark={mark} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={shown.length > 1} empty={empty} />}
 
       <NewBlockDialog
         open={adding !== undefined}
@@ -559,6 +637,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
         threads={hidden.filter(({ state }) => state !== 'closed')}
         closed={hidden.filter(({ state }) => state === 'closed')}
         terminals={hiddenTerminals}
+        elsewhere={elsewhere}
         canTerminals={canTerminals}
         onNewThread={() => {
           const target = adding?.target;

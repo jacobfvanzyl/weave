@@ -256,8 +256,15 @@ export type KnownSession = {
   hostId: string;
   directory: string;
   git?: { repo: string; branch?: string };
-  /** The threads the Host places in it, by id, as of when it last said. */
+  /** Its threads, by id, as of when its Host last said: those given a Block in it, and those they started. */
   threads: string[];
+  /** Its terminals' ids, likewise. */
+  terminals?: string[];
+  /**
+   * Its Host keeps what's its own (`sessions/add`). One from before that counts every thread in
+   * the directory, and the app places them there itself.
+   */
+  keepsOwn?: boolean;
   updatedAt?: number;
 };
 
@@ -266,8 +273,13 @@ export type OpenSession = {
   key: string;
   hostId: string;
   directory: string;
-  /** Its tabs of Blocks: as its Host keeps it, or as it first shows before anyone arranged it. */
+  /** Its tabs of Blocks: as its Host keeps it, or an empty tab before anyone gave it a Block. */
   layout: SessionLayout;
+  /**
+   * The threads and terminals its Host counts as its own, by id: none on a Host from before it
+   * kept that, where everything in the directory is the Session's.
+   */
+  own?: { threads: string[]; terminals: string[] };
   /** Whether its Host keeps this layout yet. */
   saved: boolean;
   /**
@@ -344,6 +356,8 @@ export type AppActions = ThreadActions & {
   forThread?(key: string): ThreadActions;
   /** Changes a Session's layout, for every device. */
   updateLayout?(sessionKey: string, change: LayoutChange): void;
+  /** Has the Session's Host count threads and terminals as the Session's, as a Block shows them. */
+  addToSession?(sessionKey: string, added: { threads: string[]; terminals: string[] }): void;
   /**
    * Ends a Session, for good: its Host closes the threads open in it, ends its terminals and
    * forgets its layout. Rejects saying why not, as while something in it is running.

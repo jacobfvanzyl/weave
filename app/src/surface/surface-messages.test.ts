@@ -53,7 +53,9 @@ const summary = (key: string, activity: ThreadSummary['activity'], title?: strin
 
 const model = (thread?: OpenThread): AppModel => ({
   hosts: [{ id: 'h', name: 'mac', status: 'connected' }],
-  threads: [summary('h/main', 'running', 'Count the files'), summary('h/other', 'waiting'), summary('h/third', 'waiting')],
+  // The last one was started from a terminal, in no Session: the app says nothing of it.
+  threads: [summary('h/main', 'running', 'Count the files'), summary('h/other', 'waiting'), summary('h/third', 'waiting'), summary('h/tui', 'waiting')],
+  known: [{ hostId: 'h', directory: '/work/project', threads: ['main', 'other', 'third'], keepsOwn: true }],
   agents: {},
   selectedKey: thread?.key,
   thread,

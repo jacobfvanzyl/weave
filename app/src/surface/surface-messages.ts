@@ -1,6 +1,7 @@
 import type { AppModel, ThreadActivity } from '@/app/app-controller';
 import { waitingCount } from '@/app/thread-list';
 import type { AcpTranscript, TranscriptEntry } from '@/chat/acp-transcript';
+import { ownThreads } from '@/session/sessions';
 
 /**
  * What a Surface (WVE-183) shows of a thread above its transcript. The device sends it; the
@@ -98,6 +99,6 @@ export function showMessage(model: AppModel, lastKey: string | undefined): Extra
     kind: 'show',
     thread: key ? surfaceThread(model, key, model.thread?.loading) : undefined,
     dimmed: !model.thread,
-    waiting: waitingCount(model.threads, model.thread?.key),
+    waiting: waitingCount(ownThreads(model), model.thread?.key),
   };
 }

@@ -1,7 +1,7 @@
 // What the Mac's shell adds around the app (ADR 0032): its menu bar, built from the app's commands
 // and their keys; notifications for threads that need the person or finished while the app isn't
 // in front; and `weave://` links, which open a thread or offer a pairing.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -11,6 +11,7 @@ import type { AppController, ThreadSummary } from '@/app/app-controller';
 import { COMMAND_GROUPS, COMMANDS, type CommandSpec, isCommand, runCommand } from '@/app/commands';
 import { requestOpenThread } from '@/app/open-thread';
 import { pairingLink } from '@/host/storage';
+import { ownThreads } from '@/session/sessions';
 import { noticesFor, threadLink } from './notices';
 import { onMac } from './routes';
 
@@ -51,7 +52,9 @@ function useMenu() {
 function useNotifications(controller: AppController) {
   const before = useRef<readonly ThreadSummary[]>([]);
   const allowed = useRef<boolean | undefined>(undefined);
-  const threads = controller.model.threads;
+  // Only of threads in a Session: the app says nothing of one started elsewhere.
+  const { threads: listed, known } = controller.model;
+  const threads = useMemo(() => ownThreads({ threads: listed, known }), [listed, known]);
   useEffect(() => {
     if (!onMac()) return;
     const listening = onAction(({ actionId, notification }) => {

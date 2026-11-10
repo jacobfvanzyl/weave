@@ -2,13 +2,14 @@
 // date (`sessions/watch`), and the layouts this device shows and changes. A change is made here
 // at once and saved to the Host under the revision it was made on (`sessions/set` with
 // `ifRevision`); when another device saved first, the change is made again on what that one
-// saved, so neither loses the other's. A Session its Host keeps no layout for shows a first
-// layout, kept here until the person changes it.
+// saved, so neither loses the other's. A Session its Host keeps no layout for shows an empty
+// tab: nothing is placed for the person. What's in a Session is its Host's to say too
+// (`sessions/add`): the threads and terminals Blocks were given, not all its directory holds.
 import type { KnownSession, LayoutChange } from '@/app/app-controller';
 import { sessionKey } from '@/app/app-controller';
-import { firstLayout, tidy } from '@/session/layout';
+import { emptyLayout, tidy } from '@/session/layout';
 import { CONNECTION_CLOSED, type HostConnection, HostError } from './connection';
-import { HOST_PROTOCOL, type HostSession, type SessionBlock, type SessionLayout } from './protocol';
+import { HOST_PROTOCOL, type HostSession, type SessionLayout } from './protocol';
 
 /** How many times a change is made again on a newer revision before it's given up. */
 const TRIES = 6;
@@ -20,10 +21,12 @@ type Kept = {
   session?: HostSession;
   /** The Host's layout as the app keeps one; none while the Host keeps none. */
   saved?: SessionLayout;
-  /** What it shows before anyone arranged it, or on a Host that keeps no Sessions. */
+  /** What it shows on a Host that keeps no Sessions: this device's alone. */
   draft?: SessionLayout;
-  /** What it shows before its Host has listed what's in it: nothing yet. */
+  /** What it shows before any layout: an empty tab. */
   blank?: SessionLayout;
+  /** What its Host was asked to count as its own, or wouldn't: not asked again. */
+  asked: Set<string>;
   /** Changes not saved yet, the oldest first. */
   changes: LayoutChange[];
   /** What it shows: its saved layout or draft, with the changes on top. */
@@ -34,11 +37,6 @@ type Kept = {
 export type SessionsDeps = {
   /** The Host's connection, while it's connected. */
   connection(hostId: string): HostConnection | undefined;
-  /**
-   * The Blocks a Session shows before anyone arranged it: its open threads, the most recently
-   * active first. None until its Host has listed its threads.
-   */
-  first(hostId: string, directory: string): SessionBlock[] | undefined;
   /** Something a Session shows changed. */
   changed(): void;
   /** A change couldn't be saved. */
@@ -110,18 +108,49 @@ export class HostSessions {
           directory: session.directory,
           ...(session.git ? { git: { repo: session.git.repo, ...(session.git.branch ? { branch: session.git.branch } : {}) } } : {}),
           threads: session.threads ?? [],
+          terminals: session.terminals ?? [],
+          ...(this.#deps.connection(hostId)?.supports(HOST_PROTOCOL.features.sessionsAdd) ? { keepsOwn: true } : {}),
           ...(session.updatedAt ? { updatedAt: session.updatedAt } : {}),
         }]
       : []);
   }
 
   /**
-   * What the Session shows, and whether its Host keeps it. One with no layout kept shows its
-   * first Blocks in one pane, from when they're known on.
+   * What the Session shows, whether its Host keeps it, and what its Host counts as its own: none
+   * on a Host from before it kept that, where everything in the directory is the Session's.
    */
-  open(hostId: string, directory: string): { layout: SessionLayout; saved: boolean } {
+  open(hostId: string, directory: string): { layout: SessionLayout; saved: boolean; own?: { threads: string[]; terminals: string[] } } {
     const kept = this.#entry(hostId, directory);
-    return { layout: this.#shown(kept), saved: kept.saved !== undefined && kept.changes.length === 0 };
+    const keeps = this.#deps.connection(hostId)?.supports(HOST_PROTOCOL.features.sessionsAdd);
+    return {
+      layout: this.#shown(kept),
+      saved: kept.saved !== undefined && kept.changes.length === 0,
+      ...(keeps ? { own: { threads: kept.session?.threads ?? [], terminals: kept.session?.terminals ?? [] } } : {}),
+    };
+  }
+
+  /**
+   * Has the Session's Host count `threads` and `terminals` as the Session's, which a Block shows:
+   * one at a time, since one that's gone would fail the rest, and each asked once.
+   */
+  add(hostId: string, directory: string, added: { threads: string[]; terminals: string[] }) {
+    const kept = this.#entry(hostId, directory);
+    const connection = this.#deps.connection(hostId);
+    if (!connection || connection.closed || !connection.supports(HOST_PROTOCOL.features.sessionsAdd)) return;
+    const ask = async (name: string, params: { threads?: string[]; terminals?: string[] }) => {
+      if (kept.asked.has(name)) return;
+      kept.asked.add(name);
+      try {
+        const { session } = await connection.request('sessions/add', { directory: kept.directory, ...params });
+        this.#saved(this.#kept.get(sessionKey(hostId, kept.directory)) ?? kept, session);
+        this.#deps.changed();
+      } catch (error) {
+        // Away: asked again once it's back. One the Host turns down, as a thread that's gone, stays asked.
+        if (error instanceof HostError && error.code === CONNECTION_CLOSED) kept.asked.delete(name);
+      }
+    };
+    for (const id of added.threads) void ask(`thread ${id}`, { threads: [id] });
+    for (const id of added.terminals) void ask(`terminal ${id}`, { terminals: [id] });
   }
 
   /** Makes `change` to the Session's layout, here at once and on its Host for every device. */
@@ -140,22 +169,14 @@ export class HostSessions {
     const key = sessionKey(hostId, directory);
     let kept = this.#kept.get(key);
     if (!kept) {
-      kept = { hostId, directory, changes: [], writing: false };
+      kept = { hostId, directory, changes: [], writing: false, asked: new Set() };
       this.#kept.set(key, kept);
     }
     return kept;
   }
 
   #base(kept: Kept): SessionLayout {
-    if (kept.saved) return kept.saved;
-    if (!kept.draft) {
-      const first = this.#deps.first(kept.hostId, kept.directory);
-      // Not known yet: nothing, until it is.
-      if (!first) return kept.blank ??= firstLayout([]);
-      kept.draft = firstLayout(first);
-      kept.shown = undefined;
-    }
-    return kept.draft;
+    return kept.saved ?? kept.draft ?? (kept.blank ??= emptyLayout());
   }
 
   #shown(kept: Kept): SessionLayout {
@@ -177,7 +198,7 @@ export class HostSessions {
   }
 
   #end(key: string, kept: Kept) {
-    // Its threads may still be listed: it shows again as they place it, with nothing kept.
+    // Gone for good: one made there later starts with nothing of it.
     this.#kept.delete(key);
     kept.changes = [];
   }
@@ -259,6 +280,7 @@ export class HostSessions {
     const target = this.#entry(kept.hostId, session.directory);
     target.changes.push(...kept.changes);
     target.writing = kept.writing;
+    for (const name of kept.asked) target.asked.add(name);
     kept.changes = [];
     kept.writing = false;
     this.#took(kept.hostId, session);

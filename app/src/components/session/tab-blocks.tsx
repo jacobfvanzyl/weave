@@ -1,14 +1,17 @@
-// A tab's panes on the Mac and the iPad (WVE-203): rows and columns with edges to drag, a rail
-// atop each pane with its Blocks' names and the same icons for any Block, Blocks floating over
-// them, and dragging a Block by its rail to another pane's middle or edge, or to a tab.
+// A tab's Blocks on the Mac and the iPad (WVE-203): those docked, in rows and columns with edges
+// to drag, each under a rail with its name and the same icons for any Block; those floating over
+// them; and, at the bottom right, the names of the floating ones put away. A docked Block is
+// dragged by its rail to another's edge or middle, or to a tab.
 import { Fragment, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import {
+  ArrowExpand01Icon,
+  ArrowShrink01Icon,
   Cancel01Icon,
   LayoutTwoColumnIcon,
   LayoutTwoRowIcon,
   Maximize01Icon,
-  Minimize01Icon,
+  MinusSignIcon,
   MoreHorizontalIcon,
   PictureInPictureExitIcon,
   PictureInPictureOnIcon,
@@ -18,31 +21,30 @@ import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import type { SessionBlock, SessionFloating, SessionFrame, SessionNode, SessionTab } from '@/host/protocol';
 import { cn } from '@/lib/utils';
-import { type Pane, type Path, type Side, type Split, type Target, fitFrame, newTab, shares } from '@/session/layout';
-import { type SessionView, blockInFront } from '@/session/view';
+import { type Path, type Side, type Split, type Target, fitFrame, newTab, shares, tabBlocks } from '@/session/layout';
 
-/** What a pane does to the layout and the view, by Block. */
-export type PaneActions = {
+/** What a Block's rail and its edges do to the layout and the view, by Block. */
+export type BlockActions = {
   focus(blockId: string): void;
   close(block: SessionBlock): void;
   zoom(blockId: string): void;
-  /** Opens what goes in a new pane on `side` of the Block's. */
+  /** Opens what docks on `side` of the Block. */
   split(blockId: string, side: Side): void;
-  toNewTab(block: SessionBlock): void;
-  /** Floats a Block over its tab, or puts a floating one back among the panes. */
+  /** Floats a docked Block over its tab, or docks a floating one. */
   float(block: SessionBlock): void;
+  /** Puts a floating Block away as its name, or brings it back. */
+  minimize(block: SessionBlock, minimized: boolean): void;
   move(block: SessionBlock, target: Target): void;
   resize(path: Path, sizes: number[]): void;
   frame(blockId: string, frame: SessionFrame): void;
 };
 
-export type PaneProps = {
-  view: SessionView;
+export type TabProps = {
   /** The Block with the keyboard. */
   focusedId?: string;
   /** The Block filling the tab. */
   zoomedId?: string;
-  actions: PaneActions;
+  actions: BlockActions;
   title(block: SessionBlock): string;
   mark(block: SessionBlock): ReactNode;
   body(block: SessionBlock): ReactNode;
@@ -68,14 +70,19 @@ export type BlockAction = { title: string; destructive?: boolean; run(): void };
 /** An icon, as the icon set gives them. */
 type IconSvgElement = Parameters<typeof HugeiconsIcon>[0]['icon'];
 
-/** The least share of a split a pane keeps when its edge is dragged. */
+/** The least share of a split a Block keeps when its edge is dragged. */
 const MIN_SHARE = 0.1;
-/** How far a Block's name moves under the pointer before it's being dragged, in pixels. */
+/** How far a Block's rail moves under the pointer before the Block is being dragged, in pixels. */
 const DRAG_START = 8;
+/** How much of a Block, in from each edge, docks what's dropped there beside it; its middle swaps the two. */
+const EDGE = 0.25;
 
 type Drop = { target: Target; rect: { left: number; top: number; width: number; height: number } };
 
-/** Where a Block dragged to `x`, `y` would go: a pane's middle or edge, or a tab. */
+/**
+ * Where a Block dragged to `x`, `y` would go: beside the docked Block there, when it's over one of
+ * its edges, in its place when it's over its middle, or to a tab.
+ */
 function dropAt(x: number, y: number, dragged: string): Drop | undefined {
   const under = document.elementFromPoint(x, y);
   const tab = under?.closest<HTMLElement>('[data-tab-drop]');
@@ -84,16 +91,15 @@ function dropAt(x: number, y: number, dragged: string): Drop | undefined {
     const id = tab.dataset.tabDrop ?? '';
     return { target: id === 'new' ? { newTab: newTab() } : { tab: id }, rect };
   }
-  const pane = under?.closest<HTMLElement>('[data-pane]');
-  const anchor = pane?.dataset.pane;
-  if (!pane || !anchor) return undefined;
-  const rect = pane.getBoundingClientRect();
+  const over = under?.closest<HTMLElement>('[data-block]');
+  const anchor = over?.dataset.block;
+  if (!over || !anchor || anchor === dragged) return undefined;
+  const rect = over.getBoundingClientRect();
   const across = (x - rect.left) / rect.width;
   const down = (y - rect.top) / rect.height;
   const edge = Math.min(across, 1 - across, down, 1 - down);
-  if (edge > 0.25) return anchor === dragged && pane.dataset.alone ? undefined : { target: { into: anchor }, rect };
+  if (edge > EDGE) return { target: { swap: anchor }, rect };
   const side: Side = edge === across ? 'left' : edge === 1 - across ? 'right' : edge === down ? 'up' : 'down';
-  if (anchor === dragged && pane.dataset.alone) return undefined;
   const half = {
     left: { left: rect.left, top: rect.top, width: rect.width / 2, height: rect.height },
     right: { left: rect.left + rect.width / 2, top: rect.top, width: rect.width / 2, height: rect.height },
@@ -104,23 +110,19 @@ function dropAt(x: number, y: number, dragged: string): Drop | undefined {
 }
 
 /**
- * Dragging a Block by its name in a pane's strip: past a few pixels it's being moved, a frame
- * shows where it would land, and letting go there moves it. A press that goes nowhere stays a
- * click.
+ * Dragging a docked Block by its rail: past a few pixels it's being moved, a frame shows where it
+ * would land, and letting go there moves it. A press that goes nowhere stays a click.
  */
-function useBlockDrag(move: PaneActions['move']) {
+function useBlockDrag(move: BlockActions['move']) {
   const [drag, setDrag] = useState<{ block: SessionBlock; title: string; x: number; y: number; drop?: Drop }>();
-  const dragged = useRef(false);
   const start = (event: ReactPointerEvent, block: SessionBlock, title: string) => {
     if (event.button !== 0) return;
     const from = { x: event.clientX, y: event.clientY };
     let moving = false;
     let latest: Drop | undefined;
-    dragged.current = false;
     const moved = (next: PointerEvent) => {
       if (!moving && Math.hypot(next.clientX - from.x, next.clientY - from.y) < DRAG_START) return;
       moving = true;
-      dragged.current = true;
       latest = dropAt(next.clientX, next.clientY, block.id);
       setDrag({ block, title, x: next.clientX, y: next.clientY, ...(latest ? { drop: latest } : {}) });
     };
@@ -135,12 +137,6 @@ function useBlockDrag(move: PaneActions['move']) {
     window.addEventListener('pointerup', done);
     window.addEventListener('pointercancel', done);
   };
-  /** Whether the press that just ended was a drag, so its click isn't one. */
-  const wasDrag = () => {
-    const was = dragged.current;
-    dragged.current = false;
-    return was;
-  };
   const overlay = drag && (
     <>
       {drag.drop && (
@@ -153,7 +149,7 @@ function useBlockDrag(move: PaneActions['move']) {
       </div>
     </>
   );
-  return { start, wasDrag, overlay };
+  return { start, overlay };
 }
 
 type Drag = ReturnType<typeof useBlockDrag>;
@@ -168,80 +164,83 @@ function RailButton({ label, hint, icon, pressed, onClick }: { label: string; hi
 }
 
 /**
- * A Block's rail, atop its pane: a name for each of the pane's Blocks, the one in front picked
- * out, then the same icons whatever the Block is: split right, split down, float, zoom when its
- * tab has another Block to zoom over, a menu of what its type offers, and close. The whole rail
- * is the Block's handle: dragging it moves the Block in front, and dragging a name moves that
- * one, unless `onHandle` takes the rail's drags for itself, as a floating Block's does to move.
- * A name clicked twice is typed over in place, where the Block's type lets it be renamed.
- * Without `arrange`, as on the iPhone, it has the names, the menu and close.
+ * A Block's rail, atop it: its name, then the same icons whatever the Block is. Docked, it has
+ * split right, split down, float, zoom when its tab has another Block to zoom over, a menu of
+ * what its type offers, and close; floating, it has dock and minimize in place of the splits.
+ * The whole rail is the Block's handle: dragging it moves a docked Block, and `onHandle` takes
+ * the drags for a floating one, to move it. A name clicked twice is typed over in place, where
+ * the Block's type lets it be renamed. With `among`, as on the iPhone, which shows one Block at a
+ * time, it names each of the tab's Blocks to pick between, and has only the menu and close.
  */
-export function BlockRail({ blocks, front, floating = false, arrange = true, drag, onHandle, ...props }: PaneProps & {
-  blocks: SessionBlock[];
-  front: SessionBlock;
+export function BlockRail({ block, among, floating = false, drag, onHandle, ...props }: TabProps & {
+  block: SessionBlock;
+  /** The Blocks to pick between, this one among them. */
+  among?: SessionBlock[];
   floating?: boolean;
-  arrange?: boolean;
   drag?: Drag;
   onHandle?(event: ReactPointerEvent): void;
 }) {
   const { actions, title, mark } = props;
-  const name = title(front);
-  const own = props.menu(front);
-  const zoomed = props.zoomedId === front.id;
+  const name = title(block);
+  const own = props.menu(block);
+  const zoomed = props.zoomedId === block.id;
   const handle = Boolean(onHandle ?? drag);
+  const arrange = !among;
   const [renaming, setRenaming] = useState<string>();
+  /** A Block's name: typed over while it's being renamed, else what a double click renames. */
+  const named = (shown: SessionBlock) => {
+    const label = title(shown);
+    const rename = props.rename?.(shown);
+    if (rename && renaming === shown.id) {
+      return <NameInput label='Block name' name={label} maxLength={200} className='w-44' onKeep={rename} onDone={() => setRenaming(undefined)} />;
+    }
+    return <span className='truncate' onDoubleClick={() => { if (rename) setRenaming(shown.id); }}>{label}</span>;
+  };
   return (
     <div data-slot='block-rail' className={cn('flex h-9 shrink-0 items-stretch gap-px border-b border-border bg-title-bar pr-1 text-xs', handle && 'cursor-grab touch-none')}
       onPointerDown={(event) => {
+        if (renaming) return;
         if (onHandle) onHandle(event);
-        else drag?.start(event, front, name);
+        else drag?.start(event, block, name);
       }}>
-      <div role='tablist' aria-label='Blocks in this pane' className='flex min-w-0 flex-1 items-stretch overflow-hidden'>
-        {blocks.map((block) => {
-          const selected = block.id === front.id;
-          const label = title(block);
-          const rename = props.rename?.(block);
-          if (rename && renaming === block.id) {
-            return (
-              <div key={block.id} role='tab' aria-selected={selected} className='flex min-w-0 max-w-56 items-center gap-1.5 px-3'
-                onPointerDown={(event) => event.stopPropagation()}>
-                {mark(block)}
-                <NameInput label='Block name' name={label} maxLength={200} className='w-44' onKeep={rename} onDone={() => setRenaming(undefined)} />
-              </div>
-            );
-          }
-          return (
-            <button key={block.id} type='button' role='tab' aria-selected={selected} title={label}
-              className={cn(
-                'flex min-w-0 max-w-56 items-center gap-1.5 px-3 text-muted-foreground outline-none',
-                handle && 'cursor-grab',
-                selected && 'text-foreground',
-                'focus-visible:bg-accent',
-              )}
-              onDoubleClick={() => { if (rename) setRenaming(block.id); }}
-              onPointerDown={(event) => {
-                if (onHandle) return;
-                // Its own name drags it, not the Block in front.
-                event.stopPropagation();
-                drag?.start(event, block, label);
-              }}
-              onClick={() => { if (!drag?.wasDrag()) actions.focus(block.id); }}>
-              {mark(block)}
-              <span className='truncate'>{label}</span>
-            </button>
-          );
-        })}
-      </div>
+      {among
+        ? (
+          <div role='tablist' aria-label='Blocks in this tab' className='flex min-w-0 flex-1 items-stretch overflow-x-auto'>
+            {among.map((listed) => {
+              const selected = listed.id === block.id;
+              return (
+                <div key={listed.id} role='tab' tabIndex={0} aria-selected={selected} title={title(listed)}
+                  className={cn('flex max-w-56 min-w-0 shrink-0 cursor-default items-center gap-1.5 px-3 text-muted-foreground outline-none focus-visible:bg-accent', selected && 'text-foreground')}
+                  onClick={() => actions.focus(listed.id)}
+                  onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+                    event.preventDefault();
+                    actions.focus(listed.id);
+                  }}>
+                  {mark(listed)}
+                  {named(listed)}
+                </div>
+              );
+            })}
+          </div>
+        )
+        : (
+          <div data-slot='block-title' title={name} className='flex min-w-0 flex-1 items-center gap-1.5 px-3 text-foreground'>
+            {mark(block)}
+            {named(block)}
+          </div>
+        )}
       <div className='flex shrink-0 items-center gap-0.5' onPointerDown={(event) => event.stopPropagation()}>
-        {arrange && !floating && <RailButton label={`Split ${name} right`} hint='Split Right' icon={LayoutTwoColumnIcon} onClick={() => actions.split(front.id, 'right')} />}
-        {arrange && !floating && <RailButton label={`Split ${name} down`} hint='Split Down' icon={LayoutTwoRowIcon} onClick={() => actions.split(front.id, 'down')} />}
+        {arrange && !floating && <RailButton label={`Split ${name} right`} hint='Split Right' icon={LayoutTwoColumnIcon} onClick={() => actions.split(block.id, 'right')} />}
+        {arrange && !floating && <RailButton label={`Split ${name} down`} hint='Split Down' icon={LayoutTwoRowIcon} onClick={() => actions.split(block.id, 'down')} />}
         {arrange && (
           <RailButton label={floating ? `Dock ${name}` : `Float ${name}`} hint={floating ? 'Dock' : 'Float'}
-            icon={floating ? PictureInPictureExitIcon : PictureInPictureOnIcon} onClick={() => actions.float(front)} />
+            icon={floating ? PictureInPictureExitIcon : PictureInPictureOnIcon} onClick={() => actions.float(block)} />
         )}
+        {arrange && floating && <RailButton label={`Minimize ${name}`} hint='Minimize' icon={MinusSignIcon} onClick={() => actions.minimize(block, true)} />}
         {arrange && (props.inTab > 1 || zoomed) && (
           <RailButton label={zoomed ? `Unzoom ${name}` : `Zoom ${name}`} hint={zoomed ? 'Unzoom' : 'Zoom'}
-            icon={zoomed ? Minimize01Icon : Maximize01Icon} pressed={zoomed} onClick={() => actions.zoom(front.id)} />
+            icon={zoomed ? ArrowShrink01Icon : ArrowExpand01Icon} pressed={zoomed} onClick={() => actions.zoom(block.id)} />
         )}
         <DropdownMenu>
           <DropdownMenuTrigger disabled={own.length === 0} render={<Button size='icon-sm' variant='ghost' aria-label={`${name} actions`} title='More' />}>
@@ -255,40 +254,39 @@ export function BlockRail({ blocks, front, floating = false, arrange = true, dra
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-        <RailButton label={`Close ${name}`} hint='Close' icon={Cancel01Icon} onClick={() => actions.close(front)} />
+        <RailButton label={`Close ${name}`} hint='Close' icon={Cancel01Icon} onClick={() => actions.close(block)} />
       </div>
     </div>
   );
 }
 
-/** What fills a pane under its rail: the Block in front. */
-const Body = ({ block, body }: { block: SessionBlock; body: PaneProps['body'] }) => (
-  <div data-block-id={block.id} role='tabpanel' className='flex min-h-0 min-w-0 flex-1 flex-col'>
+/** What fills a Block under its rail. */
+const Body = ({ block, body }: { block: SessionBlock; body: TabProps['body'] }) => (
+  <div data-block-id={block.id} className='flex min-h-0 min-w-0 flex-1 flex-col'>
     {body(block)}
   </div>
 );
 
-function PaneView({ pane, drag, ...props }: PaneProps & { pane: Pane; drag?: Drag }) {
+/** A Block in its place in the tab's tree, or the one zoomed to fill the tab. */
+function DockedBlock({ block, drag, ...props }: TabProps & { block: SessionBlock; drag?: Drag }) {
   const { actions, focusedId } = props;
-  const zoomed = pane.children.find(({ id }) => id === props.zoomedId);
-  const front = zoomed ?? blockInFront(pane, props.view);
-  const focused = front.id === focusedId;
+  const focused = block.id === focusedId;
   return (
-    <div role='group' data-slot='pane' data-pane={front.id} data-alone={pane.children.length === 1 || undefined} data-focused={focused || undefined}
-      data-focus-edge={(focused && props.marksFocus) || undefined} aria-label={`Pane, ${props.title(front)}`}
+    <div role='group' data-slot='docked-block' data-block={block.id} data-focused={focused || undefined}
+      data-focus-edge={(focused && props.marksFocus) || undefined} aria-label={`Block, ${props.title(block)}`}
       className={cn('relative isolate flex min-h-0 min-w-0 flex-1 flex-col bg-background', focused && props.marksFocus && FOCUS_EDGE)}
-      onPointerDownCapture={() => { if (!focused) actions.focus(front.id); }}>
-      <BlockRail {...props} blocks={pane.children} front={front} drag={drag} />
-      <Body key={front.id} block={front} body={props.body} />
+      onPointerDownCapture={() => { if (!focused) actions.focus(block.id); }}>
+      <BlockRail {...props} block={block} drag={drag} />
+      <Body key={block.id} block={block} body={props.body} />
     </div>
   );
 }
 
-/** The edge between two panes of a split, dragged to share their space out again. */
+/** The edge between two docked Blocks of a split, dragged to share their space out again. */
 function Divider({ row, onDrag, onDone }: { row: boolean; onDrag(position: { x: number; y: number }): void; onDone(): void }) {
   const [dragging, setDragging] = useState(false);
   return (
-    <div role='separator' aria-orientation={row ? 'vertical' : 'horizontal'} aria-label='Resize panes' data-slot='pane-divider'
+    <div role='separator' aria-orientation={row ? 'vertical' : 'horizontal'} aria-label='Resize Blocks' data-slot='block-divider'
       className={cn('relative shrink-0 touch-none bg-border', row ? 'w-px cursor-col-resize' : 'h-px cursor-row-resize', dragging && 'bg-primary')}
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -307,7 +305,7 @@ function Divider({ row, onDrag, onDone }: { row: boolean; onDrag(position: { x: 
   );
 }
 
-function SplitView({ node, path, drag, ...props }: PaneProps & { node: Split; path: Path; drag?: Drag }) {
+function SplitView({ node, path, drag, ...props }: TabProps & { node: Split; path: Path; drag?: Drag }) {
   const row = node.kind === 'row';
   const container = useRef<HTMLDivElement>(null);
   // The shares while an edge is dragged, until the layout has them.
@@ -326,7 +324,7 @@ function SplitView({ node, path, drag, ...props }: PaneProps & { node: Split; pa
     setLive(sizes.map((size, child) => child === index - 1 ? first : child === index ? pair - first : size));
   };
   return (
-    <div ref={container} data-slot='pane-split' className={cn('flex min-h-0 min-w-0 flex-1', row ? 'flex-row' : 'flex-col')}>
+    <div ref={container} data-slot='block-split' className={cn('flex min-h-0 min-w-0 flex-1', row ? 'flex-row' : 'flex-col')}>
       {node.children.map((child, index) => (
         <Fragment key={index}>
           {index > 0 && <Divider row={row} onDrag={(position) => dragEdge(index, position)} onDone={() => { if (live) props.actions.resize(path, live); }} />}
@@ -339,14 +337,14 @@ function SplitView({ node, path, drag, ...props }: PaneProps & { node: Split; pa
   );
 }
 
-function NodeView({ node, path, drag, ...props }: PaneProps & { node: SessionNode; path: Path; drag?: Drag }) {
-  if (node.kind === 'stack') return <PaneView {...props} pane={node} drag={drag} />;
+function NodeView({ node, path, drag, ...props }: TabProps & { node: SessionNode; path: Path; drag?: Drag }) {
+  if (node.kind === 'block') return <DockedBlock {...props} block={{ id: node.id, type: node.type, ...(node.props ? { props: node.props } : {}) }} drag={drag} />;
   if (node.kind === 'row' || node.kind === 'column') return <SplitView {...props} node={node} path={path} drag={drag} />;
   return null;
 }
 
-/** A Block over the tab's panes: its strip moves it, and its corner sizes it. */
-function FloatingView({ item, bounds, ...props }: PaneProps & { item: SessionFloating; bounds(): DOMRect | undefined }) {
+/** A Block over the tab's docked ones: its rail moves it, and its corner sizes it. */
+function FloatingBlock({ item, bounds, ...props }: TabProps & { item: SessionFloating; bounds(): DOMRect | undefined }) {
   const { actions, focusedId } = props;
   const { block } = item;
   const [live, setLive] = useState<SessionFrame>();
@@ -383,7 +381,7 @@ function FloatingView({ item, bounds, ...props }: PaneProps & { item: SessionFlo
         focused && props.marksFocus && cn(FOCUS_EDGE, 'after:rounded-md'),
       )}
       onPointerDownCapture={() => { if (!focused) actions.focus(block.id); }}>
-      <BlockRail {...props} blocks={[block]} front={block} floating
+      <BlockRail {...props} block={block} floating
         onHandle={(event) => track(event, (from, dx, dy) => ({ ...from, x: from.x + dx, y: from.y + dy }))} />
       <Body key={block.id} block={block} body={props.body} />
       <div role='separator' aria-label={`Resize ${props.title(block)}`} className='absolute right-0 bottom-0 z-10 size-4 cursor-nwse-resize touch-none'
@@ -393,45 +391,50 @@ function FloatingView({ item, bounds, ...props }: PaneProps & { item: SessionFlo
 }
 
 /**
- * A tab: its panes, and the Blocks floating over them, or the one Block zoomed to fill it.
- * `empty` shows in a tab with nothing in it.
+ * The floating Blocks put away, one above another at the tab's bottom right: each its mark and
+ * name, which brings it back where it floated.
  */
-export function TabPanes({ tab, empty, ...props }: PaneProps & { tab: SessionTab; empty: ReactNode }) {
-  const body = useRef<HTMLDivElement>(null);
-  const drag = useBlockDrag(props.actions.move);
-  const zoomed = props.zoomedId
-    ? [...(tab.floating ?? []).map(({ block }) => block)].find(({ id }) => id === props.zoomedId)
-    : undefined;
+function MinimizedBlocks({ blocks, ...props }: TabProps & { blocks: SessionBlock[] }) {
+  if (blocks.length === 0) return null;
   return (
-    <div ref={body} data-slot='session-tab' role='tabpanel' className='relative flex min-h-0 min-w-0 flex-1'>
-      {zoomed
-        // A floating Block zoomed fills the tab as a pane of its own.
-        ? <PaneView {...props} pane={{ kind: 'stack', children: [zoomed] }} />
-        : props.zoomedId && tab.root
-          ? <ZoomedPane {...props} root={tab.root} />
-          : tab.root
-            ? <NodeView {...props} node={tab.root} path={[]} drag={drag} />
-            : empty}
-      {!props.zoomedId && (tab.floating ?? []).map((item) => (
-        <FloatingView key={item.block.id} {...props} item={item} bounds={() => body.current?.getBoundingClientRect()} />
-      ))}
-      {drag.overlay}
+    <div role='group' aria-label='Minimized Blocks' data-slot='minimized-blocks' className='absolute right-2 bottom-2 z-20 flex max-w-64 flex-col items-end gap-1'>
+      {blocks.map((block) => {
+        const name = props.title(block);
+        return (
+          <button key={block.id} type='button' data-slot='minimized-block' aria-label={`Maximize ${name}`} title='Maximize'
+            className='flex h-7 max-w-full items-center gap-1.5 rounded-md border border-border bg-popover pr-1.5 pl-2 text-xs text-foreground shadow-md outline-none hover:bg-accent focus-visible:bg-accent'
+            onClick={() => props.actions.minimize(block, false)}>
+            {props.mark(block)}
+            <span className='truncate'>{name}</span>
+            <HugeiconsIcon icon={Maximize01Icon} strokeWidth={2} className='size-3.5 shrink-0 text-icon-muted' />
+          </button>
+        );
+      })}
     </div>
   );
 }
 
-/** The pane that holds the zoomed Block, alone. */
-function ZoomedPane({ root, ...props }: PaneProps & { root: SessionNode }) {
-  const find = (node: SessionNode): Pane | undefined => {
-    if (node.kind === 'stack') return node.children.some(({ id }) => id === props.zoomedId) ? node : undefined;
-    if (node.kind === 'row' || node.kind === 'column') {
-      for (const child of node.children) {
-        const found = find(child);
-        if (found) return found;
-      }
-    }
-    return undefined;
-  };
-  const pane = find(root);
-  return pane ? <PaneView {...props} pane={pane} /> : null;
+/**
+ * A tab: its docked Blocks, those floating over them and the names of those put away, or the one
+ * Block zoomed to fill it. `empty` shows in a tab with nothing docked.
+ */
+export function TabBlocks({ tab, empty, ...props }: TabProps & { tab: SessionTab; empty: ReactNode }) {
+  const body = useRef<HTMLDivElement>(null);
+  const drag = useBlockDrag(props.actions.move);
+  const zoomed = props.zoomedId ? tabBlocks(tab).find(({ id }) => id === props.zoomedId) : undefined;
+  const floating = tab.floating ?? [];
+  return (
+    <div ref={body} data-slot='session-tab' role='tabpanel' className='relative flex min-h-0 min-w-0 flex-1'>
+      {zoomed
+        ? <DockedBlock {...props} block={zoomed} />
+        : tab.root
+          ? <NodeView {...props} node={tab.root} path={[]} drag={drag} />
+          : empty}
+      {!zoomed && floating.filter(({ minimized }) => !minimized).map((item) => (
+        <FloatingBlock key={item.block.id} {...props} item={item} bounds={() => body.current?.getBoundingClientRect()} />
+      ))}
+      <MinimizedBlocks {...props} blocks={floating.filter(({ minimized, block }) => minimized && block.id !== zoomed?.id).map(({ block }) => block)} />
+      {drag.overlay}
+    </div>
+  );
 }

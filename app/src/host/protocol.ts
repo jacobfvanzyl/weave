@@ -817,7 +817,7 @@ export type BlockedKind = "permission" | "question" | "auth";
  */
 export type TerminalFormat = "text" | "vt";
 /**
- * A pane, or panes side by side, one above another, or one behind another.
+ * A docked Block, or several side by side or one above another.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SessionNode".
@@ -828,9 +828,6 @@ export type SessionNode =
     })
   | (SessionSplit & {
       kind: "column";
-    })
-  | (SessionStack & {
-      kind: "stack";
     })
   | (SessionBlock & {
       kind: "block";
@@ -5590,12 +5587,15 @@ export interface HostSession {
    */
   updatedAt?: number | null;
   /**
-   * The threads the Host has a record of in it, open or not, most recently active first, so
-   * a client can place one no Block shows. `threads/watch` follows them.
+   * Its threads that the Host has a record of, open or not, most recently active first, so a
+   * client can place one no Block shows: those clients added to it and those its threads
+   * started, not every thread in its directory. One a client added before prompting it is
+   * here too, though no listing has it yet. `threads/watch` follows them.
    */
   threads?: SessionId[];
   /**
-   * Its terminals' ids, oldest first. `terminals/watch` follows them.
+   * Its terminals' ids, oldest first: those clients added to it and those opened from its
+   * threads. `terminals/watch` follows them.
    */
   terminals?: string[];
 }
@@ -5629,7 +5629,7 @@ export interface SessionTab {
    */
   title?: string | null;
   /**
-   * Its tree of panes; absent for an empty tab.
+   * Its tree of docked Blocks; absent for a tab with none.
    */
   root?: SessionNode | null;
   /**
@@ -5650,14 +5650,7 @@ export interface SessionSplit {
   sizes?: number[] | null;
 }
 /**
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "SessionStack".
- */
-export interface SessionStack {
-  children: SessionBlock[];
-}
-/**
- * What one pane shows. It points at something on the Session's Host, such as a thread or a
+ * What one place in a tab shows. It points at something on the Session's Host, such as a thread or a
  * terminal, which the Host doesn't read. A client that closes one closes what it shows: a
  * thread, which can be shown again, or a terminal, which ends with its Block (ADR 0031).
  *
@@ -5690,6 +5683,19 @@ export interface SessionBlock {
 export interface SessionFloating {
   block: SessionBlock;
   frame: SessionFrame;
+  /**
+   * Put away: clients show it as its name, to bring back, in place of its frame.
+   */
+  minimized?: boolean;
+}
+/**
+ * Where it is while it isn't minimized, and where it comes back to.
+ */
+export interface SessionFrame {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 /**
  * Where a floating Block is, as fractions of its tab's width and height from its top left.
@@ -5697,7 +5703,7 @@ export interface SessionFloating {
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SessionFrame".
  */
-export interface SessionFrame {
+export interface SessionFrame1 {
   x: number;
   y: number;
   width: number;
@@ -5744,8 +5750,8 @@ export interface SetSessionRequest {
 }
 /**
  * `sessions/watch`: the Session `directory` is in, or with no `directory` every Session, as
- * `sessions/get` gives them; then a [`SessionUpdatedNotification`] when one is made or its
- * layout is set, and a [`SessionEndedNotification`] when one ends, until the connection ends
+ * `sessions/get` gives them; then a [`SessionUpdatedNotification`] when one is made, its
+ * layout is set or something joins it, and a [`SessionEndedNotification`] when one ends, until the connection ends
  * or the client sends `sessions/unwatch`. A directory with no Session yet may be watched, and
  * answers no Session.
  *
@@ -5780,10 +5786,10 @@ export interface UnwatchSessionsRequest {
   directory?: string | null;
 }
 /**
- * `sessions/end`: end the Session `directory` is in, for good. The threads open in it close,
- * as `thread/close` closes them, its terminals end, and its layout is forgotten: nothing brings
- * it back, and a thread or terminal that starts there later makes a new one, with no layout.
- * Its directory stays, a worktree too. Refused, with nothing closed, while a thread in it runs a
+ * `sessions/end`: end the Session `directory` is in, for good. Its open threads close, as
+ * `thread/close` closes them, its terminals end, and its layout is forgotten: nothing brings it
+ * back. What else is in its directory, which was never the Session's, is left as it is. Its
+ * directory stays, a worktree too. Refused, with nothing closed, while a thread in it runs a
  * turn or waits on a request, or a terminal in it runs a command (`session_busy`); `no_session`
  * when it has none.
  *
@@ -5792,6 +5798,21 @@ export interface UnwatchSessionsRequest {
  */
 export interface EndSessionRequest {
   directory: string;
+}
+/**
+ * `sessions/add`: `threads` and `terminals` are the Session's that `directory` is in from now
+ * on, which is made first if the directory has none, without a layout. A client asks it as it
+ * starts a thread or terminal in a Session, and to bring in one started elsewhere. Each must be
+ * in the Session's directory, else invalid params; one that's already its changes nothing.
+ * Every client watching the Session is sent it.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "AddToSessionRequest".
+ */
+export interface AddToSessionRequest {
+  directory: string;
+  threads?: SessionId[];
+  terminals?: string[];
 }
 /**
  * `thread/report` (feature `otherHosts`), a service's only: tell a thread how a turn its
@@ -6988,8 +7009,8 @@ export interface TerminalRemovedNotification {
   exitCode?: number | null;
 }
 /**
- * `sessions/updated`, to clients watching it: a Session was made, or its layout set. It
- * carries the layout.
+ * `sessions/updated`, to clients watching it: a Session was made, its layout set, or a thread or
+ * terminal joined it, which leaves its revision as it was. It carries the layout.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SessionUpdatedNotification".
@@ -8030,6 +8051,7 @@ export const HOST_PROTOCOL = {
     "otherHosts": "otherHosts",
     "mcpServers": "mcpServers",
     "sessionsEnd": "sessions_end",
+    "sessionsAdd": "sessions_add",
     "carry": "carry",
     "sessions": "sessions"
   },
@@ -8041,7 +8063,7 @@ export const HOST_PROTOCOL = {
   },
   "sessions": {
     "maxLayout": 1048576,
-    "layoutVersion": 1
+    "layoutVersion": 2
   },
   "requestKeys": {
     "maxKey": 200
@@ -8121,6 +8143,7 @@ export interface HostRequests {
   "sessions/watch": { params: WatchSessionsRequest; result: WatchSessionsResponse };
   "sessions/unwatch": { params: UnwatchSessionsRequest; result: Empty };
   "sessions/end": { params: EndSessionRequest; result: Empty };
+  "sessions/add": { params: AddToSessionRequest; result: SessionResponse };
   "thread/report": { params: ReportThreadRequest; result: Empty };
   "service/declareTools": { params: DeclareToolsRequest; result: DeclareToolsResponse };
   "service/answerTool": { params: AnswerToolRequest; result: Empty };

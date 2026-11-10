@@ -5,7 +5,7 @@ import { type AppActions, type AppController, type OpenThread, sessionKey } from
 import { type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
 import { AppShell } from '@/components/app-shell';
 import { threadBlock } from '@/session/blocks';
-import { firstLayout } from '@/session/layout';
+import { layoutWith } from '@/session/layout';
 import { SurfaceApp } from './surface-app';
 import type { SurfaceEnd, SurfaceLink, SurfaceStatus } from './surface-link';
 import type { FromSurface, ToSurface } from './surface-messages';
@@ -42,7 +42,7 @@ const actions = (): AppActions => ({
 
 /** The Session the threads are in, with the first of them in its one pane. */
 const SESSION = sessionKey('h', '/work/project');
-const LAYOUT = firstLayout([threadBlock('main', 'b-main')], { id: 'tab-1' });
+const LAYOUT = layoutWith([threadBlock('main', 'b-main')], { id: 'tab-1' });
 
 const controller = (thread: OpenThread | undefined, handlers: AppActions): AppController => ({
   model: {
@@ -59,6 +59,7 @@ const controller = (thread: OpenThread | undefined, handlers: AppActions): AppCo
       },
     ],
     agents: {},
+    known: [{ hostId: 'h', directory: '/work/project', threads: ['main', 'other'], keepsOwn: true }],
     selectedKey: thread?.key,
     thread,
     ...(thread ? { session: { key: SESSION, hostId: 'h', directory: '/work/project', layout: LAYOUT, saved: true, terminals: [] }, open: { [thread.key]: thread } } : {}),

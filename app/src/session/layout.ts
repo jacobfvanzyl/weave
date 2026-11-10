@@ -1,32 +1,30 @@
 // A Session's layout (ADR 0031, WVE-203): the document its Host keeps without reading
-// (`sessions/set`), as pure functions over it. A tab's tree is rows and columns of panes, each
-// pane a stack of Blocks shown one at a time, with Blocks floating over the tree. Every change
-// here gives a new document and leaves the old one alone, and one that names a Block or tab the
-// document no longer has changes nothing: a change made on an older revision can then be made
-// again on a newer one (`host/sessions.ts`).
+// (`sessions/set`), as pure functions over it. A Block in a tab is docked in the tab's tree of
+// rows and columns, alone in its place, or floats over it, where it can be minimized. Every
+// change here gives a new document and leaves the old one alone, and one that names a Block or
+// tab the document no longer has changes nothing: a change made on an older revision can then be
+// made again on a newer one (`host/sessions.ts`).
 //
-// What a device keeps for itself (which tab and Block are in front, focus, zoom) isn't here: see
-// `view.ts`.
+// What a device keeps for itself (which tab is in front, focus, zoom) isn't here: see `view.ts`.
 import { HOST_PROTOCOL, type SessionBlock, type SessionFloating, type SessionFrame, type SessionLayout, type SessionNode, type SessionTab } from '@/host/protocol';
 
 export const LAYOUT_VERSION = HOST_PROTOCOL.sessions.layoutVersion;
 
 export type Side = 'left' | 'right' | 'up' | 'down';
 export type Split = Extract<SessionNode, { kind: 'row' | 'column' }>;
-export type Pane = Extract<SessionNode, { kind: 'stack' }>;
 
-/** Where a pane is in its tab's tree: the index of the child to take at each split. */
+/** Where a docked Block is in its tab's tree: the index of the child to take at each split. */
 export type Path = number[];
 
 /** Where a Block goes. */
 export type Target =
-  /** Into the pane that holds `into`, after it. */
-  | { into: string }
-  /** A new pane beside the one that holds `beside`. */
+  /** Docked beside the docked Block `beside`, each taking half of what that one had. */
   | { beside: string; side: Side }
-  /** Into the tab `tab`: its first pane, or a pane of its own in an empty tab. */
+  /** In the place of the docked Block `swap`, which takes this one's. */
+  | { swap: string }
+  /** Docked in the tab `tab`: filling an empty one, else beside its largest Block, along that one's longer side. */
   | { tab: string }
-  /** A new pane along a whole side of the tab `edge`. */
+  /** Docked along a whole side of the tab `edge`. */
   | { edge: string; side: Side }
   /** A tab of its own, `newTab`, after the tab `after`, or last. */
   | { newTab: SessionTab; after?: string }
@@ -43,11 +41,13 @@ export const emptyLayout = (tab = newTab()): SessionLayout => ({ version: LAYOUT
 /** Where a new floating Block sits. */
 export const FLOATING_FRAME: SessionFrame = { x: 0.2, y: 0.15, width: 0.6, height: 0.6 };
 const MIN_FRAME = 0.1;
+/** How much wider than tall a tab is taken to be, where nothing measured it. */
+export const TAB_ASPECT = 1.6;
 
 const round = (value: number) => Math.round(value * 10_000) / 10_000;
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
 
-/** A frame inside its tab, no smaller than a pane can be used at. */
+/** A frame inside its tab, no smaller than a Block can be used at. */
 export function fitFrame(frame: SessionFrame): SessionFrame {
   const number = (value: unknown, otherwise: number) => typeof value === 'number' && Number.isFinite(value) ? value : otherwise;
   const width = clamp(number(frame.width, FLOATING_FRAME.width), MIN_FRAME, 1);
@@ -73,9 +73,14 @@ export function shares(split: Pick<Split, 'children' | 'sizes'>): number[] {
 const isBlock = (value: unknown): value is SessionBlock =>
   typeof value === 'object' && value !== null && typeof (value as SessionBlock).id === 'string' && typeof (value as SessionBlock).type === 'string';
 
+const leaf = (block: SessionBlock): SessionNode => ({ kind: 'block', id: block.id, type: block.type, ...(block.props ? { props: block.props } : {}) });
+const blockOf = (node: Extract<SessionNode, { kind: 'block' }>): SessionBlock => ({ id: node.id, type: node.type, ...(node.props ? { props: node.props } : {}) });
+
 /**
- * A node as the app keeps it: every leaf a pane with a Block in it, every split with two children
- * or more and none of its own kind, and its sizes one each. Nothing where nothing is left.
+ * A node as the app keeps it: every leaf a Block, every split with two children or more and none
+ * of its own kind, and its sizes one each. Nothing where nothing is left. A `stack`, which the
+ * first version of the document had for Blocks one behind another, leaves its first Block where
+ * it was: the rest are no longer in the layout, and what they showed carries on without a Block.
  */
 function tidyNode(node: SessionNode | null | undefined, seen: Set<string>): SessionNode | undefined {
   if (!node || typeof node !== 'object') return undefined;
@@ -84,15 +89,17 @@ function tidyNode(node: SessionNode | null | undefined, seen: Set<string>): Sess
     seen.add(block.id);
     return true;
   };
-  switch (node.kind) {
+  switch ((node as { kind: string }).kind) {
     case 'block':
-      return fresh(node) ? { kind: 'stack', children: [{ id: node.id, type: node.type, ...(node.props ? { props: node.props } : {}) }] } : undefined;
+      return node.kind === 'block' && fresh(node) ? leaf(node) : undefined;
     case 'stack': {
-      const children = (Array.isArray(node.children) ? node.children : []).filter(fresh);
-      return children.length > 0 ? { kind: 'stack', children } : undefined;
+      const children = (node as unknown as { children?: unknown }).children;
+      const first = (Array.isArray(children) ? children as SessionBlock[] : []).find(fresh);
+      return first ? leaf(first) : undefined;
     }
     case 'row':
     case 'column': {
+      if (node.kind !== 'row' && node.kind !== 'column') return undefined;
       const given = Array.isArray(node.children) ? node.children : [];
       const sizes = shares({ children: given, sizes: node.sizes });
       const children: SessionNode[] = [];
@@ -139,7 +146,7 @@ export function tidy(layout: SessionLayout | null | undefined): SessionLayout {
     for (const item of Array.isArray(tab.floating) ? tab.floating : []) {
       if (!item || !isBlock(item.block) || seen.has(item.block.id)) continue;
       seen.add(item.block.id);
-      floating.push({ block: item.block, frame: fitFrame(item.frame ?? FLOATING_FRAME) });
+      floating.push({ block: item.block, frame: fitFrame(item.frame ?? FLOATING_FRAME), ...(item.minimized === true ? { minimized: true } : {}) });
     }
     tabs.push({
       id: tab.id,
@@ -151,21 +158,21 @@ export function tidy(layout: SessionLayout | null | undefined): SessionLayout {
   return { version: LAYOUT_VERSION, tabs: tabs.length > 0 ? tabs : [newTab()] };
 }
 
-/** A tab's panes, in the order they read: left to right, top to bottom. */
-export function panes(tab: SessionTab): { path: Path; pane: Pane }[] {
-  const found: { path: Path; pane: Pane }[] = [];
+/** A tab's docked Blocks, in the order they read: left to right, top to bottom. */
+export function docked(tab: SessionTab): { path: Path; block: SessionBlock }[] {
+  const found: { path: Path; block: SessionBlock }[] = [];
   const walk = (node: SessionNode | null | undefined, path: Path) => {
     if (!node) return;
-    if (node.kind === 'stack') found.push({ path, pane: node });
+    if (node.kind === 'block') found.push({ path, block: blockOf(node) });
     else if (node.kind === 'row' || node.kind === 'column') node.children.forEach((child, index) => walk(child, [...path, index]));
   };
   walk(tab.root, []);
   return found;
 }
 
-/** A tab's Blocks: its panes' in order, then those floating over them. */
+/** A tab's Blocks: those docked, in order, then those floating over them, minimized or not. */
 export const tabBlocks = (tab: SessionTab): SessionBlock[] => [
-  ...panes(tab).flatMap(({ pane }) => pane.children),
+  ...docked(tab).map(({ block }) => block),
   ...(tab.floating ?? []).map(({ block }) => block),
 ];
 
@@ -174,21 +181,19 @@ export const layoutBlocks = (layout: SessionLayout): SessionBlock[] => layout.ta
 export type Found = {
   tab: SessionTab;
   block: SessionBlock;
-  /** Its pane, and its place in it; none for a floating Block. */
-  pane?: Pane;
+  /** Where it's docked in its tab's tree; none for a floating Block. */
   path?: Path;
-  index?: number;
+  /** Where it floats, and whether it's minimized; none for a docked Block. */
   frame?: SessionFrame;
+  minimized?: boolean;
 };
 
 export function findBlock(layout: SessionLayout, id: string): Found | undefined {
   for (const tab of layout.tabs) {
-    for (const { path, pane } of panes(tab)) {
-      const index = pane.children.findIndex((block) => block.id === id);
-      if (index >= 0) return { tab, block: pane.children[index], pane, path, index };
-    }
+    const at = docked(tab).find(({ block }) => block.id === id);
+    if (at) return { tab, block: at.block, path: at.path };
     const floating = tab.floating?.find(({ block }) => block.id === id);
-    if (floating) return { tab, block: floating.block, frame: floating.frame };
+    if (floating) return { tab, block: floating.block, frame: floating.frame, minimized: floating.minimized === true };
   }
   return undefined;
 }
@@ -207,33 +212,46 @@ const nodeAt = (root: SessionNode | null | undefined, path: Path): SessionNode |
   return node;
 };
 
-/** `root` with the node at `path` replaced by what `change` makes of it. */
-function replaceAt(root: SessionNode, path: Path, change: (node: SessionNode) => SessionNode): SessionNode {
+/** `root` with the node at `path` replaced by what `change` makes of it, or gone where it makes nothing. */
+function replaceAt(root: SessionNode, path: Path, change: (node: SessionNode) => SessionNode | undefined): SessionNode | undefined {
   if (path.length === 0) return change(root);
   if (root.kind !== 'row' && root.kind !== 'column') return root;
   const [index, ...rest] = path;
-  return { ...root, children: root.children.map((child, at) => at === index ? replaceAt(child, rest, change) : child) };
+  const sizes = shares(root);
+  const children: SessionNode[] = [];
+  const kept: number[] = [];
+  root.children.forEach((child, at) => {
+    const next = at === index ? replaceAt(child, rest, change) : child;
+    if (!next) return;
+    children.push(next);
+    kept.push(sizes[at]);
+  });
+  return { ...root, children, sizes: kept };
 }
 
 const withTab = (layout: SessionLayout, id: string, change: (tab: SessionTab) => SessionTab): SessionLayout =>
   ({ ...layout, tabs: layout.tabs.map((tab) => tab.id === id ? change(tab) : tab) });
 
+const withRoot = (tab: SessionTab, root: SessionNode | undefined): SessionTab => {
+  const { root: _was, ...rest } = tab;
+  return root ? { ...rest, root } : rest;
+};
+
 const horizontal = (side: Side) => side === 'left' || side === 'right';
 const before = (side: Side) => side === 'left' || side === 'up';
 
-/** `node` with a pane of `block` on `side` of it, each taking half of what it had. */
+/** `node` with `block` docked on `side` of it, each taking half of what it had. */
 function splitNode(node: SessionNode, block: SessionBlock, side: Side): SessionNode {
-  const pane: Pane = { kind: 'stack', children: [block] };
   return {
     kind: horizontal(side) ? 'row' : 'column',
-    children: before(side) ? [pane, node] : [node, pane],
+    children: before(side) ? [leaf(block), node] : [node, leaf(block)],
     sizes: [0.5, 0.5],
   };
 }
 
 /**
- * The layout without the Block `id`. A pane left empty goes, and so does a tab left empty, unless
- * it's the only one.
+ * The layout without the Block `id`. What was beside it takes its space, and a tab left empty
+ * goes, unless it's the only one.
  */
 export function removeBlock(layout: SessionLayout, id: string): SessionLayout {
   return takeOut(layout, id);
@@ -245,17 +263,57 @@ function takeOut(layout: SessionLayout, id: string, keepTab?: string): SessionLa
   if (!found) return layout;
   const { tab } = found;
   const emptied = (next: SessionTab) => !next.root && !next.floating?.length && layout.tabs.length > 1 && next.id !== keepTab;
-  let next: SessionTab;
-  if (found.pane && found.path) {
-    const root = replaceAt(tab.root as SessionNode, found.path, (node) =>
-      node.kind === 'stack' ? { ...node, children: node.children.filter((block) => block.id !== id) } : node);
-    next = { ...tab, root };
-  } else {
-    next = { ...tab, floating: tab.floating?.filter(({ block }) => block.id !== id) };
-  }
+  const next = found.path
+    ? withRoot(tab, replaceAt(tab.root as SessionNode, found.path, () => undefined))
+    : { ...tab, floating: tab.floating?.filter(({ block }) => block.id !== id) };
   const tidied = tidy(withTab(layout, tab.id, () => next));
   const after = findTab(tidied, tab.id);
   return after && emptied(after) ? { ...tidied, tabs: tidied.tabs.filter(({ id: tabId }) => tabId !== tab.id) } : tidied;
+}
+
+export type Rect = { x: number; y: number; width: number; height: number };
+
+/** Where each of a tab's docked Blocks is, in a square of side 1. */
+export function blockRects(tab: SessionTab): { path: Path; block: SessionBlock; rect: Rect }[] {
+  const found: { path: Path; block: SessionBlock; rect: Rect }[] = [];
+  const walk = (node: SessionNode | null | undefined, path: Path, rect: Rect) => {
+    if (!node) return;
+    if (node.kind === 'block') {
+      found.push({ path, block: blockOf(node), rect });
+      return;
+    }
+    if (node.kind !== 'row' && node.kind !== 'column') return;
+    let offset = 0;
+    shares(node).forEach((share, index) => {
+      const child = node.kind === 'row'
+        ? { x: rect.x + offset * rect.width, y: rect.y, width: share * rect.width, height: rect.height }
+        : { x: rect.x, y: rect.y + offset * rect.height, width: rect.width, height: share * rect.height };
+      walk(node.children[index], [...path, index], child);
+      offset += share;
+    });
+  };
+  walk(tab.root, [], { x: 0, y: 0, width: 1, height: 1 });
+  return found;
+}
+
+/**
+ * The side of the docked Block `blockId` a new one docks on when nothing says: to its right while
+ * it's wider than tall, else below it, in a tab `aspect` times as wide as tall.
+ */
+export function roomierSide(tab: SessionTab, blockId: string, aspect = TAB_ASPECT): Side {
+  const rect = blockRects(tab).find(({ block }) => block.id === blockId)?.rect;
+  return !rect || rect.width * aspect >= rect.height ? 'right' : 'down';
+}
+
+/** Where a Block docks in a tab when nothing says where: beside its largest Block, on that one's roomier side. */
+function roomiest(tab: SessionTab, except?: string): { beside: string; side: Side } | undefined {
+  let best: { id: string; area: number } | undefined;
+  for (const { block, rect } of blockRects(tab)) {
+    if (block.id === except) continue;
+    const area = rect.width * rect.height;
+    if (!best || area > best.area + 1e-9) best = { id: block.id, area };
+  }
+  return best ? { beside: best.id, side: roomierSide(tab, best.id) } : undefined;
 }
 
 /**
@@ -263,67 +321,55 @@ function takeOut(layout: SessionLayout, id: string, keepTab?: string): SessionLa
  * the layout no longer has changes nothing.
  */
 export function placeBlock(layout: SessionLayout, block: SessionBlock, target: Target): SessionLayout {
-  let anchor = 'into' in target ? target.into : 'beside' in target ? target.beside : undefined;
-  if (anchor !== undefined) {
-    const at = findBlock(layout, anchor);
-    if (!at?.pane) return layout;
-    if (anchor === block.id) {
-      // Into its own pane, or beside itself alone: where it already is.
-      const other = at.pane.children.find(({ id }) => id !== block.id);
-      if ('into' in target || !other) return layout;
-      anchor = other.id;
-    }
+  const from = findBlock(layout, block.id);
+  if ('swap' in target) {
+    // Each takes the other's place, wherever in the layout that is. Both are docked.
+    const other = findBlock(layout, target.swap);
+    if (!from?.path || !other?.path || other.block.id === block.id) return layout;
+    const put = (current: SessionLayout, tabId: string, path: Path, placed: SessionBlock) =>
+      withTab(current, tabId, (tab) => withRoot(tab, replaceAt(tab.root as SessionNode, path, () => leaf(placed))));
+    return tidy(put(put(layout, from.tab.id, from.path, other.block), other.tab.id, other.path, from.block));
+  }
+  if ('beside' in target) {
+    const at = findBlock(layout, target.beside);
+    if (!at?.path || target.beside === block.id) return layout;
   }
   const tabId = 'tab' in target ? target.tab : 'edge' in target ? target.edge : 'floating' in target ? target.floating : undefined;
   if (tabId !== undefined && !findTab(layout, tabId)) return layout;
   if ('newTab' in target && findTab(layout, target.newTab.id)) return layout;
-  const from = findBlock(layout, block.id);
-  // Alone among the panes of the tab it's bound for: where it already is, unless it's to float there.
-  if (from?.pane && tabId === from.tab.id && tabBlocks(from.tab).length === 1 && !('floating' in target)) return layout;
+  // Alone among the Blocks of the tab it's bound for: where it already is, unless it's to float there.
+  if (from?.path && tabId === from.tab.id && tabBlocks(from.tab).length === 1 && !('floating' in target)) return layout;
+  // Docked in a tab it's docked in already: where it is.
+  if (from?.path && 'tab' in target && target.tab === from.tab.id) return layout;
   // A tab it leaves empty goes with it, but not the one it's bound for.
   const next = from ? takeOut(layout, block.id, tabId) : layout;
-  const placed = { id: block.id, type: block.type, ...(block.props ? { props: block.props } : {}) };
+  const placed: SessionBlock = { id: block.id, type: block.type, ...(block.props ? { props: block.props } : {}) };
+  const beside = (current: SessionLayout, anchor: string, side: Side) => {
+    const at = findBlock(current, anchor);
+    if (!at?.path) return layout;
+    const root = replaceAt(at.tab.root as SessionNode, at.path, (node) => splitNode(node, placed, side));
+    return tidy(withTab(current, at.tab.id, (tab) => withRoot(tab, root)));
+  };
 
-  if (anchor !== undefined) {
-    const at = findBlock(next, anchor);
-    if (!at?.pane || !at.path) return layout;
-    const { path, index } = at;
-    const root = replaceAt(at.tab.root as SessionNode, path, (node) => {
-      if (node.kind !== 'stack') return node;
-      if ('into' in target) {
-        const children = [...node.children];
-        children.splice((index ?? children.length - 1) + 1, 0, placed);
-        return { ...node, children };
-      }
-      return splitNode(node, placed, (target as { side: Side }).side);
-    });
-    return tidy(withTab(next, at.tab.id, (tab) => ({ ...tab, root })));
-  }
+  if ('beside' in target) return beside(next, target.beside, target.side);
   if ('newTab' in target) {
-    const tab: SessionTab = { ...target.newTab, root: { kind: 'stack', children: [placed] } };
+    const tab: SessionTab = { ...target.newTab, root: leaf(placed) };
     const after = target.after ? next.tabs.findIndex(({ id }) => id === target.after) : -1;
     const tabs = [...next.tabs];
     tabs.splice(after >= 0 ? after + 1 : tabs.length, 0, tab);
     return tidy({ ...next, tabs });
   }
   if ('floating' in target) {
-    const floating = { block: placed, frame: fitFrame(target.frame) };
+    const floating: SessionFloating = { block: placed, frame: fitFrame(target.frame) };
     return tidy(withTab(next, target.floating, (tab) => ({ ...tab, floating: [...(tab.floating ?? []), floating] })));
   }
   if ('edge' in target) {
-    return tidy(withTab(next, target.edge, (tab) => ({
-      ...tab,
-      root: tab.root ? splitNode(tab.root, placed, target.side) : { kind: 'stack', children: [placed] },
-    })));
+    return tidy(withTab(next, target.edge, (tab) => withRoot(tab, tab.root ? splitNode(tab.root, placed, target.side) : leaf(placed))));
   }
-  if (!('tab' in target)) return layout;
-  return tidy(withTab(next, target.tab, (tab) => {
-    const first = panes(tab)[0];
-    if (!first) return { ...tab, root: { kind: 'stack', children: [placed] } };
-    const root = replaceAt(tab.root as SessionNode, first.path, (node) =>
-      node.kind === 'stack' ? { ...node, children: [...node.children, placed] } : node);
-    return { ...tab, root };
-  }));
+  const tab = findTab(next, target.tab);
+  if (!tab) return layout;
+  const room = roomiest(tab);
+  return room ? beside(next, room.beside, room.side) : tidy(withTab(next, tab.id, (current) => withRoot(current, leaf(placed))));
 }
 
 /** The layout with the split at `path` in `tabId` shared out as `sizes`, one for each child. */
@@ -334,7 +380,7 @@ export function resizeSplit(layout: SessionLayout, tabId: string, path: Path, si
   if (!sizes.every((size) => Number.isFinite(size) && size > 0)) return layout;
   const total = sizes.reduce((sum, size) => sum + size, 0);
   const root = replaceAt(tab.root as SessionNode, path, (split) => ({ ...split, sizes: sizes.map((size) => round(size / total)) }));
-  return withTab(layout, tabId, (current) => ({ ...current, root }));
+  return withTab(layout, tabId, (current) => withRoot(current, root));
 }
 
 /** The layout with `tab`, empty, after the tab `after`, or last. */
@@ -369,14 +415,29 @@ export function moveTab(layout: SessionLayout, id: string, index: number): Sessi
   return { ...layout, tabs };
 }
 
-/** The layout with the floating Block `id` at `frame`, on top of the others. */
+/** The layout with the floating Block `id` at `frame`, on top of the others, and not minimized. */
 export function frameBlock(layout: SessionLayout, id: string, frame: SessionFrame): SessionLayout {
   const found = findBlock(layout, id);
-  if (!found || found.pane) return layout;
+  if (!found || found.path) return layout;
   return withTab(layout, found.tab.id, (tab) => ({
     ...tab,
     floating: [...(tab.floating ?? []).filter(({ block }) => block.id !== id), { block: found.block, frame: fitFrame(frame) }],
   }));
+}
+
+/**
+ * The layout with the floating Block `id` minimized, put away as its name until it's brought
+ * back, or back where it floated, on top of the others. A docked Block has nowhere to be put away
+ * to, and stays.
+ */
+export function minimizeBlock(layout: SessionLayout, id: string, minimized: boolean): SessionLayout {
+  const found = findBlock(layout, id);
+  if (!found?.frame || found.minimized === minimized) return layout;
+  const { frame, block } = found;
+  return withTab(layout, found.tab.id, (tab) => {
+    const others = (tab.floating ?? []).filter((item) => item.block.id !== id);
+    return { ...tab, floating: [...others, { block, frame, ...(minimized ? { minimized: true } : {}) }] };
+  });
 }
 
 /** The layout without the Blocks `keep` turns away. */
@@ -384,45 +445,20 @@ export function prune(layout: SessionLayout, keep: (block: SessionBlock) => bool
   return layoutBlocks(layout).filter((block) => !keep(block)).reduce((next, block) => removeBlock(next, block.id), layout);
 }
 
-export type Rect = { x: number; y: number; width: number; height: number };
-
-/** Where each of a tab's panes is, in a square of side 1. */
-export function paneRects(tab: SessionTab): { path: Path; pane: Pane; rect: Rect }[] {
-  const found: { path: Path; pane: Pane; rect: Rect }[] = [];
-  const walk = (node: SessionNode | null | undefined, path: Path, rect: Rect) => {
-    if (!node) return;
-    if (node.kind === 'stack') {
-      found.push({ path, pane: node, rect });
-      return;
-    }
-    if (node.kind !== 'row' && node.kind !== 'column') return;
-    let offset = 0;
-    shares(node).forEach((share, index) => {
-      const child = node.kind === 'row'
-        ? { x: rect.x + offset * rect.width, y: rect.y, width: share * rect.width, height: rect.height }
-        : { x: rect.x, y: rect.y + offset * rect.height, width: rect.width, height: share * rect.height };
-      walk(node.children[index], [...path, index], child);
-      offset += share;
-    });
-  };
-  walk(tab.root, [], { x: 0, y: 0, width: 1, height: 1 });
-  return found;
-}
-
 /**
- * The pane to `side` of the one that holds `blockId`: of those that lie that way and overlap it
- * across, the nearest, and of those the one that overlaps it most.
+ * The docked Block to `side` of the docked Block `blockId`: of those that lie that way and overlap
+ * it across, the nearest, and of those the one that overlaps it most.
  */
-export function paneBeside(tab: SessionTab, blockId: string, side: Side): Pane | undefined {
-  const all = paneRects(tab);
-  const from = all.find(({ pane }) => pane.children.some(({ id }) => id === blockId));
+export function blockBeside(tab: SessionTab, blockId: string, side: Side): SessionBlock | undefined {
+  const all = blockRects(tab);
+  const from = all.find(({ block }) => block.id === blockId);
   if (!from) return undefined;
   const overlap = (low: number, size: number, otherLow: number, otherSize: number) =>
     Math.min(low + size, otherLow + otherSize) - Math.max(low, otherLow);
   const edge = 1e-6;
-  let best: { pane: Pane; distance: number; across: number } | undefined;
-  for (const { pane, rect } of all) {
-    if (pane === from.pane) continue;
+  let best: { block: SessionBlock; distance: number; across: number } | undefined;
+  for (const { block, rect } of all) {
+    if (block.id === blockId) continue;
     const a = from.rect;
     let distance: number;
     let across: number;
@@ -434,13 +470,13 @@ export function paneBeside(tab: SessionTab, blockId: string, side: Side): Pane |
     }
     if (distance < -edge || across <= edge) continue;
     if (!best || distance < best.distance - edge || (Math.abs(distance - best.distance) <= edge && across > best.across)) {
-      best = { pane, distance, across };
+      best = { block, distance, across };
     }
   }
-  return best?.pane;
+  return best?.block;
 }
 
-/** One tab with one pane holding `blocks`, the first in front: what a Session shows before anyone arranged it. */
-export function firstLayout(blocks: SessionBlock[], tab = newTab()): SessionLayout {
-  return tidy({ version: LAYOUT_VERSION, tabs: [{ ...tab, ...(blocks.length > 0 ? { root: { kind: 'stack', children: blocks } } : {}) }] });
+/** One tab with `blocks` docked in it, each beside the largest so far: a layout to start from, as a fixture's. */
+export function layoutWith(blocks: SessionBlock[], tab = newTab()): SessionLayout {
+  return blocks.reduce((layout, block) => placeBlock(layout, block, { tab: tab.id }), emptyLayout(tab));
 }

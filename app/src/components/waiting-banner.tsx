@@ -3,6 +3,7 @@ import { HugeiconsIcon } from '@hugeicons/react';
 import { Cancel01Icon } from '@hugeicons/core-free-icons';
 import type { AppController, ThreadSummary } from '@/app/app-controller';
 import { Button } from '@/components/ui/button';
+import { ownThreads } from '@/session/sessions';
 
 const SHOWN_MS = 8_000;
 
@@ -42,7 +43,8 @@ export function useWaitingBanner(threads: readonly ThreadSummary[], shown: reado
 /** Names a thread that started waiting off screen; tapping it shows that thread, in its Session. */
 export function WaitingBanner({ controller, onOpen }: { controller: AppController; onOpen?(key: string): void }) {
   const { model, actions } = controller;
-  const [banner, dismiss] = useWaitingBanner(model.threads, [...Object.keys(model.open ?? {}), ...(model.selectedKey ? [model.selectedKey] : [])]);
+  // Only of threads in a Session: the app says nothing of one started elsewhere.
+  const [banner, dismiss] = useWaitingBanner(ownThreads(model), [...Object.keys(model.open ?? {}), ...(model.selectedKey ? [model.selectedKey] : [])]);
   if (!banner) return null;
   return (
     <div role='status' aria-live='polite' data-slot='waiting-banner'

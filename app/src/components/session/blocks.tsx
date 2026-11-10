@@ -1,5 +1,5 @@
-// The Block types this app draws (ADR 0031, WVE-203): a name and a mark for a pane's strip, and
-// what fills the pane. A Block of a type that isn't here shows its type and props as text, the
+// The Block types this app draws (ADR 0031, WVE-203): a name and a mark for a Block's rail, and
+// what fills the Block. A Block of a type that isn't here shows its type and props as text, the
 // floor every device has (ADR 0018).
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { type AppController, type OpenSession, type TerminalSummary, type ThreadSummary, threadController, threadKey } from '@/app/app-controller';
@@ -9,7 +9,7 @@ import { PathLabel } from '@/components/path-label';
 import { ThreadView, askThread } from '@/components/thread-view';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
-import type { BlockAction } from '@/components/session/panes';
+import type { BlockAction } from '@/components/session/tab-blocks';
 import type { SessionBlock } from '@/host/protocol';
 import { cn } from '@/lib/utils';
 import { TERMINAL_BLOCK, THREAD_BLOCK, terminalOf, threadOf } from '@/session/blocks';
@@ -33,7 +33,7 @@ export type BlockContext = {
 };
 
 export type BlockType = {
-  /** What the pane's strip calls the Block. */
+  /** What the Block's rail calls it. */
   title(block: SessionBlock, context: Pick<BlockContext, 'controller' | 'session'>): string;
   /** A mark of what it's doing, beside its name. */
   mark?(block: SessionBlock, context: Pick<BlockContext, 'controller' | 'session'>): ReactNode;

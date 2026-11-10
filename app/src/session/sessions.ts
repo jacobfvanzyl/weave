@@ -1,6 +1,8 @@
-// The person's Sessions, as the sidebar lists them (ADR 0031, WVE-203): one for every directory
-// of a Host that has a thread, a terminal or a layout its Host keeps, under the Project it's in
-// (WVE-189) or else under its Host.
+// The person's Sessions, as the sidebar lists them (ADR 0031, WVE-203): those their Hosts keep,
+// each with the threads that are its own, under the Project it's in (WVE-189) or else under its
+// Host. A thread is a Session's when it was given a Block there, or a thread of the Session
+// started it: one started from a terminal or a schedule in the same directory is in none, and
+// the app says nothing of it.
 import {
   type AppModel,
   type HostSummary,
@@ -9,6 +11,7 @@ import {
   type SessionSummary,
   type ThreadSummary,
   sessionKey,
+  sessionOfKey,
 } from '@/app/app-controller';
 
 /** A directory as a Session is keyed by it: without a slash at its end, which a thread's may have. */
@@ -82,12 +85,40 @@ export function threadDirectories(threads: readonly Located[], known: readonly K
 }
 
 /**
- * The Sessions there are: those the Hosts keep, each with the listed threads in its directory,
- * the most recently active first. A Session is its Host's: the Host makes one when a thread in a
- * directory is first prompted or a terminal starts there, and the app makes none up, so a
- * directory with only threads from before then has none. `also` names the Session on screen,
- * which shows before its Host has made it: a thread just started in a new directory, until its
- * first prompt.
+ * The Session each listed thread is in, by thread key; a thread in none isn't here. A Session's
+ * threads are the ones its Host says are its own. A Host from before it kept that
+ * (`KnownSession.keepsOwn`) counts every thread in the directory, as the app then does.
+ */
+export function threadSessions(model: Pick<AppModel, 'threads' | 'known'>): Map<string, string> {
+  const known = model.known ?? [];
+  const placed = new Map<string, string>();
+  const byDirectory = new Set<string>();
+  for (const session of known) {
+    const key = sessionKey(session.hostId, session.directory);
+    if (!session.keepsOwn) byDirectory.add(key);
+    else for (const threadId of session.threads) placed.set(`${session.hostId}/${threadId}`, key);
+  }
+  if (byDirectory.size > 0) {
+    const directories = threadDirectories(model.threads, known);
+    for (const thread of model.threads) {
+      const key = sessionKey(thread.hostId, directories.get(thread.key) ?? threadDirectory(thread));
+      if (byDirectory.has(key)) placed.set(thread.key, key);
+    }
+  }
+  return placed;
+}
+
+/** The listed threads that are in a Session: the ones the app tells the person about. */
+export function ownThreads(model: Pick<AppModel, 'threads' | 'known'>): ThreadSummary[] {
+  const placed = threadSessions(model);
+  return model.threads.filter(({ key }) => placed.has(key));
+}
+
+/**
+ * The Sessions there are: those the Hosts keep, each with its own threads that are listed, the
+ * most recently active first. A Session is its Host's, made when a client starts one, and the app
+ * makes none up from the threads listed. `also` names one being started here, which shows before
+ * its Host has made it: its first Block makes it.
  */
 export function sessionSummaries(model: Pick<AppModel, 'threads' | 'known' | 'unread'>, options: { also?: string } = {}): SessionSummary[] {
   const sessions = new Map<string, SessionSummary & { members: ThreadSummary[] }>();
@@ -105,12 +136,16 @@ export function sessionSummaries(model: Pick<AppModel, 'threads' | 'known' | 'un
     if (known.git) found.git = known.git;
     if (known.updatedAt) found.lastActivityAt = known.updatedAt;
   }
-  const directories = threadDirectories(model.threads, model.known);
+  if (options.also && !sessions.has(options.also)) {
+    const { hostId, directory } = sessionOfKey(options.also);
+    session(hostId, directory);
+  }
+  const placed = threadSessions(model);
   for (const thread of model.threads) {
-    const directory = directories.get(thread.key) ?? threadDirectory(thread);
-    const key = sessionKey(thread.hostId, directory);
-    if (!sessions.has(key) && key !== options.also) continue;
-    const found = session(thread.hostId, directory);
+    const key = placed.get(thread.key);
+    const found = key ? sessions.get(key) : undefined;
+    if (!found) continue;
+    const { directory } = found;
     found.members.push(thread);
     if (thread.git && directory === plain(thread.git.worktree) && !found.git) {
       found.git = { repo: thread.git.repo, ...(thread.git.branch ? { branch: thread.git.branch } : {}) };

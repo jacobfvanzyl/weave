@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { HostSummary, KnownSession, ProjectSummary, ThreadSummary } from '@/app/app-controller';
-import { containing, sessionLabel, sessionListView, sessionOfThread, sessionSummaries, waitingSessions } from './sessions';
+import { containing, sessionLabel, sessionListView, sessionOfThread, sessionSummaries,
+  sessionWith,
+  threadSessions,
+  ownThreads, waitingSessions } from './sessions';
 
 const MAC = 'h-mac';
 const HOMELAB = 'h-homelab';
@@ -69,7 +72,27 @@ describe('the Project a directory is in', () => {
 const kept = (hostId: string, directory: string, change: Partial<KnownSession> = {}): KnownSession => ({ hostId, directory, threads: [], ...change });
 
 describe('the Sessions there are', () => {
-  it('are the ones the Hosts keep, each with the threads in its directory: a worktree’s, or outside a repository the thread’s own', () => {
+  it('hold the threads their Hosts say are their own, and nothing else in their directories', () => {
+    const threads = [
+      thread(MAC, 'own', '/code/odin', { lastActivityAt: 30, activity: 'waiting' }),
+      thread(MAC, 'started', '/code/odin/src', { lastActivityAt: 40 }),
+      // Started from a terminal and from a schedule, in the Session's directory and in one with no Session.
+      thread(MAC, 'tui', '/code/odin', { lastActivityAt: 50, activity: 'waiting' }),
+      thread(MAC, 'nightly', '/code/other', { lastActivityAt: 60, activity: 'waiting' }),
+    ];
+    const known = [kept(MAC, '/code/odin', { threads: ['started', 'own', 'gone'], keepsOwn: true })];
+    const model = { threads, known, unread: new Set(['h-mac/tui']) };
+    const sessions = sessionSummaries(model);
+    expect(sessions.map(({ key, threads: members, waiting, unread }) => [key, members, waiting, unread])).toEqual([
+      ['h-mac:/code/odin', ['h-mac/started', 'h-mac/own'], 1, false],
+    ]);
+    expect([...threadSessions(model)]).toEqual([['h-mac/started', 'h-mac:/code/odin'], ['h-mac/own', 'h-mac:/code/odin'], ['h-mac/gone', 'h-mac:/code/odin']]);
+    // The app tells the person only of those: the others wait where they were started.
+    expect(ownThreads(model).map(({ key }) => key)).toEqual(['h-mac/own', 'h-mac/started']);
+    expect(sessionWith(sessions, 'h-mac/tui')).toBeUndefined();
+  });
+
+  it('on a Host from before it kept what’s theirs, hold the threads in their directory: a worktree’s, or outside a repository the thread’s own', () => {
     const threads = [
       thread(MAC, 't1', '/code/odin', { ...worktree('/code/odin', '/code/odin', 'main'), lastActivityAt: 30 }),
       thread(MAC, 't2', '/code/odin/src', { ...worktree('/code/odin', '/code/odin', 'main'), lastActivityAt: 40 }),
@@ -106,12 +129,11 @@ describe('the Sessions there are', () => {
     expect(sessionSummaries({ threads, unread: new Set() })).toEqual([]);
   });
 
-  it('show the one on screen before its Host has made it, as a thread just started in a new directory', () => {
+  it('show the one being started here before its Host has made it, which its first Block does', () => {
     const threads = [thread(MAC, 'new', '/code/fresh', { lastActivityAt: 9 })];
-    expect(sessionSummaries({ threads, unread: new Set() }, { also: 'h-mac:/code/fresh' }).map(({ key, threads: members }) => [key, members]))
-      .toEqual([['h-mac:/code/fresh', ['h-mac/new']]]);
-    // Nothing for one that names no thread's directory, as a Session that ended.
-    expect(sessionSummaries({ threads, unread: new Set() }, { also: 'h-mac:/gone' })).toEqual([]);
+    expect(sessionSummaries({ threads, unread: new Set() }, { also: 'h-mac:/code/fresh' }).map(({ key, name, threads: members }) => [key, name, members]))
+      .toEqual([['h-mac:/code/fresh', 'fresh', []]]);
+    expect(sessionSummaries({ threads, unread: new Set() })).toEqual([]);
   });
 
   it('include one with nothing listed in it, and keep a thread where its Host placed it, with the others of its directory', () => {

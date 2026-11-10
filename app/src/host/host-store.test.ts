@@ -862,13 +862,22 @@ describe('HostStore Sessions', () => {
   const KEY = sessionKey(HOST, '/work');
   const blocks = (store: HostStore) => layoutBlocks(store.snapshot().session!.layout).map((block) => threadOf(block) ?? block.type);
 
-  /** A Host that keeps Sessions: it saves what's set under the next revision, unless told to conflict. */
-  const sessionsHost = (kept: { revision: number; layout?: unknown } = { revision: 0 }) => {
+  /**
+   * A Host that keeps Sessions and what's in them: it saves what's set under the next revision,
+   * unless told to conflict, and counts what's added as the Session's.
+   */
+  const sessionsHost = (kept: { revision: number; layout?: unknown; threads?: string[] } = { revision: 0 }) => {
     const conflicts = { next: 0 };
     const host = scriptedHost(() => [], {
-      'host/hello': hello([HOST_PROTOCOL.features.sessions]),
-      'sessions/watch': () => ({ result: { sessions: kept.revision > 0 || kept.layout ? [{ directory: '/work', revision: kept.revision, layout: kept.layout ?? null, createdAt: 1, threads: [THREAD], terminals: [] }] : [] } }),
-      'sessions/get': () => ({ result: { session: { directory: '/work', revision: kept.revision, layout: kept.layout ?? null, createdAt: 1 } } }),
+      'host/hello': hello([HOST_PROTOCOL.features.sessions, HOST_PROTOCOL.features.sessionsAdd]),
+      'sessions/watch': () => ({ result: { sessions: kept.revision > 0 || kept.layout ? [{ directory: '/work', revision: kept.revision, layout: kept.layout ?? null, createdAt: 1, threads: kept.threads ?? [], terminals: [] }] : [] } }),
+      'sessions/get': () => ({ result: { session: { directory: '/work', revision: kept.revision, layout: kept.layout ?? null, createdAt: 1, threads: kept.threads ?? [] } } }),
+      'sessions/add': (params) => {
+        const { threads = [] } = params as { threads?: string[] };
+        if (threads.includes('gone')) return { error: { code: -32602, message: 'Invalid params', data: "the thread gone isn't in /work" } };
+        kept.threads = [...new Set([...(kept.threads ?? []), ...threads])];
+        return { result: { session: { directory: '/work', revision: kept.revision, layout: kept.layout ?? null, createdAt: 1, updatedAt: 2, threads: kept.threads, terminals: [] } } };
+      },
       'sessions/set': (params) => {
         const { layout, ifRevision } = params as { layout: unknown; ifRevision?: number };
         if (conflicts.next > 0 || (ifRevision !== undefined && ifRevision !== kept.revision)) {
@@ -877,49 +886,59 @@ describe('HostStore Sessions', () => {
         }
         kept.revision += 1;
         kept.layout = layout;
-        return { result: { session: { directory: '/work', revision: kept.revision, layout, createdAt: 1, updatedAt: 2 } } };
+        return { result: { session: { directory: '/work', revision: kept.revision, layout, createdAt: 1, updatedAt: 2, threads: kept.threads ?? [] } } };
       },
     });
     return { host, kept, conflicts };
   };
+  /** A layout another device saved: its Blocks docked side by side. */
+  const sideBySide = (...shown: ReturnType<typeof threadBlock>[]) => ({
+    version: 2,
+    tabs: [{ id: 't', root: shown.length === 1 ? { kind: 'block', ...shown[0] } : { kind: 'row', children: shown.map((block) => ({ kind: 'block', ...block })) } }],
+  });
 
-  it('shows a Session its Host keeps no layout for as its open threads in one pane, and saves it once changed', async () => {
+  it('shows a Session with no layout as an empty tab, saves one once it has a Block, and has its Host count what Blocks show as its own', async () => {
     const { host, kept } = sessionsHost();
     const store = storeFor(host.socket);
     await store.start();
     store.actions.selectSession?.(KEY);
     await settle();
     expect(host.asked).toContain('sessions/watch');
-    expect(store.snapshot().session).toMatchObject({ key: KEY, hostId: HOST, directory: '/work', saved: false });
-    expect(blocks(store)).toEqual([THREAD]);
+    // Nothing is placed for the person: its directory's thread is no Block of it, nor its own.
+    expect(store.snapshot().session).toMatchObject({ key: KEY, hostId: HOST, directory: '/work', saved: false, own: { threads: [], terminals: [] } });
+    expect(blocks(store)).toEqual([]);
     expect(host.asked).not.toContain('sessions/set');
 
-    // The same Blocks, however often it's read: a Block's id is its own from the first.
-    const first = store.snapshot().session!.layout;
-    store.actions.selectThread(threadKey(HOST, THREAD));
-    await settle();
-    expect(store.snapshot().session!.layout).toEqual(first);
-
-    store.actions.updateLayout?.(KEY, (layout) => placeBlock(layout, threadBlock('s-2', 'b-2'), { beside: layoutBlocks(layout)[0].id, side: 'right' }));
+    store.actions.updateLayout?.(KEY, (layout) => placeBlock(layout, threadBlock(THREAD, 'b-1'), { tab: layout.tabs[0].id }));
     // Here at once, and on the Host under the revision it was made on.
-    expect(blocks(store)).toEqual([THREAD, 's-2']);
+    expect(blocks(store)).toEqual([THREAD]);
     await settle();
     expect(host.params['sessions/set']).toEqual([{ directory: '/work', layout: kept.layout, ifRevision: 0 }]);
     expect(store.snapshot().session).toMatchObject({ saved: true });
-    expect(store.snapshot().known).toEqual([{ hostId: HOST, directory: '/work', threads: [], updatedAt: 2 }]);
+
+    // What a Block shows is the Session's from then on: asked once each, and one that's gone not again.
+    store.actions.addToSession?.(KEY, { threads: [THREAD, 'gone'], terminals: [] });
+    await settle();
+    store.actions.addToSession?.(KEY, { threads: [THREAD, 'gone'], terminals: [] });
+    await settle();
+    expect(host.params['sessions/add']).toEqual([{ directory: '/work', threads: [THREAD] }, { directory: '/work', threads: ['gone'] }]);
+    expect(store.snapshot().session).toMatchObject({ saved: true, own: { threads: [THREAD], terminals: [] } });
+    expect(blocks(store)).toEqual([THREAD]);
+    expect(store.snapshot().known).toEqual([{ hostId: HOST, directory: '/work', threads: [THREAD], terminals: [], keepsOwn: true, updatedAt: 2 }]);
     store.stop();
   });
 
   it("takes another device's layout, and makes its own change again on top of one saved first", async () => {
-    const { host, kept, conflicts } = sessionsHost();
+    const { host, kept, conflicts } = sessionsHost({ revision: 1, layout: sideBySide(threadBlock(THREAD, 'b-1')), threads: [THREAD] });
     const store = storeFor(host.socket);
     await store.start();
     store.actions.selectSession?.(KEY);
     await settle();
     const own = layoutBlocks(store.snapshot().session!.layout)[0];
+    expect(blocks(store)).toEqual([THREAD]);
 
     // Another device arranged it: this one shows that.
-    const theirs = { version: 1, tabs: [{ id: 't', root: { kind: 'stack', children: [own, threadBlock('s-9', 'b-9')] } }] };
+    const theirs = sideBySide(own, threadBlock('s-9', 'b-9'));
     kept.revision = 4;
     kept.layout = theirs;
     host.notify('sessions/updated', { session: { directory: '/work', revision: 4, layout: theirs, createdAt: 1 } });
@@ -927,10 +946,10 @@ describe('HostStore Sessions', () => {
     expect(blocks(store)).toEqual([THREAD, 's-9']);
 
     // It saves again before this device's change arrives: the change is made on what it saved.
-    const newer = { version: 1, tabs: [{ id: 't', root: { kind: 'stack', children: [own, threadBlock('s-9', 'b-9'), threadBlock('s-10', 'b-10')] } }] };
+    const newer = sideBySide(own, threadBlock('s-9', 'b-9'), threadBlock('s-10', 'b-10'));
     kept.revision = 5;
     kept.layout = newer;
-    store.actions.updateLayout?.(KEY, (layout) => placeBlock(layout, threadBlock('s-2', 'b-2'), { into: own.id }));
+    store.actions.updateLayout?.(KEY, (layout) => placeBlock(layout, threadBlock('s-2', 'b-2'), { beside: own.id, side: 'right' }));
     expect(blocks(store)).toEqual([THREAD, 's-2', 's-9']);
     await settle();
     expect(host.params['sessions/set'].map((params) => (params as { ifRevision: number }).ifRevision)).toEqual([4, 5]);
@@ -938,11 +957,11 @@ describe('HostStore Sessions', () => {
     expect(blocks(store)).toEqual([THREAD, 's-2', 's-9', 's-10']);
     expect(conflicts.next).toBe(0);
 
-    // The Session ends, as with its worktree: it shows as its threads place it again.
+    // The Session ends, as with its worktree: nothing of it is left.
     host.notify('sessions/ended', { directory: '/work' });
     await settle();
     expect(store.snapshot().known).toEqual([]);
-    expect(blocks(store)).toEqual([THREAD]);
+    expect(blocks(store)).toEqual([]);
     store.stop();
   });
 
@@ -955,8 +974,10 @@ describe('HostStore Sessions', () => {
     expect(host.asked).not.toContain('sessions/watch');
     store.actions.updateLayout?.(KEY, (layout) => placeBlock(layout, threadBlock('s-2', 'b-2'), { tab: layout.tabs[0].id }));
     await settle();
-    expect(blocks(store)).toEqual([THREAD, 's-2']);
+    expect(blocks(store)).toEqual(['s-2']);
     expect(host.asked).not.toContain('sessions/set');
+    // It keeps nothing of what's whose either: everything in the directory is the Session's.
+    expect(store.snapshot().session).not.toHaveProperty('own');
     expect(store.snapshot().session?.saved).toBe(false);
     store.stop();
   });

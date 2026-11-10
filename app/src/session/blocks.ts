@@ -1,6 +1,6 @@
 // The Block types the app has (ADR 0031): a reverse-DNS name each, and what its props point at.
-// A thread exists apart from its Block: closing the Block hides it, and it can be shown again. A
-// terminal is one to one with its Block: closing the Block ends it (WVE-203).
+// A thread exists apart from its Block: closing the Block closes it, and it can be shown again in
+// another. A terminal is one to one with its Block: closing the Block ends it (WVE-203).
 import type { SessionBlock, SessionLayout } from '@/host/protocol';
 import { type Target, findBlock, layoutBlocks, newId, placeBlock } from './layout';
 
@@ -28,8 +28,8 @@ export const blockOfTerminal = (layout: SessionLayout, terminalId: string) =>
   layoutBlocks(layout).find((block) => terminalOf(block) === terminalId);
 
 /**
- * The layout with `block` at `target`, or in its first tab when the target has gone, as after
- * another device rearranged it: what the person placed still shows.
+ * The layout with `block` at `target`, or docked in its first tab when the target has gone, as
+ * after another device rearranged it: what the person placed still shows.
  */
 export function place(layout: SessionLayout, block: SessionBlock, target?: Target): SessionLayout {
   const placed = target ? placeBlock(layout, block, target) : layout;
