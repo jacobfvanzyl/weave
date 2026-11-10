@@ -45,6 +45,8 @@ export type HostSummary = {
   canWorktree?: boolean;
   /** Whether it has terminals to show beside a thread (`terminals`). */
   canTerminals?: boolean;
+  /** Whether ending a Session there closes what's in it (`sessionsEnd`): the app ends none on a Host from before that. */
+  canEndSessions?: boolean;
 };
 
 /** Where in a git repository a thread's directory is. */
@@ -342,6 +344,11 @@ export type AppActions = ThreadActions & {
   forThread?(key: string): ThreadActions;
   /** Changes a Session's layout, for every device. */
   updateLayout?(sessionKey: string, change: LayoutChange): void;
+  /**
+   * Ends a Session, for good: its Host closes the threads open in it, ends its terminals and
+   * forgets its layout. Rejects saying why not, as while something in it is running.
+   */
+  endSession?(sessionKey: string): Promise<void>;
   createThread(input: { hostId: string; cwd: string; agentId: string }): Promise<CreatedThread | void> | CreatedThread | void;
   /**
    * The directories in `path` on a Host's computer, or in its user's home without one; rejects

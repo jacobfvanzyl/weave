@@ -112,6 +112,7 @@ describe.skipIf(!devHostAvailable())('a Session two devices show', () => {
   }, 60_000);
 
   it('is there again for a device that starts later', async () => {
+    expect(mac.snapshot().hosts[0].canEndSessions).toBe(true);
     const { store: late } = devStore({ deviceName: 'Late iPhone' });
     await late.start();
     await late.actions.pairDispatcher({ url: dispatcher.url, code: await dispatcher.offer() });
@@ -119,5 +120,41 @@ describe.skipIf(!devHostAvailable())('a Session two devices show', () => {
     await waitFor(() => late.snapshot().session?.saved, 'the late device to show the Session');
     expect(late.snapshot().session?.layout).toEqual(mac.snapshot().session?.layout);
     late.stop();
+  }, 60_000);
+});
+
+describe.skipIf(!devHostAvailable())('a Session that ends', () => {
+  it('is gone on every device, for good, and its thread closes with it', async () => {
+    const [dispatcher, host] = await Promise.all([startDevDispatcher(), startDevHost()]);
+    const hostId = await dispatcher.join(host, 'studio');
+    const { store: pad } = devStore({ deviceName: 'Test iPad' });
+    const { store: mac } = devStore({ deviceName: 'Test Mac' });
+    try {
+      for (const store of [pad, mac]) {
+        await store.start();
+        await store.actions.pairDispatcher({ url: dispatcher.url, code: await dispatcher.offer() });
+        await waitFor(() => store.snapshot().hosts[0]?.status === 'connected', 'the Host to connect');
+      }
+      const created = await pad.actions.createThread({ hostId, cwd: host.cwd, agentId: 'fake' });
+      if (!created) throw new Error('no thread');
+      await pad.actions.send('hello');
+      await waitFor(() => pad.snapshot().thread?.transcript.turn.status === 'stopped', 'the turn to end');
+      const key = sessionKey(hostId, realpathSync(host.cwd));
+      for (const store of [pad, mac]) await waitFor(() => store.snapshot().known?.some((known) => sessionKey(known.hostId, known.directory) === key), 'the Session');
+      mac.actions.selectSession?.(key);
+      await waitFor(() => mac.snapshot().session, 'the Mac to show it');
+
+      // The Mac ends it: the iPad hears, the thread it had open closes, and nothing is left of it.
+      await mac.actions.endSession?.(key);
+      expect(mac.snapshot().session).toBeUndefined();
+      await waitFor(() => pad.snapshot().known?.length === 0, 'the iPad to hear it ended');
+      await waitFor(() => pad.snapshot().threads.find((thread) => thread.key === created.key)?.state === 'closed', 'its thread to close');
+      await expect(mac.actions.endSession?.(key)).rejects.toThrow(/Couldn't end the Session/);
+    } finally {
+      pad.stop();
+      mac.stop();
+      await host.stop();
+      await dispatcher.stop();
+    }
   }, 60_000);
 });

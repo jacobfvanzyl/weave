@@ -74,6 +74,7 @@ const hosts = (now: number, scenario: MockScenario): HostSummary[] => {
       canRename: true,
       canWorktree: true,
       canTerminals: true,
+      canEndSessions: true,
     },
     {
       id: SERVER,
@@ -82,6 +83,7 @@ const hosts = (now: number, scenario: MockScenario): HostSummary[] => {
       canBrowse: true,
       canRename: true,
       canWorktree: true,
+      canEndSessions: true,
       ...(unreachable ? { error: `It hasn't connected to the Dispatcher since ${new Date(now - 4 * MINUTE).toLocaleTimeString()}.` } : {}),
     },
   ];
@@ -610,6 +612,30 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         update((current) => {
           const shown = keep(withSession(current, key), key);
           return { ...shown, layouts: { ...shown.layouts, [key]: tidy(change(shown.layouts[key])) }, saved: [...new Set([...shown.saved, key])] };
+        });
+      },
+      async endSession(key) {
+        const members = state.current.model.threads.filter((thread) => sessionOfThread(thread) === key && thread.state !== 'closed');
+        if (members.some(({ activity }) => activity === 'running' || activity === 'waiting')) {
+          throw new Error('A thread in it is running a turn or waiting on you. Let it finish, or stop it, first.');
+        }
+        const { hostId, directory } = sessionOfKey(key);
+        update((current) => {
+          const { [key]: _layout, ...layouts } = current.layouts;
+          return {
+            ...current,
+            layouts,
+            saved: current.saved.filter((saved) => saved !== key),
+            ...(current.sessionKey === key ? { sessionKey: undefined } : {}),
+            shown: current.shown.filter((shown) => !members.some((member) => member.key === shown)),
+            terminals: { ...current.terminals, [hostId]: (current.terminals[hostId] ?? []).filter(({ scope }) => scope !== directory) },
+            model: {
+              ...current.model,
+              known: (current.model.known ?? []).filter((known) => !(known.hostId === hostId && known.directory === directory)),
+              threads: current.model.threads.map((thread) => members.some((member) => member.key === thread.key) ? { ...thread, state: 'closed' as const, activity: undefined } : thread),
+              selectedKey: members.some((member) => member.key === current.model.selectedKey) ? undefined : current.model.selectedKey,
+            },
+          };
         });
       },
       createThread({ hostId, cwd, agentId }) {

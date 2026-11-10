@@ -66,9 +66,9 @@ export class HostSessions {
     if (!connection.supports(HOST_PROTOCOL.features.sessions)) return;
     let sessions: HostSession[];
     try {
-      ({ sessions } = await connection.request('sessions/watch', {}));
+      sessions = (await connection.request('sessions/watch', {})).sessions ?? [];
     } catch {
-      // Its Sessions show as its threads place them, unsaved.
+      // It lists none until it answers, as when it reconnects.
       return;
     }
     if (this.#deps.connection(hostId) !== connection) return;

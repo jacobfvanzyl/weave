@@ -502,6 +502,7 @@ export class HostStore {
       return actions;
     },
     updateLayout: (key, change) => this.#updateLayout(key, change),
+    endSession: (key) => this.#endSession(key),
     refresh: () => this.refresh(),
     pairDispatcher: (input) => this.#pair(input),
     forgetDispatcher: () => this.#forget(),
@@ -1481,6 +1482,24 @@ export class HostStore {
     this.#changed();
   }
 
+  /**
+   * Ends a Session for good: its Host closes its threads, ends its terminals and forgets it, and
+   * tells every device (`sessions/ended`).
+   */
+  async #endSession(key: string) {
+    const { hostId, directory } = sessionOfKey(key);
+    const connection = this.#requestable(hostId);
+    try {
+      await connection.request('sessions/end', { directory });
+    } catch (error) {
+      if (failedWith(error, HOST_PROTOCOL.errors.sessionBusy)) throw new Error(busyWorktree(error));
+      throw failed("Couldn't end the Session", error);
+    }
+    // Before the Host's own word of it arrives: it's gone here too.
+    this.#sessions.ended(hostId, directory);
+    if (this.#session?.hostId === hostId && this.#session.directory === directory) this.#selectSession(undefined);
+  }
+
   #updateLayout(key: string, change: LayoutChange) {
     const { hostId, directory } = sessionOfKey(key);
     this.#sessions.update(hostId, directory, change);
@@ -2100,6 +2119,7 @@ export class HostStore {
         ...(entry.connection?.supports(HOST_PROTOCOL.features.rename) ? { canRename: true } : {}),
         ...(entry.connection?.supports(HOST_PROTOCOL.features.worktrees) ? { canWorktree: true } : {}),
         ...(entry.connection?.supports(HOST_PROTOCOL.features.terminals) ? { canTerminals: true } : {}),
+        ...(entry.connection?.supports(HOST_PROTOCOL.features.sessionsEnd) ? { canEndSessions: true } : {}),
       });
       agents[hostId] = entry.agents.map(({ id, name }) => ({ id, name }));
       const agentName = (agentId: string) => entry.agents.find(({ id }) => id === agentId)?.name ?? agentId;

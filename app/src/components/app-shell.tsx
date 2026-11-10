@@ -8,6 +8,7 @@ import { useOpenThreadRequests } from '@/app/open-thread';
 import { platform } from '@/app/platform';
 import { usePhoneLayout } from '@/app/use-phone-layout';
 import { CommandPalette } from '@/components/command-palette';
+import { EndSessionDialog } from '@/components/end-session-dialog';
 import { HostsDialog } from '@/components/hosts-dialog';
 import { type NewThreadTarget, NewThreadDialog } from '@/components/new-thread-dialog';
 import { PairingScreen } from '@/components/pair-dispatcher';
@@ -112,10 +113,11 @@ type ShellProps = {
   onOpenSession(key?: string): void;
   onOpenThread(key: string): void;
   onOpenHosts(): void;
-  onNewThread(target?: NewThreadTarget): void;
+  onNewSession(target?: NewThreadTarget): void;
+  onEndSession(session: SessionSummary): void;
 };
 
-function PhoneShell({ controller, sessions, session, selected, reveal, onRevealed, onOpenSession, onOpenThread, onOpenHosts, onNewThread, surfaceLink }: ShellProps & {
+function PhoneShell({ controller, sessions, session, selected, reveal, onRevealed, onOpenSession, onOpenThread, onOpenHosts, onNewSession, onEndSession, surfaceLink }: ShellProps & {
   surfaceLink?: SurfaceLink;
 }) {
   const { model } = controller;
@@ -126,7 +128,7 @@ function PhoneShell({ controller, sessions, session, selected, reveal, onReveale
   useEffect(() => surfaceLink?.setLandscape(surfaced), [surfaceLink, surfaced]);
   const back = () => onOpenSession(undefined);
   const leading = <BackButton count={waitingSessions(sessions, selected)} onBack={back} />;
-  if (!selected) return <SessionList controller={controller} sessions={sessions} onOpen={onOpenSession} onOpenHosts={onOpenHosts} onNewThread={onNewThread} />;
+  if (!selected) return <SessionList controller={controller} sessions={sessions} onOpen={onOpenSession} onOpenHosts={onOpenHosts} onNewSession={onNewSession} onEndSession={onEndSession} />;
   if (!session) return <NoSession controller={controller} selected={selected} known={sessions.some(({ key }) => key === selected)} leading={leading} />;
   return (
     <SessionView key={session.key} controller={controller} session={session} members={membersOf(sessions, session.key)} phone leading={leading}
@@ -134,13 +136,13 @@ function PhoneShell({ controller, sessions, session, selected, reveal, onReveale
   );
 }
 
-function SplitShell({ controller, sessions, session, selected, reveal, onRevealed, onOpenSession, onOpenThread, onOpenHosts, onNewThread }: ShellProps) {
+function SplitShell({ controller, sessions, session, selected, reveal, onRevealed, onOpenSession, onOpenThread, onOpenHosts, onNewSession, onEndSession }: ShellProps) {
   const { setOpenMobile } = useSidebar();
   const leading = <SidebarToggle waiting={waitingSessions(sessions, selected)} />;
   return (
     <>
       <Sidebar collapsible='offcanvas'>
-        <SessionList controller={controller} sessions={sessions} selected={selected} onOpenHosts={onOpenHosts} onNewThread={onNewThread}
+        <SessionList controller={controller} sessions={sessions} selected={selected} onOpenHosts={onOpenHosts} onNewSession={onNewSession} onEndSession={onEndSession}
           onOpen={(key) => {
             onOpenSession(key);
             setOpenMobile(false);
@@ -184,6 +186,8 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
   const [hostsOpen, setHostsOpen] = useState(false);
   const [newThread, setNewThread] = useState<NewThreadTarget>();
   const [palette, setPalette] = useState(false);
+  // The Session the person asked to end, until they confirm or don't.
+  const [ending, setEnding] = useState<SessionSummary>();
   const openHosts = () => setHostsOpen(true);
   const unpaired = !model.starting && (!model.dispatcher || model.dispatcher.status === 'revoked');
 
@@ -232,6 +236,12 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
   useCommand('session.next', () => step(1), !unpaired && ordered.length > 1);
   useCommand('session.previous', () => step(-1), !unpaired && ordered.length > 1);
   useCommand('session.new', () => setNewThread({}), !unpaired && canStart);
+  // The Session on screen, where its Host keeps it and closes what's in it when it ends.
+  const current = sessions.find(({ key }) => key === selected);
+  const currentHost = current ? model.hosts.find(({ id }) => id === current.hostId) : undefined;
+  const endable = Boolean(current && currentHost?.status === 'connected' && currentHost.canEndSessions
+    && model.known?.some((known) => known.hostId === current.hostId && known.directory === current.directory));
+  useCommand('session.end', () => setEnding(current), !unpaired && endable);
   // With a Session on screen, a new thread starts in it: the Session's own command.
   useCommand('thread.new', () => setNewThread({}), !unpaired && canStart && model.session?.key !== selected);
   useCommand('palette.open', () => setPalette(true), !unpaired);
@@ -249,14 +259,17 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
     onOpenSession: setSelected,
     onOpenThread: openThread,
     onOpenHosts: openHosts,
-    onNewThread: (target) => setNewThread(target ?? {}),
+    onNewSession: (target) => setNewThread(target ?? {}),
+    onEndSession: setEnding,
   };
   return (
     <ResizableSidebarProvider className='h-dvh min-h-0' cookieName={false} data-layout={phone ? 'phone' : 'split'}>
       {phone ? <PhoneShell {...shell} surfaceLink={surfaceLink} /> : <SplitShell {...shell} />}
       <WaitingBanner controller={controller} onOpen={openThread} />
       <HostsDialog controller={controller} open={hostsOpen} onOpenChange={setHostsOpen} offer={pairingOffer} />
-      <NewThreadDialog controller={controller} target={newThread} onCreated={created} onClose={() => setNewThread(undefined)} />
+      <NewThreadDialog controller={controller} target={newThread} session onCreated={created} onClose={() => setNewThread(undefined)} />
+      <EndSessionDialog controller={controller} session={ending} onClose={() => setEnding(undefined)}
+        onEnded={(key) => { if (key === selected) setSelected(undefined); }} />
       <CommandPalette open={palette} onOpenChange={setPalette} />
     </ResizableSidebarProvider>
   );

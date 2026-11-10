@@ -1,6 +1,6 @@
 import { useRef, useState, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { Add01Icon, ComputerIcon, Folder01Icon, GitBranchIcon, LaptopIcon, Search01Icon } from '@hugeicons/core-free-icons';
+import { Add01Icon, Cancel01Icon, ComputerIcon, Folder01Icon, GitBranchIcon, LaptopIcon, Search01Icon } from '@hugeicons/core-free-icons';
 import type { AppController, DispatcherSummary, HostStatus, HostSummary, ProjectSummary, SessionSummary } from '@/app/app-controller';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { RemoveWorktreeDialog } from '@/components/remove-worktree-dialog';
@@ -36,16 +36,18 @@ export const sinceLabel = (at: number | undefined, now = Date.now()) => {
 /**
  * One Session in the list: a tile with its name, where it is, and a mark when a thread in it
  * waits on the person, runs, or ended a turn they haven't seen. What else a tile shows of what's
- * inside is still to come (WVE-192). A long press, or a right-click, offers Remove worktree for a
- * worktree other than its repository's first.
+ * inside is still to come (WVE-192). A long press, or a right-click, offers End Session, which
+ * closes what's in it for good, and Remove worktree for a worktree other than its repository's first.
  */
-function SessionRow({ session, host, label, selected, onOpen, actions }: {
+function SessionRow({ session, host, label, selected, onOpen, onEnd, actions }: {
   session: SessionSummary;
   host?: HostSummary;
   /** Under its name: its branch, with its Host's name under a Project. */
   label: string;
   selected: boolean;
   onOpen(): void;
+  /** Asks to end the Session; none where its Host can't, or isn't connected. */
+  onEnd?(): void;
   actions: AppController['actions'];
 }) {
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -84,15 +86,23 @@ function SessionRow({ session, host, label, selected, onOpen, actions }: {
   );
   return (
     <SidebarMenuItem>
-      {removable
+      {removable || onEnd
         ? (
           <ContextMenu>
             <ContextMenuTrigger className='[-webkit-touch-callout:none]'>{tile}</ContextMenuTrigger>
             <ContextMenuContent aria-label={`${session.name} ${label} actions`}>
-              <ContextMenuItem variant='destructive' onClick={() => setConfirmRemove(true)}>
-                <HugeiconsIcon icon={GitBranchIcon} strokeWidth={2} />
-                Remove worktree…
-              </ContextMenuItem>
+              {onEnd && (
+                <ContextMenuItem variant='destructive' onClick={onEnd}>
+                  <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+                  End Session…
+                </ContextMenuItem>
+              )}
+              {removable && (
+                <ContextMenuItem variant='destructive' onClick={() => setConfirmRemove(true)}>
+                  <HugeiconsIcon icon={GitBranchIcon} strokeWidth={2} />
+                  Remove worktree…
+                </ContextMenuItem>
+              )}
             </ContextMenuContent>
           </ContextMenu>
         )
@@ -115,7 +125,7 @@ const hostStatus: Record<HostStatus, string | undefined> = {
 };
 
 /** A Host's heading, over its Sessions no Project has: its name, and how it's connected when it isn't. */
-function HostHeading({ host, onNewThread }: { host: HostSummary; onNewThread(): void }) {
+function HostHeading({ host, onNewSession }: { host: HostSummary; onNewSession(): void }) {
   const status = hostStatus[host.status];
   return (
     <>
@@ -124,8 +134,8 @@ function HostHeading({ host, onNewThread }: { host: HostSummary; onNewThread(): 
         <span className='min-w-0 truncate'>{host.name}</span>
         {status && <span className='shrink-0 text-[0.6875rem] font-normal text-muted-foreground'>· {status}</span>}
       </SidebarGroupLabel>
-      <SidebarGroupAction aria-label={`New thread on ${host.name}`} title={`New thread on ${host.name}`}
-        className='top-3.5 right-2.5' disabled={host.status !== 'connected'} onClick={onNewThread}>
+      <SidebarGroupAction aria-label={`New Session on ${host.name}`} title={`New Session on ${host.name}`}
+        className='top-3.5 right-2.5' disabled={host.status !== 'connected'} onClick={onNewSession}>
         <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
       </SidebarGroupAction>
     </>
@@ -133,15 +143,15 @@ function HostHeading({ host, onNewThread }: { host: HostSummary; onNewThread(): 
 }
 
 /** A Project's heading: its name, over its Sessions on every Host, and a thread to start in it. */
-function ProjectHeading({ project, onNewThread }: { project: ProjectSummary; onNewThread?(): void }) {
+function ProjectHeading({ project, onNewSession }: { project: ProjectSummary; onNewSession?(): void }) {
   return (
     <>
       <SidebarGroupLabel className='h-9 gap-2 pr-9 text-sm font-medium text-sidebar-foreground [&>svg]:size-4.5'>
         <HugeiconsIcon icon={Folder01Icon} strokeWidth={1.75} className='text-icon-muted' aria-hidden />
         <span className='min-w-0 truncate'>{project.name}</span>
       </SidebarGroupLabel>
-      <SidebarGroupAction aria-label={`New thread in ${project.name}`} title={`New thread in ${project.name}`}
-        className='top-3.5 right-2.5' disabled={!onNewThread} onClick={onNewThread}>
+      <SidebarGroupAction aria-label={`New Session in ${project.name}`} title={`New Session in ${project.name}`}
+        className='top-3.5 right-2.5' disabled={!onNewSession} onClick={onNewSession}>
         <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
       </SidebarGroupAction>
     </>
@@ -214,15 +224,17 @@ function usePullToRefresh(onRefresh?: () => Promise<void> | void) {
  * heading. While the Dispatcher can't be reached, a banner says so, and the Sessions of the Hosts
  * it last listed stay, greyed out unless their Host is still connected.
  */
-export function SessionList({ controller, sessions, selected, onOpen, onOpenHosts, onNewThread }: {
+export function SessionList({ controller, sessions, selected, onOpen, onOpenHosts, onNewSession, onEndSession }: {
   controller: AppController;
   sessions: SessionSummary[];
   /** The Session on screen, by key. */
   selected?: string;
   onOpen(key: string): void;
   onOpenHosts(): void;
-  /** Starts a thread, in a Project's directory when one is named, which opens its Session. */
-  onNewThread(target?: NewThreadTarget): void;
+  /** Starts a Session: a thread in a directory, a Project's or a Host's when one is named. */
+  onNewSession(target?: NewThreadTarget): void;
+  /** Asks to end a Session. */
+  onEndSession(session: SessionSummary): void;
 }) {
   const { model, actions } = controller;
   const [query, setQuery] = useState('');
@@ -234,6 +246,7 @@ export function SessionList({ controller, sessions, selected, onOpen, onOpenHost
   // A Host still connected while the Dispatcher is away, as the Mac's own over its socket, isn't greyed out.
   const hostAway = (listedHost?: HostSummary) => away && listedHost?.status !== 'connected';
   const unreachable = model.hosts.filter(({ status }) => status !== 'connected').length + (away ? 1 : 0);
+  const kept = (session: SessionSummary) => (model.known ?? []).some((known) => known.hostId === session.hostId && known.directory === session.directory);
   /**
    * A Session's tile. Under a Project it says which Host it's on, a Session being one Host's, and
    * how that Host stands when it isn't connected; under its Host's own heading, that says it.
@@ -244,11 +257,13 @@ export function SessionList({ controller, sessions, selected, onOpen, onOpenHost
       <div key={session.key} data-away={(named && hostAway(host)) || undefined} className={cn(named && hostAway(host) && 'opacity-60')}
         title={named && host && host.status !== 'connected' ? host.error : undefined}>
         <SessionRow session={session} host={host} label={[on, sessionLabel(session)].filter(Boolean).join(' · ')}
-          selected={session.key === selected} onOpen={() => onOpen(session.key)} actions={actions} />
+          selected={session.key === selected} onOpen={() => onOpen(session.key)} actions={actions}
+          // Only a Session its Host keeps, on a Host that closes what's in it.
+          onEnd={kept(session) && host?.status === 'connected' && host.canEndSessions ? () => onEndSession(session) : undefined} />
       </div>
     );
   };
-  /** Where a Project's new thread starts: its directory on the first of its Hosts that's connected. */
+  /** Where a Project's new Session starts: its directory on the first of its Hosts that's connected. */
   const startIn = (project: ProjectSummary) => project.locations.find(({ hostId }) => model.hosts.some(({ id, status }) => id === hostId && status === 'connected'));
 
   return (
@@ -264,8 +279,8 @@ export function SessionList({ controller, sessions, selected, onOpen, onOpenHost
               value={query} onChange={(event) => setQuery(event.target.value)} />
           </div>
         )}
-        <Button size='icon' variant='ghost' aria-label='New thread' data-sidebar='header-action' className='ml-auto shrink-0'
-          disabled={!model.hosts.some(({ status }) => status === 'connected')} onClick={() => onNewThread()}>
+        <Button size='icon' variant='ghost' aria-label='New Session' title='New Session' data-sidebar='header-action' className='ml-auto shrink-0'
+          disabled={!model.hosts.some(({ status }) => status === 'connected')} onClick={() => onNewSession()}>
           <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
         </Button>
       </SidebarHeader>
@@ -301,7 +316,7 @@ export function SessionList({ controller, sessions, selected, onOpen, onOpenHost
           const location = startIn(project);
           return (
             <SidebarGroup key={project.id} role='group' aria-label={project.name} className='py-1.5'>
-              <ProjectHeading project={project} onNewThread={location ? () => onNewThread({ hostId: location.hostId, cwd: location.path }) : undefined} />
+              <ProjectHeading project={project} onNewSession={location ? () => onNewSession({ hostId: location.hostId, cwd: location.path }) : undefined} />
               <SidebarMenu className='gap-0.5'>{under.map((listedSession) => row(listedSession, true))}</SidebarMenu>
               {under.length === 0 && <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>No Sessions yet</p>}
             </SidebarGroup>
@@ -310,7 +325,7 @@ export function SessionList({ controller, sessions, selected, onOpen, onOpenHost
         {view.hosts.map(({ host, sessions: under }) => (
           <SidebarGroup key={host.id} role='group' aria-label={host.name} data-away={hostAway(host) || undefined}
             className={cn('py-1.5', hostAway(host) && 'opacity-60')}>
-            <HostHeading host={host} onNewThread={() => onNewThread({ hostId: host.id })} />
+            <HostHeading host={host} onNewSession={() => onNewSession({ hostId: host.id })} />
             {!hostAway(host) && host.status !== 'connected' && host.error && (
               <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>{host.error}</p>
             )}
@@ -322,7 +337,7 @@ export function SessionList({ controller, sessions, selected, onOpen, onOpenHost
             <EmptyHeader>
               <EmptyTitle>{query ? 'No matching Sessions' : 'No Sessions'}</EmptyTitle>
               <EmptyDescription>
-                {query ? 'Try another filter.' : 'A Session is a directory you work in. Start a thread in one with New thread.'}
+                {query ? 'Try another filter.' : 'A Session is a directory you work in. Start one with New Session.'}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

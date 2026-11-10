@@ -5780,10 +5780,12 @@ export interface UnwatchSessionsRequest {
   directory?: string | null;
 }
 /**
- * `sessions/end`: end the Session `directory` is in, forgetting its layout. Its threads and
- * terminals are left as they are, and a thread or terminal starting there later makes it
- * again. Refused while a thread in it runs a turn or waits on a request, or a terminal in it
- * runs a command (`session_busy`); `no_session` when it has none.
+ * `sessions/end`: end the Session `directory` is in, for good. The threads open in it close,
+ * as `thread/close` closes them, its terminals end, and its layout is forgotten: nothing brings
+ * it back, and a thread or terminal that starts there later makes a new one, with no layout.
+ * Its directory stays, a worktree too. Refused, with nothing closed, while a thread in it runs a
+ * turn or waits on a request, or a terminal in it runs a command (`session_busy`); `no_session`
+ * when it has none.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "EndSessionRequest".
@@ -8027,6 +8029,7 @@ export const HOST_PROTOCOL = {
     "turnIds": "turnIds",
     "otherHosts": "otherHosts",
     "mcpServers": "mcpServers",
+    "sessionsEnd": "sessions_end",
     "carry": "carry",
     "sessions": "sessions"
   },

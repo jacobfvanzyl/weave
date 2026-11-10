@@ -72,9 +72,14 @@ function PickerField({ id, icon, title, onOpen, children }: {
  * agent. In a git repository, on a Host that manages worktrees, it can start in another of its
  * worktrees, or in one it creates on a branch of its own.
  */
-export function NewThreadDialog({ controller, target, onClose, onCreated }: {
+export function NewThreadDialog({ controller, target, onClose, onCreated, session = false }: {
   controller: AppController;
   target?: NewThreadTarget;
+  /**
+   * Asked for as a new Session, from the list of Sessions: the same choices, named for what the
+   * person gets, the directory's Session with a thread to start it.
+   */
+  session?: boolean;
   onClose(): void;
   /** The thread it started, and the Session it's in, before it closes. */
   onCreated?(created: CreatedThread): void;
@@ -168,13 +173,15 @@ export function NewThreadDialog({ controller, target, onClose, onCreated }: {
     <Dialog open={target !== undefined} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className='w-[min(28rem,calc(100%-2rem))] max-w-none sm:max-w-md'>
         <DialogHeader>
-          <DialogTitle>{view === 'directory' ? 'Choose a directory' : view === 'worktree' ? 'Choose a worktree' : 'New thread'}</DialogTitle>
+          <DialogTitle>{view === 'directory' ? 'Choose a directory' : view === 'worktree' ? 'Choose a worktree' : session ? 'New Session' : 'New thread'}</DialogTitle>
           <DialogDescription>
             {view === 'directory'
               ? `Where the thread runs, on ${hostName}.`
               : view === 'worktree' && repository
                 ? `In ${directoryName(repository.repo)}, on ${hostName}.`
-                : 'An agent in a directory on one of your Hosts.'}
+                : session
+                  ? 'A directory on one of your Hosts, and an agent to start a thread in it. A directory that has a Session opens it.'
+                  : 'An agent in a directory on one of your Hosts.'}
           </DialogDescription>
         </DialogHeader>
         {view === 'directory' && (
@@ -195,7 +202,7 @@ export function NewThreadDialog({ controller, target, onClose, onCreated }: {
             onCancel={() => setView('form')}
           />
         )}
-        <form aria-label='New thread' className={cn('grid gap-3', view !== 'form' && 'hidden')} onSubmit={create}>
+        <form aria-label={session ? 'New Session' : 'New thread'} className={cn('grid gap-3', view !== 'form' && 'hidden')} onSubmit={create}>
           {model.hosts.length > 1 && (
             <div className='grid gap-1.5'>
               <Label htmlFor='new-thread-host'>Host</Label>

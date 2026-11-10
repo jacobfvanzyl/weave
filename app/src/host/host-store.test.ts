@@ -994,6 +994,35 @@ describe('HostStore Sessions', () => {
     store.stop();
   });
 
+  it('ends a Session on its Host, for good, and says why the Host wouldn’t', async () => {
+    const { host, kept } = sessionsHost({ revision: 2, layout: { version: 1, tabs: [{ id: 't' }] } });
+    const store = storeFor(host.socket);
+    await store.start();
+    store.actions.selectSession?.(KEY);
+    await settle();
+    // Only a Host whose `sessions/end` closes what's in the Session says so.
+    expect(store.snapshot().hosts[0].canEndSessions).toBeUndefined();
+    expect(store.snapshot().known).toHaveLength(1);
+    await store.actions.endSession?.(KEY);
+    expect(host.params['sessions/end']).toEqual([{ directory: '/work' }]);
+    // Gone here at once: off the list, and off the screen.
+    expect(store.snapshot().known).toEqual([]);
+    expect(store.snapshot().session).toBeUndefined();
+    expect(kept.revision).toBe(2);
+    store.stop();
+
+    const busy = scriptedHost(() => [], {
+      'host/hello': hello([HOST_PROTOCOL.features.sessions, HOST_PROTOCOL.features.sessionsEnd]),
+      'sessions/end': () => ({ error: { code: HOST_PROTOCOL.errors.sessionBusy, message: 'busy', data: { threads: [], terminals: ['t-1'] } } }),
+    });
+    const refused = storeFor(busy.socket);
+    await refused.start();
+    await settle();
+    expect(refused.snapshot().hosts[0].canEndSessions).toBe(true);
+    await expect(refused.actions.endSession?.(KEY)).rejects.toThrow('A terminal in it is running a command. Let it finish, or stop it, first.');
+    refused.stop();
+  });
+
   it("lists the person's Projects from a Dispatcher that keeps them", async () => {
     const host = scriptedHost(() => [], {
       'dispatcher/hello': () => ({ result: { protocol: DISPATCHER.protocol, version: '0', id: DISPATCHER_ID, device: { id: 'd-1', name: 'iPad' }, features: [DISPATCHER.features.projects] } }),

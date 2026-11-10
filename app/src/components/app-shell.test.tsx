@@ -92,12 +92,15 @@ describe('the list of Sessions', () => {
     expect(within(screen.getByRole('group', { name: 'build' })).getByText(/hasn't connected to the Dispatcher/)).toBeInTheDocument();
   });
 
-  it('starts a thread on a Host from its heading, which opens the directory’s Session with the thread in it', async () => {
+  it('starts a Session on a Host from its heading: a thread in a directory, which opens its Session with the thread in it', async () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
-    await user.click(screen.getByRole('button', { name: 'New thread on build' }));
-    const form = screen.getByRole('form', { name: 'New thread' });
+    // What adds to the list of Sessions says Session.
+    expect(screen.getByRole('button', { name: 'New Session' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'New Session on build' }));
+    expect(screen.getByRole('dialog', { name: 'New Session' })).toBeInTheDocument();
+    const form = screen.getByRole('form', { name: 'New Session' });
     await user.selectOptions(within(form).getByLabelText('Agent'), 'Codex');
     await user.click(within(form).getByRole('button', { name: 'Start' }));
     const thread = await screen.findByRole('region', { name: 'New thread' });
@@ -110,12 +113,12 @@ describe('the list of Sessions', () => {
 });
 
 describe('a Project', () => {
-  it('starts a thread in its directory from its heading, which shows in that Session', async () => {
+  it('starts a Session in its directory from its heading, which is the one that directory has', async () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
-    await user.click(screen.getByRole('button', { name: 'New thread in weave' }));
-    const form = screen.getByRole('form', { name: 'New thread' });
+    await user.click(screen.getByRole('button', { name: 'New Session in weave' }));
+    const form = screen.getByRole('form', { name: 'New Session' });
     expect(within(form).getByRole('button', { name: 'Directory' })).toHaveAttribute('title', '/Users/jaco/Documents/VeeZee/weave');
     await user.click(within(form).getByRole('button', { name: 'Start' }));
     const session = await screen.findByRole('region', { name: 'Session weave' });
@@ -123,6 +126,39 @@ describe('a Project', () => {
     const strip = within(session).getByRole('tablist', { name: 'Blocks in this pane' });
     await waitFor(() => expect(within(strip).getByRole('tab', { name: 'New thread' })).toHaveAttribute('aria-selected', 'true'));
     expect(within(strip).getAllByRole('tab')).toHaveLength(6);
+  });
+});
+
+describe('ending a Session', () => {
+  it('asks first, then it’s gone for good, with what was in it', async () => {
+    setIdiom('pad');
+    const user = userEvent.setup();
+    render(<MockApp />);
+    await user.click(tile(/^odin/));
+    expect(screen.getByRole('region', { name: 'Session odin' })).toBeInTheDocument();
+    await user.pointer({ keys: '[MouseRight]', target: tile(/^odin/) });
+    await user.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'End Session…' }));
+    const confirm = await screen.findByRole('alertdialog', { name: 'End odin?' });
+    expect(confirm).toHaveTextContent('This closes its open thread, ends its terminals and forgets its layout, for good');
+    await user.click(within(confirm).getByRole('button', { name: 'End Session' }));
+    // Off the list, and off the screen.
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^odin/ })).not.toBeInTheDocument());
+    expect(screen.queryByRole('region', { name: 'Session odin' })).not.toBeInTheDocument();
+    expect(screen.getByText('No Session open')).toBeInTheDocument();
+  });
+
+  it('says why not while something in it is running, and keeps it', async () => {
+    setIdiom('pad');
+    const user = userEvent.setup();
+    render(<MockApp />);
+    await user.pointer({ keys: '[MouseRight]', target: tile(/weave.*mac · main/) });
+    await user.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'End Session…' }));
+    const confirm = await screen.findByRole('alertdialog', { name: 'End weave (main)?' });
+    expect(confirm).toHaveTextContent('its 5 open threads');
+    await user.click(within(confirm).getByRole('button', { name: 'End Session' }));
+    expect(await within(confirm).findByText(/A thread in it is running a turn or waiting on you/)).toBeInTheDocument();
+    await user.click(within(confirm).getByRole('button', { name: 'Keep it' }));
+    expect(tile(/weave.*mac · main/)).toBeInTheDocument();
   });
 });
 
