@@ -241,6 +241,11 @@ impl Sessions {
         Ok(session)
     }
 
+    /// Whether there's a Session at `directory`.
+    pub(crate) fn has(&self, directory: &Path) -> bool {
+        lock(&self.state).records.contains_key(directory)
+    }
+
     /// End the Session at `directory`, and tell its watchers. Whether there was one.
     pub(crate) fn end(&self, directory: &Path) -> bool {
         self.end_where(|path| path == directory)

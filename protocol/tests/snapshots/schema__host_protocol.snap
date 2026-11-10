@@ -448,6 +448,7 @@ expression: schema()
       "turnIds": "turnIds",
       "otherHosts": "otherHosts",
       "mcpServers": "mcpServers",
+      "sessionsEnd": "sessions_end",
       "carry": "carry",
       "sessions": "sessions"
     },
@@ -8054,7 +8055,7 @@ expression: schema()
       "required": [
         "directory"
       ],
-      "description": "`sessions/end`: end the Session `directory` is in, forgetting its layout. Its threads and\nterminals are left as they are, and a thread or terminal starting there later makes it\nagain. Refused while a thread in it runs a turn or waits on a request, or a terminal in it\nruns a command (`session_busy`); `no_session` when it has none."
+      "description": "`sessions/end`: end the Session `directory` is in, for good. The threads open in it close,\nas `thread/close` closes them, its terminals end, and its layout is forgotten: nothing brings\nit back, and a thread or terminal that starts there later makes a new one, with no layout.\nIts directory stays, a worktree too. Refused, with nothing closed, while a thread in it runs a\nturn or waits on a request, or a terminal in it runs a command (`session_busy`); `no_session`\nwhen it has none."
     },
     "ReportThreadRequest": {
       "type": "object",

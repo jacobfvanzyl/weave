@@ -339,8 +339,6 @@ pub(crate) struct Shared {
 struct SessionThread {
     thread_id: ThreadId,
     last_activity: u64,
-    /// While it's open.
-    activity: Option<Activity>,
 }
 
 /// A drain before the Host stops.
@@ -753,20 +751,69 @@ impl Shared {
         (threads, self.terminals_in_session(directory, false))
     }
 
-    /// What in the Session at `directory` is busy: threads running a turn or waiting on a
-    /// request, and terminals running a command.
-    pub(crate) fn session_busy(&self, directory: &Path) -> (Vec<ThreadId>, Vec<String>) {
-        let threads = self
-            .threads_in_session(directory)
-            .into_iter()
-            .filter(|thread| {
-                thread
-                    .activity
-                    .is_some_and(|activity| activity != Activity::Idle)
-            })
-            .map(|thread| thread.thread_id)
+    /// Close what's in the Session at `directory` (symlinks resolved) before it ends
+    /// (`sessions/end`): refused, with nothing closed, while a thread in it runs a turn or waits
+    /// on a request, or a terminal in it runs a command; otherwise its terminals end and the
+    /// threads open in it close, blank ones included. Only what's in this Session: a directory
+    /// inside it that's another Session's, as a worktree nested in it, keeps its own.
+    pub(crate) async fn close_session(&self, directory: &Path) -> Result<(), Error> {
+        // Taken from the registry first, so it isn't held while directories are resolved.
+        let mut inside: Vec<(ThreadHandle, Summary)> = self
+            .registry()
+            .threads
+            .values()
+            .map(|thread| (thread.clone(), thread.summary()))
             .collect();
-        (threads, self.terminals_in_session(directory, true))
+        inside.retain(|(_, summary)| match &summary.git {
+            Some(git) => git.worktree == directory,
+            None => git::canonical(&summary.cwd) == directory,
+        });
+        let busy: Vec<ThreadId> = inside
+            .iter()
+            .filter(|(_, summary)| summary.activity != Activity::Idle)
+            .map(|(_, summary)| summary.thread_id.clone())
+            .collect();
+        let (terminals, busy_terminals): (Vec<String>, Vec<String>) = match &self.terminals {
+            Some(terminals) => {
+                terminals.ready().await;
+                let listed = terminals.list(directory);
+                let busy = listed
+                    .iter()
+                    .filter(|terminal| {
+                        terminal
+                            .command
+                            .as_ref()
+                            .is_some_and(|command| command.running)
+                    })
+                    .map(|terminal| terminal.id.clone())
+                    .collect();
+                (
+                    listed.into_iter().map(|terminal| terminal.id).collect(),
+                    busy,
+                )
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+        if !busy.is_empty() || !busy_terminals.is_empty() {
+            return Err(errors::session_busy(&busy, &busy_terminals));
+        }
+        if let Some(owner) = &self.terminals {
+            for id in &terminals {
+                // One that ended meanwhile is gone already.
+                let _ = owner.close(id).await;
+            }
+        }
+        for (thread, _) in inside {
+            // One that ended meanwhile is closed already.
+            let _ = thread
+                .finish(|done| Command::End {
+                    reason: "its Session ended".to_owned(),
+                    by: None,
+                    done,
+                })
+                .await;
+        }
+        Ok(())
     }
 
     /// Make the Session at `directory` if there's none, as a thread or terminal starts there.
@@ -809,7 +856,6 @@ impl Shared {
                     let thread = SessionThread {
                         thread_id: summary.thread_id,
                         last_activity: summary.last_activity_ms,
-                        activity: Some(summary.activity),
                     };
                     (thread, summary.cwd, summary.git)
                 });
@@ -821,7 +867,6 @@ impl Shared {
                     let thread = SessionThread {
                         thread_id: thread_id.clone(),
                         last_activity: recorded.last_activity_ms,
-                        activity: None,
                     };
                     (thread, recorded.cwd.clone(), recorded.git.clone())
                 });

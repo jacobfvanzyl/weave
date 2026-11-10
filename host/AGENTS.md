@@ -199,7 +199,9 @@ directory and written whole (not `sessions/`, which version 2 journals were move
 (`session_contents`), which are worked out on every answer rather than kept. A thread makes its
 directory's Session when it's first reported not blank (`Actor::update_summary`), a terminal as
 `terminals/new` starts it, and `sessions/set` when there's none. `worktrees/remove` and
-`worktrees/release` end the Sessions in the worktree (`Sessions::end_inside`), and ones whose
+`worktrees/release` end the Sessions in the worktree (`Sessions::end_inside`), `sessions/end`
+ends one for good, closing the threads open in it and ending its terminals first
+(`Shared::close_session`, which refuses while one is busy; feature `sessions_end`), and ones whose
 directory is gone end when the Host starts and when a client lists them. Take the Sessions' lock
 before the registry and the terminals' state, never while holding either. Tests: the `sessions`
 module of `tests/daemon.rs`.

@@ -5871,7 +5871,12 @@ mod sessions {
             .expect("answered");
         client.until_turn_ends(&mut Seen::default(), None).await;
 
-        // Then it ends, leaving its thread open.
+        // A directory inside it is another Session's, with a thread of its own.
+        let inner = dir.join("inner");
+        std::fs::create_dir(&inner).expect("a directory");
+        let inner_thread = client.thread_in(&world, &inner).await.thread_id;
+
+        // Then it ends for good, and its thread closes with it.
         client.connection.send(end()).await.expect("sessions/end");
         assert!(errors::is(
             &client.session(&dir).await.expect_err("ended"),
@@ -5881,13 +5886,33 @@ mod sessions {
         assert!(errors::is(&again, errors::NO_SESSION));
         let listed = client
             .connection
-            .send(ListThreadsRequest {
-                cwd: Some(dir.clone()),
-                ..ListThreadsRequest::default()
-            })
+            .send(ListThreadsRequest::default())
             .await
             .expect("threads/list")
             .threads;
-        assert_eq!(listed[0].state, ThreadStatus::Open);
+        let state = |thread_id: &ThreadId| {
+            listed
+                .iter()
+                .find(|listing| listing.info.session_id.to_string() == thread_id.to_string())
+                .map(|listing| listing.state)
+        };
+        assert_eq!(state(&thread_id), Some(ThreadStatus::Closed));
+        // The Session inside it keeps its thread, and itself.
+        assert_eq!(state(&inner_thread), Some(ThreadStatus::Open));
+        assert_eq!(
+            client
+                .session(&inner)
+                .await
+                .expect("its own Session")
+                .threads,
+            vec![inner_thread.clone()]
+        );
+
+        // A thread that starts there later makes a new Session, with nothing of the one that ended.
+        let later = client.thread_in(&world, &dir).await.thread_id;
+        let made = client.session(&dir).await.expect("a new Session");
+        assert_eq!(made.revision, 0);
+        assert_eq!(made.layout, None);
+        assert!(made.threads.contains(&later), "{:?}", made.threads);
     }
 }

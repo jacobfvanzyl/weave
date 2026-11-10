@@ -303,6 +303,7 @@ fn schema() -> Value {
                 "turnIds": turns::TURN_IDS_FEATURE,
                 "otherHosts": threads::OTHER_HOSTS_FEATURE,
                 "mcpServers": mcp::FEATURE,
+                "sessionsEnd": sessions::END_FEATURE,
                 "carry": dispatcher::CARRY_FEATURE,
                 "sessions": sessions::FEATURE,
             },

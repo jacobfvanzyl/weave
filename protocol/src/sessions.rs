@@ -30,6 +30,10 @@ use crate::worktrees::GitLocation;
 /// The Host offers the `sessions/*` methods, in `features`.
 pub const FEATURE: &str = "sessions";
 
+/// The Host's `sessions/end` closes what's in the Session, in `features`: a Host from before it
+/// only forgot the Session's layout, leaving its threads and terminals without one.
+pub const END_FEATURE: &str = "sessions_end";
+
 /// The largest layout document the Host keeps, serialized: far more than any layout needs.
 pub const MAX_LAYOUT: usize = 1024 * 1024;
 
@@ -152,10 +156,12 @@ pub struct UnwatchSessionsRequest {
     pub directory: Option<PathBuf>,
 }
 
-/// `sessions/end`: end the Session `directory` is in, forgetting its layout. Its threads and
-/// terminals are left as they are, and a thread or terminal starting there later makes it
-/// again. Refused while a thread in it runs a turn or waits on a request, or a terminal in it
-/// runs a command (`session_busy`); `no_session` when it has none.
+/// `sessions/end`: end the Session `directory` is in, for good. The threads open in it close,
+/// as `thread/close` closes them, its terminals end, and its layout is forgotten: nothing brings
+/// it back, and a thread or terminal that starts there later makes a new one, with no layout.
+/// Its directory stays, a worktree too. Refused, with nothing closed, while a thread in it runs a
+/// turn or waits on a request, or a terminal in it runs a command (`session_busy`); `no_session`
+/// when it has none.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "sessions/end", response = crate::Empty)]

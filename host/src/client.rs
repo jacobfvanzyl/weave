@@ -94,6 +94,7 @@ use weave_host_protocol::queue::QueuePause;
 use weave_host_protocol::queue::RemoveQueuedRequest;
 use weave_host_protocol::queue::RemoveQueuedResponse;
 use weave_host_protocol::queue::ResumeQueueRequest;
+use weave_host_protocol::sessions::END_FEATURE as SESSIONS_END_FEATURE;
 use weave_host_protocol::sessions::EndSessionRequest;
 use weave_host_protocol::sessions::FEATURE as SESSIONS_FEATURE;
 use weave_host_protocol::sessions::GetSessionRequest;
@@ -1092,6 +1093,7 @@ impl Connection {
                 MCP_SERVERS_FEATURE.to_owned(),
                 CARRY_FEATURE.to_owned(),
                 SESSIONS_FEATURE.to_owned(),
+                SESSIONS_END_FEATURE.to_owned(),
             ]
             .into_iter()
             .chain(
@@ -1472,7 +1474,8 @@ impl Connection {
         Ok(SessionResponse { session })
     }
 
-    /// `sessions/end`: forget the Session the directory is in, unless something in it is busy.
+    /// `sessions/end`: end the Session the directory is in, for good, unless something in it
+    /// is busy: its threads close, its terminals end, and it's forgotten.
     async fn end_session(&self, request: EndSessionRequest) -> Result<Empty, Error> {
         self.hello_info()?;
         let shared = &self.shared;
@@ -1481,13 +1484,11 @@ impl Connection {
             Ok((directory, _)) => directory,
             Err(_) => git::canonical(&request.directory),
         };
-        let (threads, terminals) = shared.session_busy(&directory);
-        if !threads.is_empty() || !terminals.is_empty() {
-            return Err(errors::session_busy(&threads, &terminals));
-        }
-        if !shared.sessions.end(&directory) {
+        if !shared.sessions.has(&directory) {
             return Err(errors::no_session(&directory));
         }
+        shared.close_session(&directory).await?;
+        shared.sessions.end(&directory);
         Ok(Empty {})
     }
 
