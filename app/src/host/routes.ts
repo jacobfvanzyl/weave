@@ -38,6 +38,12 @@ export type Routes = {
     /** Its socket, said hello to with `local`. */
     connector: Connector;
   };
+  /**
+   * Where the page opens a WebSocket for one terminal's stream on `hostId`, already carried to
+   * the Host (or on this computer's own Host's terminal socket, `local`): only where the device's
+   * core opens connections, the Mac. Elsewhere the terminal carries its stream itself.
+   */
+  terminalStream?(options: { hostId: string; local: boolean }): Promise<string>;
 };
 
 /** How a Host's connection says hello, by route. */

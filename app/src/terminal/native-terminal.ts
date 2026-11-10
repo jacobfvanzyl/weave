@@ -43,7 +43,7 @@ export type NativeTerminalBridge = {
    * the device with the Keychain key `carry.keyId` names, asks `hosts/open` for `carry.host`'s
    * terminal stream, then opens it with `ticket`.
    */
-  attach(input: { surfaceId: string } & TerminalTicket): Promise<void>;
+  attach(input: { surfaceId: string } & Required<TerminalTicket>): Promise<void>;
   detach(input: { surfaceId: string }): Promise<void>;
   setFontSize(input: { surfaceId: string; fontSize: number }): Promise<{ cols: number; rows: number; fontSize: number }>;
   focus(input: { surfaceId: string }): Promise<void>;

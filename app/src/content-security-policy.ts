@@ -6,14 +6,16 @@
  */
 export const contentSecurityPolicy = [
   "default-src 'self'",
-  "script-src 'self'",
+  // The Mac's terminals are libghostty-vt in WebAssembly, the app's own module (WVE-205).
+  "script-src 'self' 'wasm-unsafe-eval'",
   // Mermaid's SVG carries a `<style>`, and Streamdown and KaTeX set inline styles.
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "media-src 'self' data: blob:",
   "font-src 'self' data:",
   // The Dispatcher is paired by address, so any WebSocket. On the Mac, the page reaches its Rust
-  // core over Tauri's IPC, which isn't the network (ADR 0032).
+  // core over Tauri's IPC, which isn't the network (ADR 0032), and each terminal's stream on a
+  // WebSocket the core offers it on this computer.
   "connect-src 'self' ws: wss: ipc: http://ipc.localhost",
   "object-src 'none'",
   "base-uri 'none'",

@@ -38,6 +38,8 @@ use weave_host_protocol::hello::HelloResponse;
 use crate::relay::Pipe;
 use crate::relay::Relay;
 use crate::relay::Sink;
+use crate::terminals::Streams;
+use crate::terminals::Target;
 
 /// JSON-RPC's own code for a method the other side doesn't have.
 const METHOD_NOT_FOUND: i32 = -32601;
@@ -57,7 +59,7 @@ pub struct Failure {
 }
 
 impl Failure {
-    fn new(kind: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(kind: &'static str, message: impl Into<String>) -> Self {
         Self {
             kind,
             message: message.into(),
@@ -176,6 +178,8 @@ pub struct Core {
     client: ClientInfo,
     /// This Mac's Host's socket; none where there's no home directory.
     socket: Option<PathBuf>,
+    /// The terminals' streams the page opens for itself ([`crate::terminals`]).
+    streams: Streams,
 }
 
 impl Core {
@@ -184,11 +188,42 @@ impl Core {
             relay: Arc::default(),
             client,
             socket,
+            streams: Streams::new(false),
         }
+    }
+
+    /// Takes terminals' streams from Vite's pages on this computer too, as under `tauri dev`.
+    #[must_use]
+    pub fn in_development(mut self, dev: bool) -> Self {
+        self.streams = Streams::new(dev);
+        self
     }
 
     pub fn relay(&self) -> &Arc<Relay> {
         &self.relay
+    }
+
+    pub fn streams(&self) -> &Streams {
+        &self.streams
+    }
+
+    pub(crate) fn client(&self) -> &ClientInfo {
+        &self.client
+    }
+
+    /// This Mac's Host's terminal socket, beside its own (`weave_host::DaemonPaths`).
+    pub(crate) fn terminal_socket(&self) -> Option<PathBuf> {
+        Some(self.socket.as_ref()?.with_file_name("terminals.sock"))
+    }
+
+    /// Where the page opens a WebSocket of its own, soon, for a terminal's stream: this Mac's
+    /// Host's, or with `host` the one the Dispatcher carries to that Host. The page says the
+    /// stream's `Open` there, with the ticket `terminals/attach` gave it on that Host.
+    pub fn offer_terminal_stream(&self, host: Option<&str>) -> Result<String, Failure> {
+        self.streams.offer(match host {
+            Some(host) => Target::Host(host.to_owned()),
+            None => Target::Local,
+        })
     }
 
     /// The Dispatcher this computer is paired with, if it is.
@@ -302,7 +337,7 @@ impl Core {
         Ok(OpenedDispatcher { id, hello })
     }
 
-    fn via(&self) -> Result<Via, Failure> {
+    pub(crate) fn via(&self) -> Result<Via, Failure> {
         let paired = paired::load()
             .map_err(|error| Failure::new("connection", error.to_string()))?
             .ok_or_else(Failure::unpaired)?;

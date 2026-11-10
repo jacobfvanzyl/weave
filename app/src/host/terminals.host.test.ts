@@ -89,6 +89,7 @@ describe.skipIf(!devHostHasTerminals())('terminals through the Host store with a
     // so the restore is the formatter's VT, at the size the stream opened with.
     const { url, ticket, carry } = await store.actions.attachTerminal(id);
     expect(url).toBe(dispatcher.url);
+    if (!carry) throw new Error('The Dispatcher carries the stream on every device but the Mac.');
     expect(carry.host).toBe(paired.id);
     const socket = new WebSocket(url, DISPATCHER.carrySubprotocol);
     socket.binaryType = 'arraybuffer';

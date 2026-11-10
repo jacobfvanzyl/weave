@@ -186,13 +186,15 @@ export type TerminalSummary = {
  * Where a terminal's stream is, and a ticket for it, good once and for a little while. The
  * Dispatcher carries the stream as it carries the Host's connection (ADR 0030): the native
  * terminal proves the device with the key `keyId` names and names the Host, then opens the stream
- * with the ticket, which is this device's.
+ * with the ticket, which is this device's. On the Mac the app's core has done that already, or
+ * reached this Mac's Host on its socket: `url` is the stream itself, good once, and there's
+ * nothing to carry (ADR 0032, WVE-205).
  */
 export type TerminalTicket = {
-  /** The Dispatcher's WebSocket. */
+  /** The Dispatcher's WebSocket, or on the Mac one its core offers for this stream alone. */
   url: string;
   ticket: string;
-  carry: { dispatcherId: string; deviceId: string; keyId: string; host: string };
+  carry?: { dispatcherId: string; deviceId: string; keyId: string; host: string };
 };
 
 /** The thread on screen. */

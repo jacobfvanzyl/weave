@@ -17,7 +17,7 @@ export type CommandSpec = {
   group: CommandGroup;
   /**
    * Its key: `Mod` is ⌘ on Apple's devices and Ctrl elsewhere, then `Alt` and `Shift`, then a
-   * letter, a digit, `[`, `]`, `Enter`, or `Left`, `Right`, `Up`, `Down`.
+   * letter, a digit, `[`, `]`, `=`, `-`, `Enter`, or `Left`, `Right`, `Up`, `Down`.
    */
   keys?: string;
 };
@@ -41,6 +41,9 @@ export const COMMANDS = [
   spec('block.minimize', 'Minimize', 'Block'),
   spec('block.toNewTab', 'Move to a New Tab', 'Block'),
   spec('block.close', 'Close', 'Block', 'Mod+W'),
+  spec('terminal.larger', 'Larger Terminal Text', 'Block', 'Mod+='),
+  spec('terminal.smaller', 'Smaller Terminal Text', 'Block', 'Mod+-'),
+  spec('terminal.actualSize', 'Actual Terminal Text Size', 'Block', 'Mod+0'),
   spec('tab.next', 'Next Tab', 'Go', 'Mod+Shift+]'),
   spec('tab.previous', 'Previous Tab', 'Go', 'Mod+Shift+['),
   spec('block.focusLeft', 'Focus the Block to the Left', 'Go', 'Mod+Alt+Left'),
@@ -117,6 +120,8 @@ export const appleKeys = (platform = globalThis.navigator?.platform ?? '') => /M
 const CODES: Record<string, string> = {
   BracketLeft: '[',
   BracketRight: ']',
+  Equal: '=',
+  Minus: '-',
   Enter: 'Enter',
   NumpadEnter: 'Enter',
   ArrowLeft: 'Left',

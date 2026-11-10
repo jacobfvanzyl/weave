@@ -10,12 +10,13 @@ const directives = new Map(
 
 describe('contentSecurityPolicy', () => {
   it('loads nothing from another address, so nothing an agent names can be fetched', () => {
-    for (const directive of ['default-src', 'script-src', 'style-src', 'img-src', 'media-src', 'font-src']) {
+    for (const directive of ['default-src', 'style-src', 'img-src', 'media-src', 'font-src']) {
       for (const source of directives.get(directive) ?? []) {
         expect(["'self'", "'unsafe-inline'", 'data:', 'blob:'], `${directive} ${source}`).toContain(source);
       }
     }
-    expect(directives.get('script-src')).toEqual(["'self'"]);
+    // The app's own scripts, and its own WebAssembly: the Mac's terminals (WVE-205).
+    expect(directives.get('script-src')).toEqual(["'self'", "'wasm-unsafe-eval'"]);
     expect(directives.get('object-src')).toEqual(["'none'"]);
   });
 

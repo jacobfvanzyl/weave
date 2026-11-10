@@ -2,7 +2,7 @@
 // in one place beside `AppController`. The iPad and iPhone run in Capacitor, the Mac in Tauri,
 // and a browser runs the page alone, for development and with `?mock=`. A shell answers for the
 // device's key and pairing, how it reaches the Dispatcher and the Hosts (the Mac's own Host
-// among them), whether it draws terminals, and where its command keys come from.
+// among them), how it draws terminals, and where its command keys come from.
 import { Clipboard } from '@capacitor/clipboard';
 import { Capacitor } from '@capacitor/core';
 import { clipboardWrite } from '@/host/client-tools';
@@ -11,7 +11,8 @@ import { type DeviceKey, nativeDeviceKey, webCryptoDeviceKey } from '@/host/devi
 import type { HostStoreOptions } from '@/host/host-store';
 import { HOST_PROTOCOL } from '@/host/protocol';
 import { preferencesStorage } from '@/host/storage';
-import { MAC_KEY, macKey, macRoutes, macStorage, onMac } from '@/mac/routes';
+import { macNotify } from '@/mac/notify';
+import { MAC_KEY, macKey, macRoutes, macStorage, onMac, tauriCore } from '@/mac/routes';
 
 /** What the store needs of the device: its pairing, its key, its routes and its client tools. */
 export type DeviceStore = Pick<HostStoreOptions, 'storage' | 'keyFor' | 'newKey' | 'socket' | 'routes' | 'clientTools' | 'deviceName'>;
@@ -20,11 +21,12 @@ export type Platform = {
   /** The shell: Capacitor on the iPad and iPhone, Tauri on the Mac, or a browser alone. */
   kind: 'ios' | 'mac' | 'web';
   /**
-   * Whether it draws terminals (ADR 0022): natively beneath the page on the iPad and iPhone.
-   * Elsewhere a terminal's Block says what it is and what runs in it; the Mac draws them from
-   * WVE-205.
+   * How it draws terminals (ADR 0022): natively beneath the page on the iPad and iPhone
+   * (`native`), or in the page itself, with libghostty-vt in WebAssembly, on the Mac (`page`,
+   * WVE-205). In a browser alone a terminal's Block says what it is and what runs in it
+   * (`text`).
    */
-  drawsTerminals: boolean;
+  terminals: 'native' | 'page' | 'text';
   /**
    * Where a hardware keyboard's command keys come from: the page hears them itself, or the
    * Mac's menu bar has them and runs the command in the page.
@@ -37,25 +39,39 @@ export type Platform = {
   localHost: boolean;
   /** How many windows the app may have: one on every device, until the Mac's shell takes more. */
   windows: 'one';
+  /**
+   * Puts text on the device's clipboard without the person's tap or key, as an agent's call or
+   * a terminal's program (OSC 52) needs: the native clipboard, or on the Mac its core's.
+   */
+  writeClipboard(text: string): Promise<void>;
+  /** Shows a notification that isn't a thread's, as a terminal's program asks: the Mac's, while the app isn't in front. */
+  notify?(notice: { title: string; body: string }): void;
   /** The device's side of the store: made once, when the app starts. */
   store(): DeviceStore;
 };
 
 const clipboard = (write: (text: string) => Promise<void>) => ({ [HOST_PROTOCOL.clientTools.clipboardWrite]: clipboardWrite(write) });
 
+// The web view lets a page write only while the person is clicking or typing in it.
+const macClipboard = (text: string) => tauriCore.invoke<void>('clipboard_write', { text });
+// The native plugin writes without a tap first.
+const nativeClipboard = (text: string) => Clipboard.write({ string: text });
+
 /** The Mac: its core holds the key and reaches everything, with the pairing the computer's CLI shares. */
 const mac: Platform = {
   kind: 'mac',
-  drawsTerminals: false,
+  terminals: 'page',
   keys: 'menu',
   localHost: true,
   windows: 'one',
+  notify: macNotify,
+  writeClipboard: macClipboard,
   store: () => ({
     storage: macStorage(),
     keyFor: () => macKey,
     newKey: async () => ({ keyId: MAC_KEY, key: macKey }),
     routes: macRoutes(),
-    clientTools: clipboard((text) => navigator.clipboard.writeText(text)),
+    clientTools: clipboard(macClipboard),
     deviceName: 'Mac',
   }),
 };
@@ -63,10 +79,11 @@ const mac: Platform = {
 /** The iPad and iPhone: the key in the Secure Enclave, the pairing in the app's preferences. */
 const ios: Platform = {
   kind: 'ios',
-  drawsTerminals: true,
+  terminals: 'native',
   keys: 'page',
   localHost: false,
   windows: 'one',
+  writeClipboard: nativeClipboard,
   store: () => ({
     storage: preferencesStorage,
     keyFor: (keyId) => nativeDeviceKey(keyId),
@@ -75,8 +92,7 @@ const ios: Platform = {
       return { keyId, key: nativeDeviceKey(keyId) };
     },
     socket: (url, subprotocol) => websocketConnector(url, subprotocol),
-    // The native plugin writes without a tap first, as an agent's call needs.
-    clientTools: clipboard((text) => Clipboard.write({ string: text })),
+    clientTools: clipboard(nativeClipboard),
     deviceName: document.documentElement.dataset.deviceIdiom === 'phone' ? 'iPhone' : 'iPad',
   }),
 };
@@ -91,10 +107,11 @@ const lostKey = (): DeviceKey => ({
 
 const web: Platform = {
   kind: 'web',
-  drawsTerminals: false,
+  terminals: 'text',
   keys: 'page',
   localHost: false,
   windows: 'one',
+  writeClipboard: nativeClipboard,
   store: () => ({
     storage: preferencesStorage,
     keyFor: (keyId) => browserKeys.get(keyId) ?? lostKey(),
@@ -105,7 +122,7 @@ const web: Platform = {
       return { keyId, key };
     },
     socket: (url, subprotocol) => websocketConnector(url, subprotocol),
-    clientTools: clipboard((text) => Clipboard.write({ string: text })),
+    clientTools: clipboard(nativeClipboard),
     deviceName: 'Browser',
   }),
 };

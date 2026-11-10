@@ -104,6 +104,16 @@ describe("the Mac's routes", () => {
     expect(calls[0]).toMatchObject({ command: 'pair_dispatcher', args: { url: 'wss://d', code: 'ABC', name: 'Mac' } });
   });
 
+  it("ask the core where a terminal's stream is: this Mac's Host's, or another's by its id", async () => {
+    const { core, calls } = fakeCore({ terminal_stream: () => 'ws://127.0.0.1:4000/key' });
+    const routes = macRoutes(core);
+    expect(await routes.terminalStream?.({ hostId: 'h-mac', local: true })).toBe('ws://127.0.0.1:4000/key');
+    expect(await routes.terminalStream?.({ hostId: 'h-lab', local: false })).toBe('ws://127.0.0.1:4000/key');
+    expect(calls.map(({ args }) => args)).toEqual([{ host: null }, { host: 'h-lab' }]);
+    const refusing = macRoutes(fakeCore({ terminal_stream: () => { throw { kind: 'connection', message: "The app isn't listening." }; } }).core);
+    await expect(refusing.terminalStream?.({ hostId: 'h-mac', local: true })).rejects.toMatchObject({ kind: 'connection', message: "The app isn't listening." });
+  });
+
   it("find this Mac's Host, if one answers", async () => {
     expect(await macRoutes(fakeCore({ local_host: () => ({ hostId: 'h-mac' }) }).core).local?.find()).toBe('h-mac');
     expect(await macRoutes(fakeCore({ local_host: () => null }).core).local?.find()).toBeUndefined();

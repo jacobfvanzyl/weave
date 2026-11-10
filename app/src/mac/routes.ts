@@ -135,6 +135,10 @@ export const macRoutes = (core: Core = tauriCore): Routes => {
       find: async () => (await core.invoke<{ hostId: string } | null>('local_host'))?.hostId,
       connector: relayed(core, (channel) => core.invoke('open_local', { channel })),
     },
+    // The core listens on a loopback port for the page's streams, and passes each through.
+    terminalStream: ({ hostId, local }) => core.invoke<string>('terminal_stream', { host: local ? null : hostId }).catch((error) => {
+      throw failed(error);
+    }),
   };
 };
 

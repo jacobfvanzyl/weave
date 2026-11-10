@@ -3,7 +3,9 @@
 //! pairing. The Dispatcher's WebSocket is on a free loopback port with `--url` set, so pairing
 //! turns it on without a Tailscale Serve entry, as the app's `*.host.test.ts` do.
 //!
-//! Build the binaries first, or this skips: `(cd ../.. && cargo build -p weave-cli)`.
+//! Build the binaries first, or this skips: `(cd ../.. && cargo build -p weave-cli)`. With
+//! `weave-holder` built too (`-p weave-holder`), the dev Host has terminals, and the test opens
+//! their streams as the page does.
 //!
 //! One test, its steps in order: the core's pairing is the process's `XDG_STATE_HOME`, which
 //! only one test may set.
@@ -14,18 +16,24 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use futures::SinkExt as _;
+use futures::StreamExt as _;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use tokio::process::Child;
 use tokio::process::Command;
 use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use weave_app::core::Core;
 use weave_app::relay::Incoming;
 use weave_app::relay::Sink;
+use weave_app::terminals;
 use weave_host_protocol::hello::ClientInfo;
 
 const WAIT: Duration = Duration::from_secs(20);
@@ -113,6 +121,78 @@ impl Page {
             }
         }
     }
+}
+
+type Stream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// The page's WebSocket at an address the core offered, or how the core refused it.
+async fn page_socket(url: &str, origin: Option<&str>, subprotocol: &str) -> Result<Stream, String> {
+    let mut request = url.into_client_request().expect("a request");
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        subprotocol.parse().expect("a subprotocol"),
+    );
+    if let Some(origin) = origin {
+        request
+            .headers_mut()
+            .insert("Origin", origin.parse().expect("an origin"));
+    }
+    tokio_tungstenite::connect_async(request)
+        .await
+        .map(|(socket, _)| socket)
+        .map_err(|error| error.to_string())
+}
+
+/// Opens the stream with `ticket`, types a command, and waits for what it prints: the restore
+/// and the output arrive as binary frames, the page's keys go as one.
+async fn types_in_a_terminal(mut socket: Stream, ticket: &str) -> Stream {
+    let open = json!({"ticket": ticket, "size": {"cols": 70, "rows": 20}, "codec": "a test's"});
+    socket
+        .send(Message::Text(open.to_string().into()))
+        .await
+        .expect("sent");
+    let mut opened = false;
+    let mut typed = false;
+    let mut restore = 0_u64;
+    let mut output = String::new();
+    let deadline = Instant::now() + WAIT;
+    while !output.contains("hi-42") {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let message = tokio::time::timeout(left, socket.next())
+            .await
+            .expect("the terminal's output")
+            .expect("the stream to stay open")
+            .expect("a frame");
+        match message {
+            Message::Text(text) => {
+                let message: Value = serde_json::from_str(&text).expect("JSON");
+                if !opened {
+                    assert_eq!(message["restore"], json!("vt"));
+                    assert_eq!(message["terminal"]["size"], json!({"cols": 70, "rows": 20}));
+                    restore = message["restoreBytes"].as_u64().expect("a length");
+                    opened = true;
+                }
+            }
+            Message::Binary(bytes) => match bytes.first() {
+                Some(0x01) => restore = restore.saturating_sub(bytes.len() as u64 - 1),
+                Some(0x03) => output.push_str(&String::from_utf8_lossy(&bytes[1..])),
+                other => panic!("a frame of kind {other:?}"),
+            },
+            Message::Close(frame) => panic!("the stream closed: {frame:?}"),
+            _ => {}
+        }
+        if opened && restore == 0 && !typed {
+            let mut input = vec![0x10];
+            input.extend_from_slice(b"echo hi-$((6*7))\r");
+            socket
+                .send(Message::Binary(input.into()))
+                .await
+                .expect("sent");
+            typed = true;
+        }
+    }
+    socket
 }
 
 fn request(id: u64, method: &str, params: Value) -> String {
@@ -225,13 +305,13 @@ async fn the_core_relays_this_macs_host_and_the_hosts_the_dispatcher_carries() {
     // The core's own pairing, where `paired` keeps it.
     // SAFETY: this is the only test in this binary, and nothing else reads the environment yet.
     unsafe { std::env::set_var("XDG_STATE_HOME", dev.root.path().join("mac")) };
-    let core = Core::new(
+    let core = Arc::new(Core::new(
         ClientInfo {
             name: "weave-app-test".to_owned(),
             version: "0".to_owned(),
         },
         Some(dev.daemon().join("daemon.sock")),
-    );
+    ));
 
     // This Mac's Host, over its socket: the core finds its id, and relays the page's hello.
     let local = core
@@ -317,6 +397,155 @@ async fn the_core_relays_this_macs_host_and_the_hosts_the_dispatcher_carries() {
         .await
         .expect_err("refused");
     assert_eq!(unknown.kind, "unavailable");
+
+    // Terminals' streams: the page opens a WebSocket of its own for each, at an address the
+    // core offers it once, and speaks the stream on it. This Mac's Host's goes to its terminal
+    // socket; another's through the Dispatcher, as the device the core proves.
+    if weave().with_file_name("weave-holder").exists() {
+        assert_eq!(
+            core.offer_terminal_stream(None)
+                .expect_err("not listening yet")
+                .kind,
+            "connection"
+        );
+        let address = terminals::listen(&core).expect("a loopback port");
+        assert!(address.ip().is_loopback());
+        let directory = dev.root.path().display().to_string();
+        core.relay()
+            .send(
+                id,
+                request(2, "terminals/new", json!({"directory": directory})),
+            )
+            .expect("sent");
+        let terminal = local_page.answer(2).await["result"]["terminal"]["id"]
+            .as_str()
+            .expect("a terminal")
+            .to_owned();
+
+        // Only at an address offered, once, and only from the app's own page.
+        let offered = core.offer_terminal_stream(None).expect("an address");
+        assert!(offered.starts_with(&format!("ws://{address}/")));
+        let elsewhere = format!("ws://{address}/{}", "0".repeat(64));
+        assert!(
+            page_socket(&elsewhere, None, "weave-terminal")
+                .await
+                .is_err()
+        );
+        let other_page = core.offer_terminal_stream(None).expect("an address");
+        assert!(
+            page_socket(&other_page, Some("https://example.com"), "weave-terminal")
+                .await
+                .is_err()
+        );
+        let not_a_stream = core.offer_terminal_stream(None).expect("an address");
+        assert!(
+            page_socket(&not_a_stream, Some("tauri://localhost"), "something-else")
+                .await
+                .is_err()
+        );
+
+        // This Mac's Host's, with the ticket its socket gave.
+        core.relay()
+            .send(id, request(3, "terminals/attach", json!({"id": terminal})))
+            .expect("sent");
+        let ticket = local_page.answer(3).await["result"]["ticket"]
+            .as_str()
+            .expect("a ticket")
+            .to_owned();
+        let socket = page_socket(&offered, Some("tauri://localhost"), "weave-terminal")
+            .await
+            .expect("the stream");
+        assert!(
+            page_socket(&offered, Some("tauri://localhost"), "weave-terminal")
+                .await
+                .is_err(),
+            "an address is good once"
+        );
+        let mut local_stream = types_in_a_terminal(socket, &ticket).await;
+        assert_eq!(core.streams().len(), 1);
+
+        // The same terminal through the Dispatcher: the ticket is the carried connection's
+        // device's, which the stream's is too.
+        core.relay()
+            .send(
+                carried_id,
+                request(2, "terminals/attach", json!({"id": terminal})),
+            )
+            .expect("sent");
+        let ticket = carried.answer(2).await["result"]["ticket"]
+            .as_str()
+            .expect("a ticket")
+            .to_owned();
+        let offered = core
+            .offer_terminal_stream(Some(&local.host_id))
+            .expect("an address");
+        let socket = page_socket(&offered, Some("tauri://localhost"), "weave-terminal")
+            .await
+            .expect("the stream");
+        let carried_stream = types_in_a_terminal(socket, &ticket).await;
+        assert_eq!(core.streams().len(), 2);
+        drop(carried_stream);
+
+        // A ticket that isn't the Host's: its close, with its code, reaches the page.
+        let offered = core.offer_terminal_stream(None).expect("an address");
+        let mut refused = page_socket(&offered, None, "weave-terminal")
+            .await
+            .expect("the stream");
+        let open =
+            json!({"ticket": "nonsense", "size": {"cols": 70, "rows": 20}, "codec": "a test's"});
+        refused
+            .send(Message::Text(open.to_string().into()))
+            .await
+            .expect("sent");
+        let closed = loop {
+            match tokio::time::timeout(WAIT, refused.next())
+                .await
+                .expect("a close")
+            {
+                Some(Ok(Message::Close(frame))) => break frame.map(|frame| u16::from(frame.code)),
+                Some(Ok(_)) => {}
+                other => panic!("the stream ended without a close: {other:?}"),
+            }
+        };
+        assert_eq!(closed, Some(4010));
+
+        // A Host the Dispatcher doesn't have: the page hears why as the stream closes.
+        let offered = core
+            .offer_terminal_stream(Some("no-such-host"))
+            .expect("an address");
+        let mut nowhere = page_socket(&offered, None, "weave-terminal")
+            .await
+            .expect("the stream");
+        match tokio::time::timeout(WAIT, nowhere.next())
+            .await
+            .expect("a close")
+        {
+            Some(Ok(Message::Close(Some(frame)))) => assert_eq!(u16::from(frame.code), 1011),
+            other => panic!("expected a close with why, got {other:?}"),
+        }
+
+        // The page loading again: its streams go, and the keys it hadn't used.
+        let unused = core.offer_terminal_stream(None).expect("an address");
+        core.streams().close_all();
+        until("the streams to end", async || core.streams().is_empty()).await;
+        assert!(page_socket(&unused, None, "weave-terminal").await.is_err());
+        assert!(
+            tokio::time::timeout(WAIT, async {
+                while let Some(Ok(_)) = local_stream.next().await {}
+            })
+            .await
+            .is_ok(),
+            "the page's socket ends with its stream"
+        );
+        core.relay()
+            .send(id, request(4, "terminals/close", json!({"id": terminal})))
+            .expect("sent");
+        local_page.answer(4).await;
+    } else {
+        eprintln!(
+            "skipped terminals: build the holder, `(cd ../.. && cargo build -p weave-holder)`"
+        );
+    }
 
     // The page closing a connection: the core lets it go, and the page hears nothing more.
     let open = core.relay().len();

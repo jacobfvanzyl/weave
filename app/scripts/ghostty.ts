@@ -2,6 +2,11 @@
 // into the iOS project's ignored `ios/App/Native/`, for the native terminal (ADR 0022, WVE-153).
 //
 //   bun scripts/ghostty.ts
+//   bun scripts/ghostty.ts web
+//
+// `web` instead builds the terminal the Mac's page draws with (WVE-205): libghostty-vt for
+// wasm32 linked with `wasm/terminal.c`, into the ignored `src/terminal/web/generated/`, with the
+// same fonts.
 //
 // They come from the Ghostty commit `../holder/ghostty.toml` pins, as weave-holder's do, so the
 // app's snapshots decode the holder's: built once per pin into the cache weave-holder's build.rs
@@ -76,6 +81,81 @@ const zig = async (cache: string) => {
   return join(dir, 'zig');
 };
 
+/** Ghostty's source at the pinned commit, fetched alone into `src`. */
+const fetchSource = async (src: string) => {
+  await rm(src, { recursive: true, force: true });
+  await mkdir(src, { recursive: true });
+  await run(['git', 'init', '-q'], { cwd: src });
+  await run(['git', 'fetch', '-q', '--depth', '1', pin.ghostty.repository, pin.ghostty.commit], { cwd: src });
+  await run(['git', '-c', 'advice.detachedHead=false', 'checkout', '-q', 'FETCH_HEAD'], { cwd: src });
+  const head = await run(['git', 'rev-parse', 'HEAD'], { cwd: src });
+  if (head !== pin.ghostty.commit) throw new Error(`fetched Ghostty ${head}, but ghostty.toml pins ${pin.ghostty.commit}`);
+};
+
+/**
+ * Builds libghostty-vt for wasm32 and gathers its headers and the rest into
+ * `<cache>/<commit>/wasm`, once per pin. The page's terminal links it (`wasm/terminal.c`).
+ */
+const buildWasm = async (cache: string) => {
+  const commitDir = join(cache, pin.ghostty.commit);
+  const out = join(commitDir, 'wasm');
+  if ((await readFile(join(out, '.complete'), 'utf8').catch(() => '')) === layout) return out;
+  console.log(`Building libghostty-vt for WebAssembly at Ghostty ${pin.ghostty.commit.slice(0, 8)}, once per pin…`);
+  const src = join(commitDir, 'src-wasm');
+  const local = join(commitDir, 'zig-local-wasm');
+  const staging = `${out}.partial`;
+  await fetchSource(src);
+  await rm(staging, { recursive: true, force: true });
+  await run(
+    [await zig(cache), 'build', '-Demit-lib-vt', '-Demit-xcframework=false', '-Doptimize=ReleaseFast', '-Dtarget=wasm32-freestanding', '--prefix', staging, '--cache-dir', local],
+    { cwd: src, env: { ZIG_GLOBAL_CACHE_DIR: join(cache, 'zig-global') } },
+  );
+  // A build for wasm32 installs the library alone.
+  await cp(join(src, 'include'), join(staging, 'include'), { recursive: true });
+  await mkdir(join(staging, 'fonts'), { recursive: true });
+  for (const file of [...fonts, 'OFL.txt']) await cp(join(src, 'src/font/res', file), join(staging, 'fonts', file));
+  await cp(join(src, 'LICENSE'), join(staging, 'GHOSTTY-LICENSE'));
+  await writeFile(join(staging, '.complete'), layout);
+  await rm(out, { recursive: true, force: true });
+  await rename(staging, out);
+  await rm(src, { recursive: true, force: true });
+  await rm(local, { recursive: true, force: true });
+  return out;
+};
+
+/**
+ * The page's terminal, for the Mac (WVE-205): `wasm/terminal.c` linked with libghostty-vt into
+ * `src/terminal/web/generated/weave-terminal.wasm`, with the fonts and the pin beside it. Built
+ * again when the pin or `terminal.c` changes.
+ */
+const web = async () => {
+  const generated = resolve(root, 'src/terminal/web/generated');
+  const source = resolve(root, 'wasm/terminal.c');
+  const digest = createHash('sha256').update(await readFile(source)).digest('hex');
+  const want = `${pin.ghostty.commit} ${layout} ${digest}`;
+  const stamp = join(generated, '.pin');
+  if ((await readFile(stamp, 'utf8').catch(() => '')) === want) {
+    console.log(`src/terminal/web/generated has Ghostty ${pin.ghostty.commit.slice(0, 8)} already.`);
+    return;
+  }
+  const cache = cacheDir();
+  await mkdir(cache, { recursive: true });
+  const out = await buildWasm(cache);
+  await rm(generated, { recursive: true, force: true });
+  await mkdir(generated, { recursive: true });
+  await run([
+    await zig(cache), 'cc', '-target', 'wasm32-freestanding', '-O2', '-nostdlib', '-DGHOSTTY_STATIC', '-Wall', '-Wextra', '-Werror',
+    '-I', join(out, 'include'), '-o', join(generated, 'weave-terminal.wasm'), source, join(out, 'lib/libghostty-vt.a'),
+    '-Wl,--no-entry', '-Wl,--strip-debug',
+  ], { env: { ZIG_GLOBAL_CACHE_DIR: join(cache, 'zig-global'), ZIG_LOCAL_CACHE_DIR: join(cache, 'zig-local-cc') } });
+  for (const file of [...fonts, 'OFL.txt']) await cp(join(out, 'fonts', file), join(generated, file));
+  await cp(join(out, 'GHOSTTY-LICENSE'), join(generated, 'GHOSTTY-LICENSE'));
+  // The commit names the codec, with the version the library's snapshots carry.
+  await writeFile(join(generated, 'pin.json'), `${JSON.stringify({ commit: pin.ghostty.commit })}\n`);
+  await writeFile(stamp, want);
+  console.log(`Put the terminal for Ghostty ${pin.ghostty.commit.slice(0, 8)} in src/terminal/web/generated.`);
+};
+
 /** Builds the Apple libraries and gathers the rest into `<cache>/<commit>/apple`, once per pin. */
 const build = async (cache: string) => {
   const commitDir = join(cache, pin.ghostty.commit);
@@ -85,13 +165,7 @@ const build = async (cache: string) => {
   const src = join(commitDir, 'src-apple');
   const local = join(commitDir, 'zig-local-apple');
   const staging = `${out}.partial`;
-  await rm(src, { recursive: true, force: true });
-  await mkdir(src, { recursive: true });
-  await run(['git', 'init', '-q'], { cwd: src });
-  await run(['git', 'fetch', '-q', '--depth', '1', pin.ghostty.repository, pin.ghostty.commit], { cwd: src });
-  await run(['git', '-c', 'advice.detachedHead=false', 'checkout', '-q', 'FETCH_HEAD'], { cwd: src });
-  const head = await run(['git', 'rev-parse', 'HEAD'], { cwd: src });
-  if (head !== pin.ghostty.commit) throw new Error(`fetched Ghostty ${head}, but ghostty.toml pins ${pin.ghostty.commit}`);
+  await fetchSource(src);
   await rm(staging, { recursive: true, force: true });
   await run(
     [await zig(cache), 'build', '-Demit-lib-vt', '-Demit-xcframework=true', '-Doptimize=ReleaseFast', '--prefix', staging, '--cache-dir', local],
@@ -114,7 +188,9 @@ const build = async (cache: string) => {
 };
 
 const stamp = join(native, '.pin');
-if ((await readFile(stamp, 'utf8').catch(() => '')) === `${pin.ghostty.commit} ${layout}`) {
+if (process.argv[2] === 'web') {
+  await web();
+} else if ((await readFile(stamp, 'utf8').catch(() => '')) === `${pin.ghostty.commit} ${layout}`) {
   console.log(`ios/App/Native has Ghostty ${pin.ghostty.commit.slice(0, 8)} already.`);
 } else {
   const cache = cacheDir();

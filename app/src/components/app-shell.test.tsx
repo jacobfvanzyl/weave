@@ -236,7 +236,7 @@ describe('a Session someone arranged', () => {
     expect(within(session).getByRole('group', { name: 'Block, Update the Host protocol spec' })).toBeInTheDocument();
     const tests = within(session).getByRole('group', { name: 'Block, cargo test -p weave-tui' });
     expect(within(tests).getByText('cargo: Testing (60%).')).toBeInTheDocument();
-    expect(within(tests).getByText(/doesn't draw terminals yet/)).toBeInTheDocument();
+    expect(within(tests).getByText(/A browser doesn't draw terminals/)).toBeInTheDocument();
     expect(within(session).getByRole('group', { name: 'Block, Bring Alpha back' })).toBeInTheDocument();
     expect(within(session).getByRole('group', { name: 'Floating, app' })).toBeInTheDocument();
     expect(within(session).getAllByRole('separator', { name: 'Resize Blocks' })).toHaveLength(2);

@@ -1548,6 +1548,10 @@ export class HostStore {
   async #attachTerminal(id: string): Promise<TerminalTicket> {
     const { shown, connection } = this.#sessionHost();
     const { ticket } = await connection.request('terminals/attach', { id });
+    // On the Mac the core opens the stream, as the device the ticket is for, or on this Mac's
+    // Host's own socket, and offers the page a WebSocket to it.
+    const offered = await this.#routes.terminalStream?.({ hostId: shown.hostId, local: this.#hosts.get(shown.hostId)?.local === true });
+    if (offered) return { url: offered, ticket };
     const record = this.#dispatcher?.record;
     if (!record) throw new Error('This device isn\'t paired with the Dispatcher.');
     // The Dispatcher carries the stream too, as this device: its ticket is this device's.

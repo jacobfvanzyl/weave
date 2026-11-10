@@ -5,6 +5,7 @@ import { usePairingLink } from '@/app/use-pairing-link';
 import { useState } from 'react';
 import { AppShell } from '@/components/app-shell';
 import { useMacShell } from '@/mac/shell';
+import { TerminalCheck } from '@/mac/terminal-check';
 import { SurfaceApp } from '@/surface/surface-app';
 import { deviceSurfaceLink } from '@/surface/surface-link';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -29,6 +30,9 @@ function MockApp() {
 export function App() {
   const search = new URLSearchParams(location.search);
   if (search.has('surface')) return <TooltipProvider><SurfaceApp /></TooltipProvider>;
+  // The Mac's app started by its terminal check (`scripts/mac-terminal-check.ts`): one terminal.
+  const check = search.get('terminal-check');
+  if (check) return <TerminalCheck terminal={check} />;
   return <DeviceApp mock={search.has('mock')} />;
 }
 

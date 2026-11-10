@@ -5187,6 +5187,7 @@ version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "futures",
+ "getrandom 0.3.4",
  "pretty_assertions",
  "serde",
  "serde_json",

@@ -12,11 +12,13 @@
     "cap:sync": "bun run build && bun --bun run cap sync ios",
     "ios:open": "bun --bun run cap open ios",
     "ghostty": "bun scripts/ghostty.ts",
+    "ghostty:web": "bun scripts/ghostty.ts web",
     "native:test": "bun scripts/native-tests.ts",
     "ios:build": "bun scripts/ios.ts build",
     "ios:install": "bun scripts/ios.ts install",
     "mac:dev": "bun --bun run tauri dev",
     "mac:install": "bun scripts/mac.ts install",
+    "mac:terminal-check": "bun scripts/mac-terminal-check.ts",
     "mac:test": "cargo test --manifest-path src-tauri/Cargo.toml && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets",
     "tauri": "tauri"
   },

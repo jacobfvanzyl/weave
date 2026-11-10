@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.veezee.weave",
   "build": {
-    "beforeDevCommand": "bun run dev",
+    "beforeDevCommand": "bun scripts/ghostty.ts web && bun run dev",
     "devUrl": "http://localhost:5174",
-    "beforeBuildCommand": "bun run build",
+    "beforeBuildCommand": "bun scripts/ghostty.ts web && bun run build",
     "frontendDist": "../dist"
   },
   "app": {

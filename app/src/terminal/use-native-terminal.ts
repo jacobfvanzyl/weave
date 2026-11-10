@@ -194,7 +194,11 @@ export function useNativeTerminal(host: RefObject<HTMLElement | null>, { termina
     exited.current = false;
     setState({ kind: 'connecting' });
     void latest.current.attach(terminalId)
-      .then((ticket) => stale ? undefined : nativeTerminal.attach({ surfaceId, ...ticket }))
+      .then((ticket) => {
+        if (stale) return undefined;
+        if (!ticket.carry) throw new Error("The stream isn't one the Dispatcher carries.");
+        return nativeTerminal.attach({ surfaceId, url: ticket.url, ticket: ticket.ticket, carry: ticket.carry });
+      })
       .catch((error) => {
         if (!stale) setState({ kind: 'failed', message: `Couldn't attach to the terminal: ${message(error)}` });
       });

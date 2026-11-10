@@ -3,6 +3,7 @@
 // floor every device has (ADR 0018).
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { type AppController, type OpenSession, type TerminalSummary, type ThreadSummary, threadController, threadKey } from '@/app/app-controller';
+import { useCommand } from '@/app/commands';
 import { platform } from '@/app/platform';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { PathLabel } from '@/components/path-label';
@@ -15,7 +16,8 @@ import { cn } from '@/lib/utils';
 import { TERMINAL_BLOCK, THREAD_BLOCK, terminalOf, threadOf } from '@/session/blocks';
 import type { DeviceSurface } from '@/surface/use-surface';
 import { FONT_SIZE, loadFontSize, onFontSize, setFontSize, terminalName, terminalState } from '@/terminal/terminals';
-import { type TerminalNotice, useNativeTerminal } from '@/terminal/use-native-terminal';
+import { type SurfaceState, type TerminalNotice, useNativeTerminal } from '@/terminal/use-native-terminal';
+import { useWebTerminal } from '@/terminal/web/use-web-terminal';
 
 /** What a Block is drawn with: the app, its Session, and how it stands in the layout. */
 export type BlockContext = {
@@ -123,24 +125,32 @@ export function TerminalMark({ terminal }: { terminal: TerminalSummary }) {
   );
 }
 
-/** A terminal drawn natively beneath the page, at this element's frame (ADR 0022): the iPad and iPhone. */
-function NativeTerminal({ terminal, attach, focused }: {
+/** The keys for the text size of this device's terminals, while one has the keyboard. */
+function useFontSizeCommands(focused: boolean, size: number) {
+  useCommand('terminal.larger', () => setFontSize(size + FONT_SIZE.step), focused && size < FONT_SIZE.max);
+  useCommand('terminal.smaller', () => setFontSize(size - FONT_SIZE.step), focused && size > FONT_SIZE.min);
+  useCommand('terminal.actualSize', () => setFontSize(FONT_SIZE.initial), focused && size !== FONT_SIZE.initial);
+}
+
+type DrawnProps = {
   terminal: TerminalSummary;
   attach: AppController['actions']['attachTerminal'];
   focused: boolean;
-}) {
-  const host = useRef<HTMLDivElement>(null);
-  const fontSize = useSyncExternalStore(onFontSize, loadFontSize);
+};
+
+/** What a program in a terminal asked the device to show, for a few seconds. */
+function useNotice() {
   const [notice, setNotice] = useState<TerminalNotice>();
-  const { state, focus, retry } = useNativeTerminal(host, { terminalId: terminal.id, fontSize, attach, onNotice: setNotice });
-  useEffect(() => {
-    if (state.kind === 'attached' && focused) focus();
-  }, [state.kind, focused]);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(undefined), 4000);
     return () => clearTimeout(timer);
   }, [notice]);
+  return [notice, setNotice] as const;
+}
+
+/** How a drawn terminal's stream stands, above it: connecting, why it isn't there, or what its program said. */
+function TerminalStatus({ state, notice, retry }: { state: SurfaceState; notice?: TerminalNotice; retry(): void }) {
   const status = state.kind === 'connecting'
     ? <><Spinner className='size-3' /> Connecting to the terminal…</>
     : state.kind === 'attached' && state.restore === 'vt'
@@ -154,18 +164,60 @@ function NativeTerminal({ terminal, attach, focused }: {
             : notice?.kind === 'clipboard'
               ? 'Copied to the clipboard.'
               : undefined;
+  if (!status) return null;
+  return (
+    <p role='status' data-slot='terminal-status'
+      className='flex shrink-0 items-center gap-1.5 border-b border-border bg-muted/40 px-3 py-1 text-[0.6875rem] text-muted-foreground'>
+      {status}
+      {state.kind === 'failed' && <Button size='xs' variant='outline' className='ml-auto' onClick={retry}>Try again</Button>}
+    </p>
+  );
+}
+
+/** A terminal drawn natively beneath the page, at this element's frame (ADR 0022): the iPad and iPhone. */
+function NativeTerminal({ terminal, attach, focused }: DrawnProps) {
+  const host = useRef<HTMLDivElement>(null);
+  const fontSize = useSyncExternalStore(onFontSize, loadFontSize);
+  const [notice, setNotice] = useNotice();
+  const { state, focus, retry } = useNativeTerminal(host, { terminalId: terminal.id, fontSize, attach, onNotice: setNotice });
+  useFontSizeCommands(focused, fontSize);
+  useEffect(() => {
+    if (state.kind === 'attached' && focused) focus();
+  }, [state.kind, focused]);
   return (
     <>
-      {status && (
-        <p role='status' data-slot='terminal-status'
-          className='flex shrink-0 items-center gap-1.5 border-b border-border bg-muted/40 px-3 py-1 text-[0.6875rem] text-muted-foreground'>
-          {status}
-          {state.kind === 'failed' && <Button size='xs' variant='outline' className='ml-auto' onClick={retry}>Try again</Button>}
-        </p>
-      )}
+      <TerminalStatus state={state} notice={notice} retry={retry} />
       {/* The native terminal shows through this element, which stays transparent, as do its ancestors (`styles.css`). */}
       <div ref={host} data-slot='native-terminal' data-native-layered='true' aria-label={`Terminal ${terminalName(terminal)}`}
         className='min-h-0 min-w-0 flex-1 overflow-hidden' />
+    </>
+  );
+}
+
+/** A terminal drawn in the page, on a canvas, by libghostty-vt in WebAssembly (ADR 0032, WVE-205): the Mac. */
+function PageTerminal({ terminal, attach, focused }: DrawnProps) {
+  const host = useRef<HTMLDivElement>(null);
+  const fontSize = useSyncExternalStore(onFontSize, loadFontSize);
+  const [notice, setNotice] = useNotice();
+  const { state, focus, retry } = useWebTerminal(host, {
+    terminalId: terminal.id,
+    fontSize,
+    attach,
+    onNotice: setNotice,
+    // The shell opens it in the browser: the app's own window goes nowhere.
+    open: (address) => { window.open(address, '_blank', 'noopener'); },
+    copy: (text) => platform().writeClipboard(text),
+    notify: (title, body) => platform().notify?.({ title: title || terminalName(terminal), body }),
+  });
+  useFontSizeCommands(focused, fontSize);
+  useEffect(() => {
+    if (state.kind === 'attached' && focused) focus();
+  }, [state.kind, focused, focus]);
+  return (
+    <>
+      <TerminalStatus state={state} notice={notice} retry={retry} />
+      <div ref={host} data-slot='page-terminal' role='group' aria-label={`Terminal ${terminalName(terminal)}`}
+        className='relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[#1e1e2e]' />
     </>
   );
 }
@@ -178,7 +230,7 @@ function TerminalText({ terminal }: { terminal: TerminalSummary }) {
       <p className='font-mono text-sm text-foreground'>{terminalName(terminal)}</p>
       {terminal.pwd && <PathLabel path={terminal.pwd} />}
       <p>{state.kind === 'idle' ? (terminal.process ? `Running ${terminal.process}.` : 'Nothing is running in it.') : `${state.text}.`}</p>
-      <p className='max-w-xs'>This device doesn't draw terminals yet, so it shows what this one is doing. It runs on, and draws on the iPad and iPhone.</p>
+      <p className='max-w-xs'>A browser doesn't draw terminals, so it shows what this one is doing. It runs on, and draws in the app on the Mac, the iPad and the iPhone.</p>
     </div>
   );
 }
@@ -197,7 +249,7 @@ const terminal: BlockType = {
   actions: (block, { session }) => {
     const found = terminalIn(block, session);
     // Every terminal on this device, where the device draws them.
-    if (!found || !platform().drawsTerminals) return [];
+    if (!found || platform().terminals === 'text') return [];
     const size = loadFontSize();
     return [
       ...(size < FONT_SIZE.max ? [{ title: 'Larger text', run: () => setFontSize(size + FONT_SIZE.step) }] : []),
@@ -209,9 +261,10 @@ const terminal: BlockType = {
     const found = terminalIn(block, session);
     if (!session.terminals) return <Notice><Spinner className='mr-1.5 inline size-3' />Listing the terminals…</Notice>;
     if (!found) return <Notice action={<Button size='sm' variant='outline' onClick={context.onRemove}>Remove from the layout</Button>}>This terminal has ended.</Notice>;
-    return platform().drawsTerminals
-      ? <NativeTerminal terminal={found} attach={controller.actions.attachTerminal} focused={context.focused} />
-      : <TerminalText terminal={found} />;
+    const drawn = platform().terminals;
+    if (drawn === 'text') return <TerminalText terminal={found} />;
+    const Drawn = drawn === 'native' ? NativeTerminal : PageTerminal;
+    return <Drawn terminal={found} attach={controller.actions.attachTerminal} focused={context.focused} />;
   },
 };
 
