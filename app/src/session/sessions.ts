@@ -11,6 +11,9 @@ import {
   sessionKey,
 } from '@/app/app-controller';
 
+/** A directory as a Session is keyed by it: without a slash at its end, which a thread's may have. */
+const plain = (path: string) => path.length > 1 ? path.replace(/\/+$/, '') || '/' : path;
+
 /** The last name in a path. */
 export const directoryName = (path: string) => {
   const trimmed = path.replace(/\/+$/, '');
@@ -21,7 +24,7 @@ export const directoryName = (path: string) => {
  * The directory whose Session a thread is in: its worktree, or outside a repository its own
  * directory, as the Host places it (`sessions/get`).
  */
-export const threadDirectory = (thread: Pick<ThreadSummary, 'cwd' | 'git'>) => thread.git?.worktree ?? thread.cwd;
+export const threadDirectory = (thread: Pick<ThreadSummary, 'cwd' | 'git'>) => plain(thread.git?.worktree ?? thread.cwd);
 
 /** The Session a thread is in, going by the thread alone. */
 export const sessionOfThread = (thread: Pick<ThreadSummary, 'hostId' | 'cwd' | 'git'>) => sessionKey(thread.hostId, threadDirectory(thread));
@@ -51,14 +54,15 @@ export function threadDirectories(threads: readonly Located[], known: readonly K
     worktrees.set(hostId, paths);
   };
   for (const session of known) if (session.git) worktree(session.hostId, session.directory);
-  for (const thread of threads) if (thread.git) worktree(thread.hostId, thread.git.worktree);
+  for (const thread of threads) if (thread.git) worktree(thread.hostId, plain(thread.git.worktree));
   const own = (thread: Located) => {
-    if (thread.git) return thread.git.worktree;
+    if (thread.git) return plain(thread.git.worktree);
+    const cwd = plain(thread.cwd);
     let deepest: string | undefined;
     for (const path of worktrees.get(thread.hostId) ?? []) {
-      if ((thread.cwd === path || thread.cwd.startsWith(`${path}/`)) && path.length > (deepest?.length ?? -1)) deepest = path;
+      if ((cwd === path || cwd.startsWith(`${path}/`)) && path.length > (deepest?.length ?? -1)) deepest = path;
     }
-    return deepest ?? thread.cwd;
+    return deepest ?? cwd;
   };
   // A thread the Host placed in a Session stays there, whatever its directory reads as here,
   // and its directory's other name is that Session's for the threads the Host hasn't said of.
@@ -78,11 +82,14 @@ export function threadDirectories(threads: readonly Located[], known: readonly K
 }
 
 /**
- * Every Session: those the Hosts list, and one for each directory a listed thread is in that its
- * Host hasn't made a Session of yet, as for threads from before Hosts kept Sessions. The most
- * recently active first.
+ * The Sessions there are: those the Hosts keep, each with the listed threads in its directory,
+ * the most recently active first. A Session is its Host's: the Host makes one when a thread in a
+ * directory is first prompted or a terminal starts there, and the app makes none up, so a
+ * directory with only threads from before then has none. `also` names the Session on screen,
+ * which shows before its Host has made it: a thread just started in a new directory, until its
+ * first prompt.
  */
-export function sessionSummaries(model: Pick<AppModel, 'threads' | 'known' | 'unread'>): SessionSummary[] {
+export function sessionSummaries(model: Pick<AppModel, 'threads' | 'known' | 'unread'>, options: { also?: string } = {}): SessionSummary[] {
   const sessions = new Map<string, SessionSummary & { members: ThreadSummary[] }>();
   const session = (hostId: string, directory: string) => {
     const key = sessionKey(hostId, directory);
@@ -101,9 +108,11 @@ export function sessionSummaries(model: Pick<AppModel, 'threads' | 'known' | 'un
   const directories = threadDirectories(model.threads, model.known);
   for (const thread of model.threads) {
     const directory = directories.get(thread.key) ?? threadDirectory(thread);
+    const key = sessionKey(thread.hostId, directory);
+    if (!sessions.has(key) && key !== options.also) continue;
     const found = session(thread.hostId, directory);
     found.members.push(thread);
-    if (thread.git && directory === thread.git.worktree && !found.git) {
+    if (thread.git && directory === plain(thread.git.worktree) && !found.git) {
       found.git = { repo: thread.git.repo, ...(thread.git.branch ? { branch: thread.git.branch } : {}) };
     }
   }

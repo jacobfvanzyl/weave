@@ -37,6 +37,9 @@ describe('the list of Sessions', () => {
     expect(within(screen.getByRole('group', { name: 'build' })).getByRole('button', { name: /^odin.*\/srv\/odin/ })).toBeInTheDocument();
     // Threads aren't listed: a Session's are inside it.
     expect(screen.queryByText('Bring Alpha back')).not.toBeInTheDocument();
+    // Nor is a Session made up for a worktree whose thread closed before its Host kept any.
+    expect(screen.queryByRole('button', { name: /old-spike/ })).not.toBeInTheDocument();
+    expect(within(weave).getAllByRole('button', { name: /mac · / })).toHaveLength(2);
   });
 
   it('filters Sessions', async () => {

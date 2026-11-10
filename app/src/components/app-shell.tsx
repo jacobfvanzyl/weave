@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ArrowLeft01Icon, SidebarLeftIcon } from '@hugeicons/core-free-icons';
-import type { AppController, CreatedThread, SessionSummary } from '@/app/app-controller';
+import type { AppController, CreatedThread, OpenSession, SessionSummary } from '@/app/app-controller';
 import { sessionOfKey } from '@/app/app-controller';
 import { useCommand, useCommandKeys } from '@/app/commands';
 import { useOpenThreadRequests } from '@/app/open-thread';
@@ -56,9 +56,17 @@ function SidebarToggle({ waiting }: { waiting: number }) {
 }
 
 /** What's beside the list, or in its place on the iPhone, while no Session shows. */
-function NoSession({ controller, selected, leading }: { controller: AppController; selected?: string; leading?: React.ReactNode }) {
+function NoSession({ controller, selected, known, leading }: {
+  controller: AppController;
+  selected?: string;
+  /** Whether a Host keeps the Session picked: one it doesn't, as one that ended, isn't waited for. */
+  known: boolean;
+  leading?: React.ReactNode;
+}) {
   const { model } = controller;
-  const host = selected ? model.hosts.find(({ id }) => id === sessionOfKey(selected).hostId) : undefined;
+  const picked = selected ? model.hosts.find(({ id }) => id === sessionOfKey(selected).hostId) : undefined;
+  // Until its Host has listed its Sessions, the one picked may yet be among them.
+  const host = picked && (known || picked.status !== 'connected' || model.session?.key !== selected) ? picked : undefined;
   const directory = selected ? directoryName(sessionOfKey(selected).directory) : undefined;
   return (
     <>
@@ -95,6 +103,8 @@ const membersOf = (sessions: readonly SessionSummary[], key: string) => sessions
 type ShellProps = {
   controller: AppController;
   sessions: SessionSummary[];
+  /** The Session on screen, once its Host has listed what's in it. */
+  session?: OpenSession;
   /** The Session to show, by key, and the thread in it to bring to the front. */
   selected?: string;
   reveal?: string;
@@ -105,7 +115,7 @@ type ShellProps = {
   onNewThread(target?: NewThreadTarget): void;
 };
 
-function PhoneShell({ controller, sessions, selected, reveal, onRevealed, onOpenSession, onOpenThread, onOpenHosts, onNewThread, surfaceLink }: ShellProps & {
+function PhoneShell({ controller, sessions, session, selected, reveal, onRevealed, onOpenSession, onOpenThread, onOpenHosts, onNewThread, surfaceLink }: ShellProps & {
   surfaceLink?: SurfaceLink;
 }) {
   const { model } = controller;
@@ -117,18 +127,15 @@ function PhoneShell({ controller, sessions, selected, reveal, onRevealed, onOpen
   const back = () => onOpenSession(undefined);
   const leading = <BackButton count={waitingSessions(sessions, selected)} onBack={back} />;
   if (!selected) return <SessionList controller={controller} sessions={sessions} onOpen={onOpenSession} onOpenHosts={onOpenHosts} onNewThread={onNewThread} />;
-  const session = model.session?.key === selected ? model.session : undefined;
-  if (!session) return <NoSession controller={controller} selected={selected} leading={leading} />;
+  if (!session) return <NoSession controller={controller} selected={selected} known={sessions.some(({ key }) => key === selected)} leading={leading} />;
   return (
     <SessionView key={session.key} controller={controller} session={session} members={membersOf(sessions, session.key)} phone leading={leading}
       reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} surface={surface} onBack={back} />
   );
 }
 
-function SplitShell({ controller, sessions, selected, reveal, onRevealed, onOpenSession, onOpenThread, onOpenHosts, onNewThread }: ShellProps) {
-  const { model } = controller;
+function SplitShell({ controller, sessions, session, selected, reveal, onRevealed, onOpenSession, onOpenThread, onOpenHosts, onNewThread }: ShellProps) {
   const { setOpenMobile } = useSidebar();
-  const session = model.session?.key === selected ? model.session : undefined;
   const leading = <SidebarToggle waiting={waitingSessions(sessions, selected)} />;
   return (
     <>
@@ -144,7 +151,7 @@ function SplitShell({ controller, sessions, selected, reveal, onRevealed, onOpen
         {session
           ? <SessionView key={session.key} controller={controller} session={session} members={membersOf(sessions, session.key)} leading={leading}
               reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} />
-          : <NoSession controller={controller} selected={selected} leading={leading} />}
+          : <NoSession controller={controller} selected={selected} known={sessions.some(({ key }) => key === selected)} leading={leading} />}
       </SidebarInset>
     </>
   );
@@ -166,10 +173,11 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
 }) {
   const phone = usePhoneLayout();
   const { model, actions } = controller;
-  const sessions = useMemo(() => sessionSummaries(model), [model.threads, model.known, model.unread]);
   // The Session on screen: the controller's when it starts with one, as a fixture does, else the
   // one this device last showed.
   const [selected, setSelected] = useState<string | undefined>(() => model.session?.key ?? loadLastSession());
+  // The Sessions the Hosts keep, and the one on screen before its Host has made it.
+  const sessions = useMemo(() => sessionSummaries(model, { also: selected }), [model.threads, model.known, model.unread, selected]);
   const [reveal, setReveal] = useState<string>();
   // A thread asked for before its Host listed it, as by the link the app was opened with.
   const [wanted, setWanted] = useState<string>();
@@ -229,11 +237,14 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
   useCommand('palette.open', () => setPalette(true), !unpaired);
 
   if (unpaired) return <PairingScreen controller={controller} offer={pairingOffer} />;
+  // Only a Session there is shows: one this device last showed may have ended since.
+  const shown = model.session?.key === selected && sessions.some(({ key }) => key === selected) ? model.session : undefined;
   const shell: ShellProps = {
     controller,
     sessions,
+    session: shown,
     selected,
-    reveal: model.session?.key === selected ? reveal : undefined,
+    reveal: shown ? reveal : undefined,
     onRevealed: () => setReveal(undefined),
     onOpenSession: setSelected,
     onOpenThread: openThread,

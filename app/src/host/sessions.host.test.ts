@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sessionKey } from '@/app/app-controller';
 import { terminalBlock, threadBlock, threadOf } from '@/session/blocks';
-import { layoutBlocks, placeBlock, removeBlock } from '@/session/layout';
+import { addTab, layoutBlocks, placeBlock, removeBlock } from '@/session/layout';
 import type { HostStore } from './host-store';
 import { devStore, startDevDispatcher, type DevDispatcher } from './testing/dev-dispatcher';
 import { devHostAvailable, startDevHost, type DevHost } from './testing/dev-host';
@@ -98,8 +98,14 @@ describe.skipIf(!devHostAvailable())('a Session two devices show', () => {
     pad.actions.selectSession?.(created.sessionKey);
     await waitFor(() => pad.snapshot().session?.key === created.sessionKey, 'the Session by the name it was asked for');
     const threadId = created.key.slice(created.key.indexOf('/') + 1);
-    pad.actions.updateLayout?.(created.sessionKey, (layout) => placeBlock(layout, threadBlock(threadId, 'b-new'), { tab: layout.tabs[0].id }));
-    // Saved, it's the Host's Session, under the directory's real name, with what was placed.
+    // Its Host has no Session there yet, and the device makes none: it shows the thread just
+    // started, with nothing saved.
+    expect(blocks(pad)).toEqual([threadId]);
+    expect(pad.snapshot().session?.saved).toBe(false);
+    expect(pad.snapshot().known?.some((known) => known.directory === realpathSync(real))).toBe(false);
+    // The person arranges it: now the Host keeps it.
+    pad.actions.updateLayout?.(created.sessionKey, (layout) => addTab(layout, { id: 'tab-2' }));
+    // Saved, it's the Host's Session, under the directory's real name, with what it showed.
     const session = await waitFor(() => pad.snapshot().session?.saved ? pad.snapshot().session : undefined, 'the Host to keep it');
     expect(session).toMatchObject({ key: sessionKey(hostId, realpathSync(real)), movedFrom: created.sessionKey });
     expect(blocks(pad)).toEqual([threadId]);

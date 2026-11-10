@@ -329,10 +329,17 @@ export class HostStore {
           ...(listing.git ? { git: threadGit(listing.git) } : {}),
         }));
         const directories = threadDirectories(located, this.#sessions.known());
-        return entry.threads
+        // A thread on screen the list doesn't have yet, as one just started and not yet prompted,
+        // comes first: its Session may be new too, and shows it without anything being saved.
+        const fresh = [...this.#shown].flatMap((key) => {
+          const state = key.startsWith(`${hostId}/`) ? this.#followed.get(key)?.state : undefined;
+          if (!state || entry.threads.some(({ info }) => info.sessionId === state.threadId)) return [];
+          return sessionKey(hostId, state.git?.worktree ?? state.cwd) === sessionKey(hostId, directory) ? [threadBlock(state.threadId)] : [];
+        });
+        return [...fresh, ...entry.threads
           .filter((listing) => listing.state !== 'closed' && directories.get(threadKey(hostId, listing.info.sessionId)) === directory)
           .sort((left, right) => (right.lastActivityAt ?? 0) - (left.lastActivityAt ?? 0))
-          .map((listing) => threadBlock(listing.info.sessionId));
+          .map((listing) => threadBlock(listing.info.sessionId))];
       },
       changed: () => this.#changed(),
       failed: (message) => {

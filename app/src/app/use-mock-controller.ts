@@ -11,6 +11,7 @@ import {
   type AppModel,
   type DispatcherSummary,
   type HostSummary,
+  type KnownSession,
   type OpenThread,
   type ProjectSummary,
   type PromptImage,
@@ -172,8 +173,30 @@ const threads = (now: number): ThreadSummary[] => [
     state: 'closed',
     activity: undefined,
   }),
+  // A worktree whose only thread closed before its Host kept Sessions: it has none.
+  summary(MAC, 'old-spike', `${WEAVE}.old-spike`, 'Spike a transcript cache', 'claude', 60 * 90, now, {
+    git: { repo: WEAVE, worktree: `${WEAVE}.old-spike`, branch: 'old-spike' },
+    state: 'closed',
+    activity: undefined,
+  }),
   summary(SERVER, 'upload-failures', '/srv/odin', 'Diagnose upload failures', 'codex', 45, now),
 ];
+
+/** The Sessions the Hosts keep: where something was prompted or started since they kept any. */
+const kept = (): KnownSession[] => [
+  { hostId: MAC, directory: WEAVE, git: { repo: WEAVE, branch: 'main' }, threads: [] },
+  { hostId: MAC, directory: RECONNECT, git: { repo: WEAVE, branch: 'fix-reconnect' }, threads: [] },
+  { hostId: SERVER, directory: '/srv/odin', threads: [] },
+];
+
+/** `current` with a Session at `key`, as its Host makes one when a thread there is first prompted, or its layout is kept. */
+const withSession = (current: MockState, key: string): MockState => {
+  const { hostId, directory } = sessionOfKey(key);
+  if (current.model.known?.some((known) => known.hostId === hostId && known.directory === directory)) return current;
+  const git = current.model.threads.find((thread) => sessionOfThread(thread) === key)?.git;
+  const made: KnownSession = { hostId, directory, ...(git ? { git: { repo: git.repo, ...(git.branch ? { branch: git.branch } : {}) } } : {}), threads: [] };
+  return { ...current, model: { ...current.model, known: [...(current.model.known ?? []), made] } };
+};
 
 /** Every thread's MCP servers: weave's own, connected, one from the config, and one it skipped. */
 const MCP_SERVERS: McpServerStatus[] = [
@@ -313,6 +336,7 @@ const initialState = (scenario: MockScenario, now: number): MockState => {
       threads: list,
       agents: { [MAC]: AGENTS, [SERVER]: AGENTS },
       projects: PROJECTS,
+      known: kept(),
       selectedKey,
       unread: new Set(),
     },
@@ -410,6 +434,9 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
   });
 
   const startTurn = (key: string, text: string, images?: PromptImage[]) => {
+    // A thread's first prompt makes its directory's Session, on a Host.
+    const prompted = state.current.model.threads.find((thread) => thread.key === key);
+    if (prompted) update((current) => withSession(current, sessionOfThread(prompted)));
     reduce(key, userMessage(text, images), { type: 'turn/started' });
     setThread(key, { activity: 'running', lastActivityAt: Date.now() });
     later(turnMs, () => finishTurn(key));
@@ -581,8 +608,8 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
       },
       updateLayout(key, change) {
         update((current) => {
-          const kept = keep(current, key);
-          return { ...kept, layouts: { ...kept.layouts, [key]: tidy(change(kept.layouts[key])) }, saved: [...new Set([...kept.saved, key])] };
+          const shown = keep(withSession(current, key), key);
+          return { ...shown, layouts: { ...shown.layouts, [key]: tidy(change(shown.layouts[key])) }, saved: [...new Set([...shown.saved, key])] };
         });
       },
       createThread({ hostId, cwd, agentId }) {
@@ -702,6 +729,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
             threads: threads(now),
             agents: { [MAC]: AGENTS, [SERVER]: AGENTS },
             projects: PROJECTS,
+            known: kept(),
           },
           repositories: repositories(),
           terminals: { [MAC]: terminals(now) },
@@ -712,7 +740,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           ...current,
           sessionKey: undefined,
           shown: [],
-          model: { ...current.model, dispatcher: undefined, hosts: [], threads: [], agents: {}, selectedKey: undefined },
+          model: { ...current.model, dispatcher: undefined, hosts: [], threads: [], agents: {}, known: [], selectedKey: undefined },
         }));
       },
       reconnectDispatcher() {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { HostSummary, ProjectSummary, ThreadSummary } from '@/app/app-controller';
+import type { HostSummary, KnownSession, ProjectSummary, ThreadSummary } from '@/app/app-controller';
 import { containing, sessionLabel, sessionListView, sessionOfThread, sessionSummaries, waitingSessions } from './sessions';
 
 const MAC = 'h-mac';
@@ -65,16 +65,25 @@ describe('the Project a directory is in', () => {
   });
 });
 
+/** A Session a Host keeps. */
+const kept = (hostId: string, directory: string, change: Partial<KnownSession> = {}): KnownSession => ({ hostId, directory, threads: [], ...change });
+
 describe('the Sessions there are', () => {
-  it('are a directory each: a worktree for threads in a repository, the thread’s own outside one', () => {
+  it('are the ones the Hosts keep, each with the threads in its directory: a worktree’s, or outside a repository the thread’s own', () => {
     const threads = [
       thread(MAC, 't1', '/code/odin', { ...worktree('/code/odin', '/code/odin', 'main'), lastActivityAt: 30 }),
       thread(MAC, 't2', '/code/odin/src', { ...worktree('/code/odin', '/code/odin', 'main'), lastActivityAt: 40 }),
       thread(MAC, 't3', '/code/odin.auth', { ...worktree('/code/odin', '/code/odin.auth', 'auth'), lastActivityAt: 10 }),
-      thread(MAC, 't4', '/notes/2026', { lastActivityAt: 20 }),
+      thread(MAC, 't4', '/notes/2026/', { lastActivityAt: 20 }),
       thread(HOMELAB, 't5', '/code/odin', { ...worktree('/code/odin', '/code/odin', 'main'), lastActivityAt: 5 }),
     ];
-    const sessions = sessionSummaries({ threads, unread: new Set() });
+    const known = [
+      kept(MAC, '/code/odin', { git: { repo: '/code/odin', branch: 'main' } }),
+      kept(MAC, '/code/odin.auth', { git: { repo: '/code/odin', branch: 'auth' } }),
+      kept(MAC, '/notes/2026'),
+      kept(HOMELAB, '/code/odin', { git: { repo: '/code/odin', branch: 'main' } }),
+    ];
+    const sessions = sessionSummaries({ threads, known, unread: new Set() });
     expect(sessions.map(({ key, name, threads: members }) => [key, name, members])).toEqual([
       ['h-mac:/code/odin', 'odin', ['h-mac/t2', 'h-mac/t1']],
       ['h-mac:/notes/2026', '2026', ['h-mac/t4']],
@@ -85,20 +94,50 @@ describe('the Sessions there are', () => {
     expect(sessionOfThread(threads[1])).toBe('h-mac:/code/odin');
   });
 
-  it('include those a Host lists with nothing listed in them, and keep a thread where its Host placed it', () => {
+  it('aren’t made up from threads: a directory its Host keeps no Session for has none, however many threads it had', () => {
+    const threads = [
+      thread(MAC, 't1', '/code/odin', { ...worktree('/code/odin', '/code/odin', 'main'), lastActivityAt: 30 }),
+      // Worktrees that closed, or went, before the Host kept Sessions.
+      thread(MAC, 't2', '/code/odin.old', { ...worktree('/code/odin', '/code/odin.old', 'old'), state: 'closed', lastActivityAt: 10 }),
+      thread(MAC, 't3', '/scratch', { state: 'closed', lastActivityAt: 5 }),
+    ];
+    const known = [kept(MAC, '/code/odin', { git: { repo: '/code/odin', branch: 'main' } })];
+    expect(sessionSummaries({ threads, known, unread: new Set() }).map(({ key }) => key)).toEqual(['h-mac:/code/odin']);
+    expect(sessionSummaries({ threads, unread: new Set() })).toEqual([]);
+  });
+
+  it('show the one on screen before its Host has made it, as a thread just started in a new directory', () => {
+    const threads = [thread(MAC, 'new', '/code/fresh', { lastActivityAt: 9 })];
+    expect(sessionSummaries({ threads, unread: new Set() }, { also: 'h-mac:/code/fresh' }).map(({ key, threads: members }) => [key, members]))
+      .toEqual([['h-mac:/code/fresh', ['h-mac/new']]]);
+    // Nothing for one that names no thread's directory, as a Session that ended.
+    expect(sessionSummaries({ threads, unread: new Set() }, { also: 'h-mac:/gone' })).toEqual([]);
+  });
+
+  it('include one with nothing listed in it, and keep a thread where its Host placed it, with the others of its directory', () => {
     const sessions = sessionSummaries({
-      threads: [thread(MAC, 't1', '/tmp/work', { lastActivityAt: 5 })],
+      threads: [thread(MAC, 't1', '/tmp/work', { lastActivityAt: 5 }), thread(MAC, 't2', '/tmp/work', { lastActivityAt: 3 })],
       known: [
-        { hostId: MAC, directory: '/private/tmp/work', threads: ['t1'], updatedAt: 9 },
-        { hostId: MAC, directory: '/code/empty', git: { repo: '/code/empty', branch: 'main' }, threads: [] },
+        // The Host names the directory by where its symbolic link leads, and has said so of one thread.
+        kept(MAC, '/private/tmp/work', { threads: ['t1'], updatedAt: 9 }),
+        kept(MAC, '/code/empty', { git: { repo: '/code/empty', branch: 'main' } }),
       ],
       unread: new Set(),
     });
     expect(sessions.map(({ key, threads: members }) => [key, members])).toEqual([
-      ['h-mac:/private/tmp/work', ['h-mac/t1']],
+      ['h-mac:/private/tmp/work', ['h-mac/t1', 'h-mac/t2']],
       ['h-mac:/code/empty', []],
     ]);
     expect(sessions[1].git).toEqual({ repo: '/code/empty', branch: 'main' });
+  });
+
+  it('place a thread from before Hosts recorded its repository in the worktree that holds its directory', () => {
+    const sessions = sessionSummaries({
+      threads: [thread(MAC, 'old', '/code/odin/src/parser', { lastActivityAt: 1 })],
+      known: [kept(MAC, '/code/odin', { git: { repo: '/code/odin', branch: 'main' } })],
+      unread: new Set(),
+    });
+    expect(sessions.map(({ key, threads: members }) => [key, members])).toEqual([['h-mac:/code/odin', ['h-mac/old']]]);
   });
 
   it('count what waits and runs among threads that aren’t closed, and what’s unread', () => {
@@ -108,6 +147,7 @@ describe('the Sessions there are', () => {
         thread(MAC, 't2', '/work', { activity: 'running' }),
         thread(MAC, 't3', '/work', { activity: 'waiting', state: 'closed' }),
       ],
+      known: [kept(MAC, '/work')],
       unread: new Set(['h-mac/t2']),
     });
     expect(session).toMatchObject({ waiting: 1, running: 1, unread: true });
@@ -124,6 +164,12 @@ describe('the sidebar’s list', () => {
       thread(MAC, 't2', '/code/odin.auth', { ...worktree('/code/odin', '/code/odin.auth', 'auth'), lastActivityAt: 10 }),
       thread(HOMELAB, 't3', '/home/jaco/odin', { ...worktree('/home/jaco/odin', '/home/jaco/odin', 'main'), lastActivityAt: 20 }),
       thread(MAC, 't4', '/scratch', { lastActivityAt: 1 }),
+    ],
+    known: [
+      kept(MAC, '/code/odin', { git: { repo: '/code/odin', branch: 'main' } }),
+      kept(MAC, '/code/odin.auth', { git: { repo: '/code/odin', branch: 'auth' } }),
+      kept(HOMELAB, '/home/jaco/odin', { git: { repo: '/home/jaco/odin', branch: 'main' } }),
+      kept(MAC, '/scratch'),
     ],
     unread: new Set(),
   });
