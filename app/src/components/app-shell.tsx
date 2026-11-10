@@ -102,7 +102,7 @@ type ShellProps = {
   onOpenSession(key?: string): void;
   onOpenThread(key: string): void;
   onOpenHosts(): void;
-  onNewThread(hostId?: string): void;
+  onNewThread(target?: NewThreadTarget): void;
 };
 
 function PhoneShell({ controller, sessions, selected, reveal, onRevealed, onOpenSession, onOpenThread, onOpenHosts, onNewThread, surfaceLink }: ShellProps & {
@@ -238,7 +238,7 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
     onOpenSession: setSelected,
     onOpenThread: openThread,
     onOpenHosts: openHosts,
-    onNewThread: (hostId) => setNewThread(hostId ? { hostId } : {}),
+    onNewThread: (target) => setNewThread(target ?? {}),
   };
   return (
     <ResizableSidebarProvider className='h-dvh min-h-0' cookieName={false} data-layout={phone ? 'phone' : 'split'}>

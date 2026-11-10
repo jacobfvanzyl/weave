@@ -129,12 +129,19 @@ describe('the sidebar’s list', () => {
   });
   const projects = [project('odin', [[MAC, '/code/odin'], [HOMELAB, '/home/jaco/odin']])];
 
-  it('puts a Project’s Sessions on every Host together, and the rest under their Hosts', () => {
+  it('puts a Project’s Sessions on every Host together, and the rest under their Hosts, a Host with none left out', () => {
     const view = sessionListView(sessions, hosts, projects);
     expect(view.projects.map(({ project: listed, sessions: under }) => [listed.name, under.map(({ session, host }) => `${host?.name} ${sessionLabel(session)}`)]))
       .toEqual([['odin', ['Mac main', 'homelab main', 'Mac auth']]]);
     expect(view.hosts.map(({ host, sessions: under }) => [host.name, under.map(({ key }) => key)]))
-      .toEqual([['Mac', ['h-mac:/scratch']], ['homelab', []]]);
+      .toEqual([['Mac', ['h-mac:/scratch']]]);
+  });
+
+  it('lists a Project with no Session yet, for starting one, unless the list is filtered', () => {
+    const both = [...projects, project('notes', [[MAC, '/notes']])];
+    expect(sessionListView(sessions, hosts, both).projects.map(({ project: listed, sessions: under }) => [listed.name, under.length]))
+      .toEqual([['notes', 0], ['odin', 3]]);
+    expect(sessionListView(sessions, hosts, both, { query: 'odin' }).projects.map(({ project: listed }) => listed.name)).toEqual(['odin']);
   });
 
   it('puts every Session under its Host without Projects', () => {
@@ -148,6 +155,8 @@ describe('the sidebar’s list', () => {
     const scratch = sessionListView(sessions, hosts, projects, { query: 'scratch' });
     expect(scratch.projects).toEqual([]);
     expect(scratch.hosts.map(({ host }) => host.name)).toEqual(['Mac']);
+    // By the Host a Session is on, too.
+    expect(sessionListView(sessions, hosts, projects, { query: 'homelab' }).projects[0].sessions.map(({ session }) => session.key)).toEqual(['h-homelab:/home/jaco/odin']);
     expect(sessionListView(sessions, hosts, projects, { query: 'odin' }).projects[0].sessions).toHaveLength(3);
   });
 });

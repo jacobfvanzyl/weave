@@ -22,7 +22,7 @@ afterEach(() => setIdiom());
 const tile = (name: RegExp) => screen.getByRole('button', { name });
 
 describe('the list of Sessions', () => {
-  it('puts a Project’s Sessions together with their Host and branch, and the rest under their Hosts', () => {
+  it('puts a Project’s Sessions together with their Host and branch, and the rest under their Hosts, a Host with none left out', () => {
     setIdiom('phone');
     render(<MockApp />);
     const weave = screen.getByRole('group', { name: 'weave' });
@@ -32,8 +32,8 @@ describe('the list of Sessions', () => {
     // A thread waiting on the person marks its Session's tile.
     expect(within(reconnect).getByRole('img', { name: 'Waiting for you' })).toBeInTheDocument();
     expect(reconnect).toHaveTextContent('1 waiting on you');
-    // Nothing of the Mac's is outside the Project; the other Host's directory is in none.
-    expect(within(screen.getByRole('group', { name: 'mac' })).getByText('Nothing outside your Projects')).toBeInTheDocument();
+    // Nothing of the Mac's is outside the Project, so it's no heading; the other Host's directory is in none.
+    expect(screen.queryByRole('group', { name: 'mac' })).not.toBeInTheDocument();
     expect(within(screen.getByRole('group', { name: 'build' })).getByRole('button', { name: /^odin.*\/srv\/odin/ })).toBeInTheDocument();
     // Threads aren't listed: a Session's are inside it.
     expect(screen.queryByText('Bring Alpha back')).not.toBeInTheDocument();
@@ -48,7 +48,7 @@ describe('the list of Sessions', () => {
     expect(screen.queryByRole('group', { name: 'weave' })).not.toBeInTheDocument();
     await user.clear(screen.getByRole('searchbox', { name: 'Filter Sessions' }));
     await user.type(screen.getByRole('searchbox', { name: 'Filter Sessions' }), 'reconnect');
-    expect(within(screen.getByRole('group', { name: 'weave' })).getAllByRole('button')).toHaveLength(1);
+    expect(within(screen.getByRole('group', { name: 'weave' })).getAllByRole('button', { name: /mac · / })).toHaveLength(1);
   });
 
   it('shows the pairing screen until the app is paired with the Dispatcher, then the list', async () => {
@@ -60,7 +60,7 @@ describe('the list of Sessions', () => {
     await user.type(screen.getByLabelText('URL'), 'wss://homelab.example.ts.net:7342');
     await user.type(screen.getByLabelText('Code'), 'ABCD');
     await user.click(screen.getByRole('button', { name: 'Pair' }));
-    expect(await screen.findByRole('group', { name: 'mac' })).toBeInTheDocument();
+    expect(await screen.findByRole('group', { name: 'weave' })).toBeInTheDocument();
   });
 
   it('says when no Host has joined the Dispatcher', () => {
@@ -103,6 +103,23 @@ describe('the list of Sessions', () => {
     const session = screen.getByRole('region', { name: 'Session odin' });
     expect(within(within(session).getByRole('tablist', { name: 'Blocks in this pane' })).getByRole('tab', { name: 'New thread' })).toHaveAttribute('aria-selected', 'true');
     expect(tile(/^odin/)).toHaveAttribute('aria-current', 'page');
+  });
+});
+
+describe('a Project', () => {
+  it('starts a thread in its directory from its heading, which shows in that Session', async () => {
+    setIdiom('pad');
+    const user = userEvent.setup();
+    render(<MockApp />);
+    await user.click(screen.getByRole('button', { name: 'New thread in weave' }));
+    const form = screen.getByRole('form', { name: 'New thread' });
+    expect(within(form).getByRole('button', { name: 'Directory' })).toHaveAttribute('title', '/Users/jaco/Documents/VeeZee/weave');
+    await user.click(within(form).getByRole('button', { name: 'Start' }));
+    const session = await screen.findByRole('region', { name: 'Session weave' });
+    // Beside the threads the Session already showed, in front.
+    const strip = within(session).getByRole('tablist', { name: 'Blocks in this pane' });
+    await waitFor(() => expect(within(strip).getByRole('tab', { name: 'New thread' })).toHaveAttribute('aria-selected', 'true'));
+    expect(within(strip).getAllByRole('tab')).toHaveLength(6);
   });
 });
 

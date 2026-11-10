@@ -701,6 +701,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
             hosts: hosts(now, 'list'),
             threads: threads(now),
             agents: { [MAC]: AGENTS, [SERVER]: AGENTS },
+            projects: PROJECTS,
           },
           repositories: repositories(),
           terminals: { [MAC]: terminals(now) },

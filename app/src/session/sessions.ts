@@ -156,19 +156,29 @@ export function sessionLabel(session: SessionSummary): string {
   return session.git.branch ?? (session.directory === session.git.repo ? 'primary worktree' : worktree);
 }
 
+/** A Session in the list, with the Host it's on: a Session is one Host's. */
+export type ListedSession = { session: SessionSummary; host?: HostSummary };
+
 export type SessionListView = {
-  /** The Projects with a Session, by name, and each one's Sessions with their Host's name. */
-  projects: { project: ProjectSummary; sessions: { session: SessionSummary; host?: HostSummary }[] }[];
-  /** The Hosts, in the Dispatcher's order, each with its Sessions that no Project has. */
+  /** The person's Projects, by name, each with its Sessions on whichever Hosts it has them. */
+  projects: { project: ProjectSummary; sessions: ListedSession[] }[];
+  /**
+   * The Hosts that have a Session no Project has, in the Dispatcher's order, each with those
+   * Sessions, the most recently active first. A Host whose Sessions are all in Projects isn't here.
+   */
   hosts: { host: HostSummary; sessions: SessionSummary[] }[];
 };
 
-const matches = (session: SessionSummary, query: string, project?: ProjectSummary) =>
-  [session.name, session.directory, session.git?.branch ?? '', project?.name ?? ''].some((value) => value.toLocaleLowerCase().includes(query));
+const matches = (session: SessionSummary, query: string, project?: ProjectSummary, host?: HostSummary) =>
+  [session.name, session.directory, session.git?.branch ?? '', project?.name ?? '', host?.name ?? ''].some((value) => value.toLocaleLowerCase().includes(query));
 
 /**
- * The sidebar's Sessions: under their Projects first, then under their Hosts for those in none.
- * Without Projects, as when the Dispatcher can't be reached, every Session is under its Host.
+ * The sidebar's Sessions: under their Projects, and after them, under its Host, each Session no
+ * Project has (ADR 0031: a directory no Project names stays under its Host). A Host is a heading
+ * only for those: one whose Sessions are all in Projects isn't listed, and a Session under a
+ * Project says which Host it's on. A Project with no Session yet is listed too, for starting one,
+ * except while the list is filtered. Without Projects, as from a Dispatcher that keeps none, every
+ * Session is under its Host.
  */
 export function sessionListView(
   sessions: readonly SessionSummary[],
@@ -177,28 +187,21 @@ export function sessionListView(
   options: { query?: string } = {},
 ): SessionListView {
   const query = options.query?.trim().toLocaleLowerCase() ?? '';
-  const byProject = new Map<string, { session: SessionSummary; host?: HostSummary }[]>();
+  const byProject = new Map<string, ListedSession[]>();
   const byHost = new Map<string, SessionSummary[]>();
   for (const session of sessions) {
     const project = containing(projects, session.hostId, session.directory, session.git?.repo);
-    if (query && !matches(session, query, project)) continue;
-    if (project) {
-      const list = byProject.get(project.id) ?? [];
-      list.push({ session, host: hosts.find(({ id }) => id === session.hostId) });
-      byProject.set(project.id, list);
-    } else {
-      const list = byHost.get(session.hostId) ?? [];
-      list.push(session);
-      byHost.set(session.hostId, list);
-    }
+    const host = hosts.find(({ id }) => id === session.hostId);
+    if (query && !matches(session, query, project, host)) continue;
+    if (project) byProject.set(project.id, [...(byProject.get(project.id) ?? []), { session, host }]);
+    else byHost.set(session.hostId, [...(byHost.get(session.hostId) ?? []), session]);
   }
   return {
     projects: [...projects]
       .sort((left, right) => left.name.localeCompare(right.name))
-      .flatMap((project) => byProject.has(project.id) ? [{ project, sessions: byProject.get(project.id) ?? [] }] : []),
-    hosts: hosts
-      .map((host) => ({ host, sessions: byHost.get(host.id) ?? [] }))
+      .map((project) => ({ project, sessions: byProject.get(project.id) ?? [] }))
       .filter(({ sessions: listed }) => !query || listed.length > 0),
+    hosts: hosts.flatMap((host) => byHost.has(host.id) ? [{ host, sessions: byHost.get(host.id) ?? [] }] : []),
   };
 }
 
