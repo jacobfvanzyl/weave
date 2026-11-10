@@ -1445,8 +1445,12 @@ under Projects with the Dispatcher's `projects/list`, by `git.repo`.
   its directory is gone, as when git removed the worktree without the Host: such a Session
   ends as the Host starts, and as a client lists Sessions. A client may also end one with
   `sessions/end`.
-- Ending a Session forgets its layout and nothing else: its threads and terminals carry on, and
-  the next thread or terminal to start there makes it again.
+- A Session that ends is gone for good, with what was in it. When a client ends one, the
+  threads open in it close, as `thread/close` closes them, its terminals end, and its layout is
+  forgotten; nothing brings it back. Its directory stays, a worktree too, and the next thread or
+  terminal to start there makes a new Session, with no layout. A Host that does this says
+  `sessions_end` in `features`: one from before it only forgot the layout, leaving the threads
+  and terminals without a Session.
 
 Sessions are kept with the Host's other state, one file each in `layouts/` in the Host's
 directory, written whole, so they survive the Host's restarts and updates. A Host inside a
@@ -1505,9 +1509,11 @@ without one.
 
 **`sessions/end`** `{directory}` → `{}`
 
-Ends the Session `directory` is in, forgetting its layout, as above. Refused with `session_busy`
-while a thread in it runs a turn or waits on a request, or a terminal in it runs a command
-(`data: {threads, terminals}`); `no_session` when there's none.
+Ends the Session `directory` is in, for good, as above: its open threads close, its terminals
+end, and its layout is forgotten. Only what's in that Session: a directory inside it that's
+another's, as a worktree nested in it, keeps its own. Refused with `session_busy`, with nothing
+closed, while a thread in it runs a turn or waits on a request, or a terminal in it runs a
+command (`data: {threads, terminals}`); `no_session` when there's none.
 
 ### The layout
 
