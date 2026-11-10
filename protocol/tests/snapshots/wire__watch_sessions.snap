@@ -1,6 +1,6 @@
 ---
 source: protocol/tests/wire.rs
-expression: "json!({\n    \"one\":\n    message(&WatchSessionsRequest\n    {\n        directory: Some(\"/Users/jaco/Projects/weave.feature-auth/app\".into()),\n    }), \"every\": message(&WatchSessionsRequest::default()), \"response\":\n    round_trip(&WatchSessionsResponse\n    {\n        directory: Some(\"/Users/jaco/Projects/weave.feature-auth\".into()),\n        sessions: vec![session()],\n    }), \"unwatch\":\n    message(&UnwatchSessionsRequest\n    { directory: Some(\"/Users/jaco/Projects/weave.feature-auth\".into()), }),\n    \"end\":\n    message(&EndSessionRequest { directory: \"/Users/jaco/notes\".into(), }),\n})"
+expression: "json!({\n    \"one\":\n    message(&WatchSessionsRequest\n    {\n        directory: Some(\"/Users/jaco/Projects/weave.feature-auth/app\".into()),\n    }), \"every\": message(&WatchSessionsRequest::default()), \"response\":\n    round_trip(&WatchSessionsResponse\n    {\n        directory: Some(\"/Users/jaco/Projects/weave.feature-auth\".into()),\n        sessions: vec![session()],\n    }), \"unwatch\":\n    message(&UnwatchSessionsRequest\n    { directory: Some(\"/Users/jaco/Projects/weave.feature-auth\".into()), }),\n    \"end\":\n    message(&EndSessionRequest { directory: \"/Users/jaco/notes\".into(), }),\n    \"add\":\n    message(&AddToSessionRequest\n    {\n        directory: \"/Users/jaco/notes\".into(), threads:\n        vec![weave_host_protocol::threads::ThreadId::new(\"s-9\")], terminals:\n        vec![\"t-5f3a\".to_owned()],\n    }),\n})"
 ---
 {
   "one": {
@@ -20,7 +20,7 @@ expression: "json!({\n    \"one\":\n    message(&WatchSessionsRequest\n    {\n  
         "directory": "/Users/jaco/Projects/weave.feature-auth",
         "revision": 7,
         "layout": {
-          "version": 1,
+          "version": 2,
           "tabs": [
             {
               "id": "tab-1",
@@ -48,20 +48,12 @@ expression: "json!({\n    \"one\":\n    message(&WatchSessionsRequest\n    {\n  
                         }
                       },
                       {
-                        "kind": "stack",
-                        "children": [
-                          {
-                            "id": "b-3",
-                            "type": "weave.thread",
-                            "props": {
-                              "threadId": "s-2"
-                            }
-                          },
-                          {
-                            "id": "b-4",
-                            "type": "com.example.notes"
-                          }
-                        ]
+                        "kind": "block",
+                        "id": "b-3",
+                        "type": "weave.thread",
+                        "props": {
+                          "threadId": "s-2"
+                        }
                       }
                     ]
                   }
@@ -86,6 +78,19 @@ expression: "json!({\n    \"one\":\n    message(&WatchSessionsRequest\n    {\n  
                     "width": 0.35,
                     "height": 0.4
                   }
+                },
+                {
+                  "block": {
+                    "id": "b-4",
+                    "type": "com.example.notes"
+                  },
+                  "frame": {
+                    "x": 0.2,
+                    "y": 0.15,
+                    "width": 0.6,
+                    "height": 0.6
+                  },
+                  "minimized": true
                 }
               ]
             },
@@ -123,6 +128,18 @@ expression: "json!({\n    \"one\":\n    message(&WatchSessionsRequest\n    {\n  
     "method": "sessions/end",
     "params": {
       "directory": "/Users/jaco/notes"
+    }
+  },
+  "add": {
+    "method": "sessions/add",
+    "params": {
+      "directory": "/Users/jaco/notes",
+      "threads": [
+        "s-9"
+      ],
+      "terminals": [
+        "t-5f3a"
+      ]
     }
   }
 }

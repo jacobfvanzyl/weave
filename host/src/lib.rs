@@ -742,21 +742,97 @@ impl Shared {
         })
     }
 
-    /// The threads in the Session at `directory`, open or not, most recently active first,
-    /// and its terminals' ids, oldest first.
-    pub(crate) fn session_contents(&self, directory: &Path) -> (Vec<ThreadId>, Vec<String>) {
-        let mut threads = self.threads_in_session(directory);
-        threads.sort_by_key(|thread| std::cmp::Reverse(thread.last_activity));
-        let threads = threads.into_iter().map(|thread| thread.thread_id).collect();
-        (threads, self.terminals_in_session(directory, false))
+    /// Which of `threads` and `terminals`, as the Session at `directory` names its own, are
+    /// still there: the threads, open or not, most recently active first, and the terminals'
+    /// ids, oldest first.
+    pub(crate) fn session_contents(
+        &self,
+        directory: &Path,
+        threads: &[ThreadId],
+        terminals: &[String],
+    ) -> (Vec<ThreadId>, Vec<String>) {
+        let mut there = self.threads_in_session(directory);
+        there.retain(|thread| threads.contains(&thread.thread_id));
+        there.sort_by_key(|thread| std::cmp::Reverse(thread.last_activity));
+        let there = there.into_iter().map(|thread| thread.thread_id).collect();
+        let mut running = self.terminals_in_session(directory, false);
+        running.retain(|id| terminals.contains(id));
+        (there, running)
+    }
+
+    /// Whether each of `threads` and `terminals` is in `directory`, a Session's, as
+    /// `sessions/add` needs of what it adds: a thread by its worktree or its directory, blank
+    /// ones too, and a terminal by its scope.
+    pub(crate) async fn in_directory(
+        &self,
+        directory: &Path,
+        threads: &[ThreadId],
+        terminals: &[String],
+    ) -> Result<(), Error> {
+        /// Where a thread runs, when the Host has a record of it.
+        type Place = Option<(PathBuf, Option<GitLocation>)>;
+        // Taken from the registry first, so it isn't held while directories are resolved.
+        let places: Vec<(ThreadId, Place)> = {
+            let registry = self.registry();
+            threads
+                .iter()
+                .map(|thread_id| {
+                    let place = match registry.threads.get(thread_id) {
+                        Some(thread) => {
+                            let summary = thread.summary();
+                            Some((summary.cwd, summary.git))
+                        }
+                        None => registry
+                            .known
+                            .get(thread_id)
+                            .map(|recorded| (recorded.cwd.clone(), recorded.git.clone())),
+                    };
+                    (thread_id.clone(), place)
+                })
+                .collect()
+        };
+        for (thread_id, place) in places {
+            let inside = match place {
+                Some((_, Some(git))) => git.worktree == directory,
+                Some((cwd, None)) => git::canonical(&cwd) == directory,
+                None => false,
+            };
+            if !inside {
+                return Err(Error::invalid_params().data(format!(
+                    "the thread {thread_id} isn't in {}",
+                    directory.display()
+                )));
+            }
+        }
+        if terminals.is_empty() {
+            return Ok(());
+        }
+        let running = match &self.terminals {
+            Some(owner) => {
+                owner.ready().await;
+                owner.list(directory)
+            }
+            None => Vec::new(),
+        };
+        for id in terminals {
+            if !running.iter().any(|terminal| &terminal.id == id) {
+                return Err(Error::invalid_params().data(format!(
+                    "the terminal {id} isn't in {}",
+                    directory.display()
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Close what's in the Session at `directory` (symlinks resolved) before it ends
-    /// (`sessions/end`): refused, with nothing closed, while a thread in it runs a turn or waits
-    /// on a request, or a terminal in it runs a command; otherwise its terminals end and the
-    /// threads open in it close, blank ones included. Only what's in this Session: a directory
-    /// inside it that's another Session's, as a worktree nested in it, keeps its own.
+    /// (`sessions/end`): refused, with nothing closed, while a thread of its runs a turn or waits
+    /// on a request, or a terminal of its runs a command; otherwise its terminals end and its
+    /// open threads close, blank ones included. Only what's the Session's: a thread or terminal
+    /// in its directory that no client added to it, as one started from a terminal, is left as
+    /// it is.
     pub(crate) async fn close_session(&self, directory: &Path) -> Result<(), Error> {
+        let (own_threads, own_terminals) = self.sessions.members(directory).unwrap_or_default();
         // Taken from the registry first, so it isn't held while directories are resolved.
         let mut inside: Vec<(ThreadHandle, Summary)> = self
             .registry()
@@ -764,9 +840,12 @@ impl Shared {
             .values()
             .map(|thread| (thread.clone(), thread.summary()))
             .collect();
-        inside.retain(|(_, summary)| match &summary.git {
-            Some(git) => git.worktree == directory,
-            None => git::canonical(&summary.cwd) == directory,
+        inside.retain(|(_, summary)| {
+            own_threads.contains(&summary.thread_id)
+                && match &summary.git {
+                    Some(git) => git.worktree == directory,
+                    None => git::canonical(&summary.cwd) == directory,
+                }
         });
         let busy: Vec<ThreadId> = inside
             .iter()
@@ -776,7 +855,8 @@ impl Shared {
         let (terminals, busy_terminals): (Vec<String>, Vec<String>) = match &self.terminals {
             Some(terminals) => {
                 terminals.ready().await;
-                let listed = terminals.list(directory);
+                let mut listed = terminals.list(directory);
+                listed.retain(|terminal| own_terminals.contains(&terminal.id));
                 let busy = listed
                     .iter()
                     .filter(|terminal| {
@@ -816,11 +896,23 @@ impl Shared {
         Ok(())
     }
 
-    /// Make the Session at `directory` if there's none, as a thread or terminal starts there.
-    pub(crate) fn make_session(&self, directory: &Path, git: Option<GitLocation>) {
-        self.sessions.make(directory, git, &|directory| {
-            self.session_contents(directory)
-        });
+    /// What the thread `by` started in `directory` joins the Session there, when `by` is in it:
+    /// a thread its agent started, or a terminal opened from it. The Host makes no Session for
+    /// it otherwise (WVE-203).
+    pub(crate) fn started_in_session(
+        &self,
+        directory: &Path,
+        by: &ThreadId,
+        thread: Option<&ThreadId>,
+        terminal: Option<&str>,
+    ) {
+        self.sessions.add_started(
+            directory,
+            by,
+            thread,
+            terminal,
+            &|directory, threads, terminals| self.session_contents(directory, threads, terminals),
+        );
     }
 
     /// The ids of the terminals in the Session at `directory`, oldest first; with `busy`, only
@@ -843,14 +935,14 @@ impl Shared {
             .collect()
     }
 
-    /// The threads the Host has a record of in the Session at `directory`, but blank ones.
+    /// The threads the Host has a record of in the directory of the Session at `directory`,
+    /// blank ones too: one a client just started as a Block is the Session's before it's prompted.
     fn threads_in_session(&self, directory: &Path) -> Vec<SessionThread> {
         let threads: Vec<(SessionThread, PathBuf, Option<GitLocation>)> = {
             let registry = self.registry();
             let open = registry
                 .threads
                 .values()
-                .filter(|thread| !thread.is_blank())
                 .map(ThreadHandle::summary)
                 .map(|summary| {
                     let thread = SessionThread {

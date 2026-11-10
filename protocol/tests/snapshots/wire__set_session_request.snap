@@ -7,7 +7,7 @@ expression: "message(&SetSessionRequest\n{\n    directory: \"/Users/jaco/Project
   "params": {
     "directory": "/Users/jaco/Projects/weave.feature-auth",
     "layout": {
-      "version": 1,
+      "version": 2,
       "tabs": [
         {
           "id": "tab-1",
@@ -35,20 +35,12 @@ expression: "message(&SetSessionRequest\n{\n    directory: \"/Users/jaco/Project
                     }
                   },
                   {
-                    "kind": "stack",
-                    "children": [
-                      {
-                        "id": "b-3",
-                        "type": "weave.thread",
-                        "props": {
-                          "threadId": "s-2"
-                        }
-                      },
-                      {
-                        "id": "b-4",
-                        "type": "com.example.notes"
-                      }
-                    ]
+                    "kind": "block",
+                    "id": "b-3",
+                    "type": "weave.thread",
+                    "props": {
+                      "threadId": "s-2"
+                    }
                   }
                 ]
               }
@@ -73,6 +65,19 @@ expression: "message(&SetSessionRequest\n{\n    directory: \"/Users/jaco/Project
                 "width": 0.35,
                 "height": 0.4
               }
+            },
+            {
+              "block": {
+                "id": "b-4",
+                "type": "com.example.notes"
+              },
+              "frame": {
+                "x": 0.2,
+                "y": 0.15,
+                "width": 0.6,
+                "height": 0.6
+              },
+              "minimized": true
             }
           ]
         },

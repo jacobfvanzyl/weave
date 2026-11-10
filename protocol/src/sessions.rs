@@ -1,17 +1,22 @@
-//! Sessions: one directory on the Host's computer, and the layout clients show it in (ADR 0031,
-//! WVE-202).
+//! Sessions: one directory on the Host's computer, the threads and terminals a client put in it,
+//! and the layout clients show them in (ADR 0031, WVE-202, WVE-203).
 //!
 //! A Session is known by its directory, which is its scope as terminals have one: the deepest
 //! worktree a directory is in, or the directory itself outside a repository, with symlinks
 //! resolved. So every worktree of a repository is a Session of its own, and there is one
-//! Session per directory. The Host makes one when a thread or terminal first starts in a
-//! directory that has none, and when a client sets a layout for one. A Session ends with its
-//! worktree (`worktrees/remove`, `worktrees/release`), when its directory is gone, or when a
-//! client ends it (`sessions/end`).
+//! Session per directory. A client makes one, by setting a layout for a directory that has none
+//! or by adding to one (`sessions/add`): the Host makes none on its own, so a directory where
+//! threads only ran from a terminal or a schedule has none. A Session ends with its worktree
+//! (`worktrees/remove`, `worktrees/release`), when its directory is gone, or when a client ends
+//! it (`sessions/end`).
+//!
+//! What's in a Session is what a client added to it, and what a thread in it started: a thread
+//! or terminal elsewhere in its directory isn't its, until a client adds it. A thread that
+//! closes stays its; one that's deleted, and a terminal that ends, leave it.
 //!
 //! A Session's layout is a document the Host stores and versions but never reads: tabs, each a
-//! tree of `row`, `column` and `stack` nodes with Blocks at the leaves, and Blocks floating over
-//! them ([`layout`]). Each write gives it a new revision, the newest write wins, and every client
+//! tree of `row` and `column` nodes with Blocks at the leaves, and Blocks floating over them,
+//! some of them minimized ([`layout`]). Each write gives it a new revision, the newest write wins, and every client
 //! watching the Session is sent the new revision. Focus, zoom, the tab in front and scroll
 //! positions stay on each device, and are never written to it.
 
@@ -33,6 +38,11 @@ pub const FEATURE: &str = "sessions";
 /// The Host's `sessions/end` closes what's in the Session, in `features`: a Host from before it
 /// only forgot the Session's layout, leaving its threads and terminals without one.
 pub const END_FEATURE: &str = "sessions_end";
+
+/// A Session holds what clients add to it (`sessions/add`), and the Host makes none on its own,
+/// in `features`: a Host from before it made one for any directory a thread was prompted or a
+/// terminal started in, and counted everything in the directory as the Session's.
+pub const ADD_FEATURE: &str = "sessions_add";
 
 /// The largest layout document the Host keeps, serialized: far more than any layout needs.
 pub const MAX_LAYOUT: usize = 1024 * 1024;
@@ -60,11 +70,14 @@ pub struct Session {
     /// When its layout was last set; absent before any client set one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<Timestamp>,
-    /// The threads the Host has a record of in it, open or not, most recently active first, so
-    /// a client can place one no Block shows. `threads/watch` follows them.
+    /// Its threads that the Host has a record of, open or not, most recently active first, so a
+    /// client can place one no Block shows: those clients added to it and those its threads
+    /// started, not every thread in its directory. One a client added before prompting it is
+    /// here too, though no listing has it yet. `threads/watch` follows them.
     #[serde(default)]
     pub threads: Vec<ThreadId>,
-    /// Its terminals' ids, oldest first. `terminals/watch` follows them.
+    /// Its terminals' ids, oldest first: those clients added to it and those opened from its
+    /// threads. `terminals/watch` follows them.
     #[serde(default)]
     pub terminals: Vec<String>,
 }
@@ -120,9 +133,26 @@ pub struct SetSessionRequest {
     pub if_revision: Option<u64>,
 }
 
+/// `sessions/add`: `threads` and `terminals` are the Session's that `directory` is in from now
+/// on, which is made first if the directory has none, without a layout. A client asks it as it
+/// starts a thread or terminal in a Session, and to bring in one started elsewhere. Each must be
+/// in the Session's directory, else invalid params; one that's already its changes nothing.
+/// Every client watching the Session is sent it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "sessions/add", response = SessionResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct AddToSessionRequest {
+    pub directory: PathBuf,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<ThreadId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terminals: Vec<String>,
+}
+
 /// `sessions/watch`: the Session `directory` is in, or with no `directory` every Session, as
-/// `sessions/get` gives them; then a [`SessionUpdatedNotification`] when one is made or its
-/// layout is set, and a [`SessionEndedNotification`] when one ends, until the connection ends
+/// `sessions/get` gives them; then a [`SessionUpdatedNotification`] when one is made, its
+/// layout is set or something joins it, and a [`SessionEndedNotification`] when one ends, until the connection ends
 /// or the client sends `sessions/unwatch`. A directory with no Session yet may be watched, and
 /// answers no Session.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
@@ -156,10 +186,10 @@ pub struct UnwatchSessionsRequest {
     pub directory: Option<PathBuf>,
 }
 
-/// `sessions/end`: end the Session `directory` is in, for good. The threads open in it close,
-/// as `thread/close` closes them, its terminals end, and its layout is forgotten: nothing brings
-/// it back, and a thread or terminal that starts there later makes a new one, with no layout.
-/// Its directory stays, a worktree too. Refused, with nothing closed, while a thread in it runs a
+/// `sessions/end`: end the Session `directory` is in, for good. Its open threads close, as
+/// `thread/close` closes them, its terminals end, and its layout is forgotten: nothing brings it
+/// back. What else is in its directory, which was never the Session's, is left as it is. Its
+/// directory stays, a worktree too. Refused, with nothing closed, while a thread in it runs a
 /// turn or waits on a request, or a terminal in it runs a command (`session_busy`); `no_session`
 /// when it has none.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
@@ -170,8 +200,8 @@ pub struct EndSessionRequest {
     pub directory: PathBuf,
 }
 
-/// `sessions/updated`, to clients watching it: a Session was made, or its layout set. It
-/// carries the layout.
+/// `sessions/updated`, to clients watching it: a Session was made, its layout set, or a thread or
+/// terminal joined it, which leaves its revision as it was. It carries the layout.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcNotification)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[notification(method = "sessions/updated")]
@@ -197,8 +227,10 @@ pub mod layout {
     use serde::Deserialize;
     use serde::Serialize;
 
-    /// This shape's version, which [`Layout::version`] carries.
-    pub const VERSION: u32 = 1;
+    /// This shape's version, which [`Layout::version`] carries. Version 1 (WVE-202) also had
+    /// `stack` nodes, Blocks one behind another in one place of the tree; since version 2
+    /// (WVE-203) a Block in a tab is docked in its tree, alone in its place, or floats over it.
+    pub const VERSION: u32 = 2;
 
     /// A Session's tabs.
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -222,7 +254,7 @@ pub mod layout {
         /// The person's name for it; clients name an untitled tab from what it shows.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub title: Option<String>,
-        /// Its tree of panes; absent for an empty tab.
+        /// Its tree of docked Blocks; absent for a tab with none.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub root: Option<Node>,
         /// Blocks over the tree, last on top.
@@ -230,7 +262,7 @@ pub mod layout {
         pub floating: Vec<Floating>,
     }
 
-    /// A pane, or panes side by side, one above another, or one behind another.
+    /// A docked Block, or several side by side or one above another.
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
     #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
     #[cfg_attr(feature = "schema", schemars(rename = "SessionNode"))]
@@ -240,8 +272,6 @@ pub mod layout {
         Row(Split),
         /// One above another, top to bottom.
         Column(Split),
-        /// One behind another, like tabs within a pane. Which is in front is each device's own.
-        Stack(Stack),
         Block(Block),
     }
 
@@ -257,15 +287,7 @@ pub mod layout {
         pub sizes: Option<Vec<f64>>,
     }
 
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-    #[cfg_attr(feature = "schema", schemars(rename = "SessionStack"))]
-    #[serde(rename_all = "camelCase")]
-    pub struct Stack {
-        pub children: Vec<Block>,
-    }
-
-    /// What one pane shows. It points at something on the Session's Host, such as a thread or a
+    /// What one place in a tab shows. It points at something on the Session's Host, such as a thread or a
     /// terminal, which the Host doesn't read. A client that closes one closes what it shows: a
     /// thread, which can be shown again, or a terminal, which ends with its Block (ADR 0031).
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -291,7 +313,11 @@ pub mod layout {
     #[serde(rename_all = "camelCase")]
     pub struct Floating {
         pub block: Block,
+        /// Where it is while it isn't minimized, and where it comes back to.
         pub frame: Frame,
+        /// Put away: clients show it as its name, to bring back, in place of its frame.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pub minimized: bool,
     }
 
     /// Where a floating Block is, as fractions of its tab's width and height from its top left.

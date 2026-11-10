@@ -5470,6 +5470,7 @@ async fn a_signal_waits_for_running_turns_unless_a_client_drained_first() {
 mod sessions {
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use weave_host_protocol::sessions::AddToSessionRequest;
     use weave_host_protocol::sessions::EndSessionRequest;
     use weave_host_protocol::sessions::FEATURE as SESSIONS_FEATURE;
     use weave_host_protocol::sessions::GetSessionRequest;
@@ -5484,9 +5485,20 @@ mod sessions {
     /// A layout with one tab showing `block`.
     fn layout(block: &str) -> serde_json::Value {
         json!({
-            "version": 1,
+            "version": 2,
             "tabs": [{"id": "tab-1", "root": {"kind": "block", "id": block, "type": "weave.thread"}}],
         })
+    }
+
+    fn add(directory: &Path, threads: &[&ThreadId]) -> AddToSessionRequest {
+        AddToSessionRequest {
+            directory: directory.to_path_buf(),
+            threads: threads
+                .iter()
+                .map(|thread_id| (*thread_id).clone())
+                .collect(),
+            terminals: Vec::new(),
+        }
     }
 
     fn set(
@@ -5660,13 +5672,13 @@ mod sessions {
         assert!(!ipad.hears_of_a_session().await);
 
         // A layout past the limit is refused.
-        let huge = json!({"version": 1, "tabs": [], "padding": "x".repeat(1024 * 1024)});
+        let huge = json!({"version": 2, "tabs": [], "padding": "x".repeat(1024 * 1024)});
         assert!(mac.connection.send(set(&repo, huge, None)).await.is_err());
         assert_eq!(mac.session(&repo).await.expect("sessions/get").revision, 3);
     }
 
     #[tokio::test]
-    async fn a_prompted_thread_makes_its_directorys_session_which_lists_it() {
+    async fn a_session_holds_what_clients_add_and_the_host_makes_none() {
         let world = World::new();
         let repo = world.repository();
         let notes = world.cwd().join("notes");
@@ -5681,42 +5693,66 @@ mod sessions {
             .expect("sessions/watch");
         let mut client = world.client(&daemon).await;
 
-        // A blank thread makes none.
-        client
-            .connection
-            .send(CreateThreadRequest {
-                cwd: notes.clone(),
-                ..TestClient::create_request(&world, "fake")
-            })
-            .await
-            .expect("thread/create");
+        // A thread prompted from anywhere makes no Session: only a client does (WVE-203).
+        let sub = repo.join("src");
+        std::fs::create_dir(&sub).expect("a subdirectory");
+        let elsewhere = client.thread_in(&world, &sub).await.thread_id;
         assert!(!watcher.hears_of_a_session().await);
         assert_eq!(client.sessions().await, Vec::new());
 
-        // A prompted one does: in a subdirectory of a repository, the worktree's.
-        let sub = repo.join("src");
-        std::fs::create_dir(&sub).expect("a subdirectory");
-        let thread_id = client.thread_in(&world, &sub).await.thread_id;
-        let made = watcher.updated().await;
+        // A client adds a thread, which makes the Session, at the worktree, and holds only it.
+        let own = client.thread_in(&world, &sub).await.thread_id;
+        let made = client
+            .connection
+            .send(add(&sub, &[&own]))
+            .await
+            .expect("sessions/add")
+            .session;
         assert_eq!(made.directory, repo);
         assert_eq!(made.revision, 0);
         assert_eq!(made.layout, None);
-        assert_eq!(made.threads, vec![thread_id.clone()]);
+        assert_eq!(made.threads, vec![own.clone()]);
+        assert_eq!(watcher.updated().await, made);
 
-        // Outside a repository, the directory's own; the newest thread first.
-        let first = client.thread_in(&world, &notes).await.thread_id;
-        assert_eq!(watcher.updated().await.directory, notes);
-        let second = client.thread_in(&world, &notes).await.thread_id;
+        // Adding it again changes nothing. One from elsewhere in the directory is brought in the
+        // same way, and its watchers hear.
+        client
+            .connection
+            .send(add(&repo, &[&own]))
+            .await
+            .expect("sessions/add");
         assert!(!watcher.hears_of_a_session().await);
-        let listed = client.sessions().await;
-        let directories: Vec<&Path> = listed
-            .iter()
-            .map(|session| session.directory.as_path())
-            .collect();
-        assert_eq!(directories, [repo.as_path(), notes.as_path()]);
-        assert_eq!(listed[0].threads, vec![thread_id]);
-        assert_eq!(listed[1].threads, vec![second, first]);
-        assert!(listed[1].git.is_none());
+        let mut both = client
+            .connection
+            .send(add(&repo, &[&elsewhere]))
+            .await
+            .expect("sessions/add")
+            .session
+            .threads;
+        assert_eq!(watcher.updated().await.threads, both);
+        both.sort_by_key(ToString::to_string);
+        let mut expected = vec![own.clone(), elsewhere.clone()];
+        expected.sort_by_key(ToString::to_string);
+        assert_eq!(both, expected);
+
+        // A thread in another directory isn't its to add.
+        let outside = client.thread_in(&world, &notes).await.thread_id;
+        let refused = client
+            .connection
+            .send(add(&repo, &[&outside]))
+            .await
+            .expect_err("a thread elsewhere");
+        assert!(format!("{refused:?}").contains("isn't in"), "{refused:?}");
+        assert_eq!(client.sessions().await.len(), 1);
+
+        // Its layout is set without losing what's in it.
+        let set = client
+            .connection
+            .send(set(&repo, layout("a"), Some(0)))
+            .await
+            .expect("sessions/set")
+            .session;
+        assert_eq!(set.threads.len(), 2);
     }
 
     #[tokio::test]
@@ -5849,6 +5885,13 @@ mod sessions {
         let daemon = world.daemon(false, Duration::from_secs(60));
         let mut client = world.client(&daemon).await;
         let thread_id = client.thread_in(&world, &dir).await.thread_id;
+        // Another thread in its directory, which no client added to it.
+        let elsewhere = client.thread_in(&world, &dir).await.thread_id;
+        client
+            .connection
+            .send(add(&dir, &[&thread_id]))
+            .await
+            .expect("sessions/add");
         assert_eq!(
             client.session(&dir).await.expect("sessions/get").threads,
             vec![thread_id.clone()]
@@ -5875,6 +5918,11 @@ mod sessions {
         let inner = dir.join("inner");
         std::fs::create_dir(&inner).expect("a directory");
         let inner_thread = client.thread_in(&world, &inner).await.thread_id;
+        client
+            .connection
+            .send(add(&inner, &[&inner_thread]))
+            .await
+            .expect("sessions/add");
 
         // Then it ends for good, and its thread closes with it.
         client.connection.send(end()).await.expect("sessions/end");
@@ -5897,7 +5945,8 @@ mod sessions {
                 .map(|listing| listing.state)
         };
         assert_eq!(state(&thread_id), Some(ThreadStatus::Closed));
-        // The Session inside it keeps its thread, and itself.
+        // What was never its stays open, and the Session inside it keeps its thread, and itself.
+        assert_eq!(state(&elsewhere), Some(ThreadStatus::Open));
         assert_eq!(state(&inner_thread), Some(ThreadStatus::Open));
         assert_eq!(
             client
@@ -5908,11 +5957,11 @@ mod sessions {
             vec![inner_thread.clone()]
         );
 
-        // A thread that starts there later makes a new Session, with nothing of the one that ended.
-        let later = client.thread_in(&world, &dir).await.thread_id;
-        let made = client.session(&dir).await.expect("a new Session");
-        assert_eq!(made.revision, 0);
-        assert_eq!(made.layout, None);
-        assert!(made.threads.contains(&later), "{:?}", made.threads);
+        // Nothing brings it back: a thread that's prompted there later makes none.
+        client.thread_in(&world, &dir).await;
+        assert!(errors::is(
+            &client.session(&dir).await.expect_err("none"),
+            errors::NO_SESSION
+        ));
     }
 }

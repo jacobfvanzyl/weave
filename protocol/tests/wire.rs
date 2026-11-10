@@ -2473,8 +2473,8 @@ fn terminals() {
     );
 }
 
-/// A Session's layout as the app writes it: tabs of rows, columns and stacks with Blocks at the
-/// leaves, and a floating Block.
+/// A Session's layout as the app writes it: tabs of rows and columns with Blocks at the leaves,
+/// a floating Block and a minimized one.
 fn session_layout() -> serde_json::Value {
     use weave_host_protocol::sessions::layout::Block;
     use weave_host_protocol::sessions::layout::Floating;
@@ -2482,7 +2482,6 @@ fn session_layout() -> serde_json::Value {
     use weave_host_protocol::sessions::layout::Layout;
     use weave_host_protocol::sessions::layout::Node;
     use weave_host_protocol::sessions::layout::Split;
-    use weave_host_protocol::sessions::layout::Stack;
     use weave_host_protocol::sessions::layout::Tab;
     use weave_host_protocol::sessions::layout::VERSION;
 
@@ -2507,27 +2506,39 @@ fn session_layout() -> serde_json::Value {
                                     "weave.terminal",
                                     json!({"terminalId": "t-5f3a"}),
                                 )),
-                                Node::Stack(Stack {
-                                    children: vec![
-                                        block("b-3", "weave.thread", json!({"threadId": "s-2"})),
-                                        block("b-4", "com.example.notes", json!({})),
-                                    ],
-                                }),
+                                Node::Block(block(
+                                    "b-3",
+                                    "weave.thread",
+                                    json!({"threadId": "s-2"}),
+                                )),
                             ],
                             sizes: None,
                         }),
                     ],
                     sizes: Some(vec![2.0, 1.0]),
                 })),
-                floating: vec![Floating {
-                    block: block("b-5", "weave.terminal", json!({"terminalId": "t-77c1"})),
-                    frame: Frame {
-                        x: 0.6,
-                        y: 0.05,
-                        width: 0.35,
-                        height: 0.4,
+                floating: vec![
+                    Floating {
+                        block: block("b-5", "weave.terminal", json!({"terminalId": "t-77c1"})),
+                        frame: Frame {
+                            x: 0.6,
+                            y: 0.05,
+                            width: 0.35,
+                            height: 0.4,
+                        },
+                        minimized: false,
                     },
-                }],
+                    Floating {
+                        block: block("b-4", "com.example.notes", json!({})),
+                        frame: Frame {
+                            x: 0.2,
+                            y: 0.15,
+                            width: 0.6,
+                            height: 0.6,
+                        },
+                        minimized: true,
+                    },
+                ],
             },
             Tab {
                 id: "tab-2".to_owned(),
@@ -2562,6 +2573,7 @@ fn session() -> weave_host_protocol::sessions::Session {
 
 #[test]
 fn sessions() {
+    use weave_host_protocol::sessions::AddToSessionRequest;
     use weave_host_protocol::sessions::EndSessionRequest;
     use weave_host_protocol::sessions::GetSessionRequest;
     use weave_host_protocol::sessions::ListSessionsRequest;
@@ -2586,7 +2598,7 @@ fn sessions() {
                         layout: None,
                         ..session()
                     },
-                    // Made by a thread, before any client set its layout.
+                    // Made by `sessions/add`, before any client set its layout.
                     Session {
                         directory: "/Users/jaco/notes".into(),
                         revision: 0,
@@ -2634,6 +2646,11 @@ fn sessions() {
             }),
             "end": message(&EndSessionRequest {
                 directory: "/Users/jaco/notes".into(),
+            }),
+            "add": message(&AddToSessionRequest {
+                directory: "/Users/jaco/notes".into(),
+                threads: vec![weave_host_protocol::threads::ThreadId::new("s-9")],
+                terminals: vec!["t-5f3a".to_owned()],
             }),
         })
     );

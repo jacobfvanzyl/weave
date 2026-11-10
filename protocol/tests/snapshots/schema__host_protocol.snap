@@ -236,6 +236,10 @@ expression: schema()
       "params": "EndSessionRequest",
       "result": "Empty"
     },
+    "sessions/add": {
+      "params": "AddToSessionRequest",
+      "result": "SessionResponse"
+    },
     "thread/report": {
       "params": "ReportThreadRequest",
       "result": "Empty"
@@ -449,6 +453,7 @@ expression: schema()
       "otherHosts": "otherHosts",
       "mcpServers": "mcpServers",
       "sessionsEnd": "sessions_end",
+      "sessionsAdd": "sessions_add",
       "carry": "carry",
       "sessions": "sessions"
     },
@@ -460,7 +465,7 @@ expression: schema()
     },
     "sessions": {
       "maxLayout": 1048576,
-      "layoutVersion": 1
+      "layoutVersion": 2
     },
     "requestKeys": {
       "maxKey": 200
@@ -7705,7 +7710,7 @@ expression: schema()
           "items": {
             "$ref": "#/$defs/SessionId"
           },
-          "description": "The threads the Host has a record of in it, open or not, most recently active first, so\na client can place one no Block shows. `threads/watch` follows them.",
+          "description": "Its threads that the Host has a record of, open or not, most recently active first, so a\nclient can place one no Block shows: those clients added to it and those its threads\nstarted, not every thread in its directory. One a client added before prompting it is\nhere too, though no listing has it yet. `threads/watch` follows them.",
           "default": []
         },
         "terminals": {
@@ -7713,7 +7718,7 @@ expression: schema()
           "items": {
             "type": "string"
           },
-          "description": "Its terminals' ids, oldest first. `terminals/watch` follows them.",
+          "description": "Its terminals' ids, oldest first: those clients added to it and those opened from its\nthreads. `terminals/watch` follows them.",
           "default": []
         }
       },
@@ -7770,7 +7775,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "Its tree of panes; absent for an empty tab."
+          "description": "Its tree of docked Blocks; absent for a tab with none."
         },
         "floating": {
           "type": "array",
@@ -7815,20 +7820,6 @@ expression: schema()
           "description": "One above another, top to bottom."
         },
         {
-          "$ref": "#/$defs/SessionStack",
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "const": "stack"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "description": "One behind another, like tabs within a pane. Which is in front is each device's own."
-        },
-        {
           "$ref": "#/$defs/SessionBlock",
           "type": "object",
           "properties": {
@@ -7842,7 +7833,7 @@ expression: schema()
           ]
         }
       ],
-      "description": "A pane, or panes side by side, one above another, or one behind another."
+      "description": "A docked Block, or several side by side or one above another."
     },
     "SessionSplit": {
       "type": "object",
@@ -7890,21 +7881,7 @@ expression: schema()
         "id",
         "type"
       ],
-      "description": "What one pane shows. It points at something on the Session's Host, such as a thread or a\nterminal, which the Host doesn't read. A client that closes one closes what it shows: a\nthread, which can be shown again, or a terminal, which ends with its Block (ADR 0031)."
-    },
-    "SessionStack": {
-      "type": "object",
-      "properties": {
-        "children": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SessionBlock"
-          }
-        }
-      },
-      "required": [
-        "children"
-      ]
+      "description": "What one place in a tab shows. It points at something on the Session's Host, such as a thread or a\nterminal, which the Host doesn't read. A client that closes one closes what it shows: a\nthread, which can be shown again, or a terminal, which ends with its Block (ADR 0031)."
     },
     "SessionFloating": {
       "type": "object",
@@ -7913,7 +7890,12 @@ expression: schema()
           "$ref": "#/$defs/SessionBlock"
         },
         "frame": {
-          "$ref": "#/$defs/SessionFrame"
+          "$ref": "#/$defs/SessionFrame",
+          "description": "Where it is while it isn't minimized, and where it comes back to."
+        },
+        "minimized": {
+          "type": "boolean",
+          "description": "Put away: clients show it as its name, to bring back, in place of its frame."
         }
       },
       "required": [
@@ -8009,7 +7991,7 @@ expression: schema()
           ]
         }
       },
-      "description": "`sessions/watch`: the Session `directory` is in, or with no `directory` every Session, as\n`sessions/get` gives them; then a [`SessionUpdatedNotification`] when one is made or its\nlayout is set, and a [`SessionEndedNotification`] when one ends, until the connection ends\nor the client sends `sessions/unwatch`. A directory with no Session yet may be watched, and\nanswers no Session."
+      "description": "`sessions/watch`: the Session `directory` is in, or with no `directory` every Session, as\n`sessions/get` gives them; then a [`SessionUpdatedNotification`] when one is made, its\nlayout is set or something joins it, and a [`SessionEndedNotification`] when one ends, until the connection ends\nor the client sends `sessions/unwatch`. A directory with no Session yet may be watched, and\nanswers no Session."
     },
     "WatchSessionsResponse": {
       "type": "object",
@@ -8055,7 +8037,31 @@ expression: schema()
       "required": [
         "directory"
       ],
-      "description": "`sessions/end`: end the Session `directory` is in, for good. The threads open in it close,\nas `thread/close` closes them, its terminals end, and its layout is forgotten: nothing brings\nit back, and a thread or terminal that starts there later makes a new one, with no layout.\nIts directory stays, a worktree too. Refused, with nothing closed, while a thread in it runs a\nturn or waits on a request, or a terminal in it runs a command (`session_busy`); `no_session`\nwhen it has none."
+      "description": "`sessions/end`: end the Session `directory` is in, for good. Its open threads close, as\n`thread/close` closes them, its terminals end, and its layout is forgotten: nothing brings it\nback. What else is in its directory, which was never the Session's, is left as it is. Its\ndirectory stays, a worktree too. Refused, with nothing closed, while a thread in it runs a\nturn or waits on a request, or a terminal in it runs a command (`session_busy`); `no_session`\nwhen it has none."
+    },
+    "AddToSessionRequest": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string"
+        },
+        "threads": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionId"
+          }
+        },
+        "terminals": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "directory"
+      ],
+      "description": "`sessions/add`: `threads` and `terminals` are the Session's that `directory` is in from now\non, which is made first if the directory has none, without a layout. A client asks it as it\nstarts a thread or terminal in a Session, and to bring in one started elsewhere. Each must be\nin the Session's directory, else invalid params; one that's already its changes nothing.\nEvery client watching the Session is sent it."
     },
     "ReportThreadRequest": {
       "type": "object",
@@ -10192,7 +10198,7 @@ expression: schema()
       "required": [
         "session"
       ],
-      "description": "`sessions/updated`, to clients watching it: a Session was made, or its layout set. It\ncarries the layout."
+      "description": "`sessions/updated`, to clients watching it: a Session was made, its layout set, or a thread or\nterminal joined it, which leaves its revision as it was. It carries the layout."
     },
     "SessionEndedNotification": {
       "type": "object",

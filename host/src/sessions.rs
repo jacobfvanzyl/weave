@@ -1,7 +1,10 @@
-//! Sessions and their layouts, which the Host keeps without reading them (ADR 0031, WVE-202).
+//! Sessions: what's in each, and their layouts, which the Host keeps without reading them
+//! (ADR 0031, WVE-202, WVE-203).
 //!
 //! A Session is known by its directory: the deepest worktree a directory is in, or the directory
-//! itself outside a repository, as a terminal's scope is. Each is kept in a file of its own in
+//! itself outside a repository, as a terminal's scope is. A client makes one (`sessions/set`,
+//! `sessions/add`), never the Host, and what's in it is what clients added and what its threads
+//! started, not everything in its directory. Each is kept in a file of its own in
 //! the Host's `layouts` directory, named by a hash of the directory, and replaced whole when its
 //! layout is set, so it survives the Host's restarts and updates. A Host with nowhere to keep
 //! them, as one inside a client, keeps them in memory.
@@ -34,9 +37,10 @@ use weave_host_protocol::worktrees::GitLocation;
 use crate::journal::now_ms;
 use crate::thread::lock;
 
-/// What a Session holds that its record doesn't, read from the Host as it is now: its threads,
-/// most recently active first, and its terminals' ids, oldest first.
-pub(crate) type Contents<'a> = &'a dyn Fn(&Path) -> (Vec<ThreadId>, Vec<String>);
+/// Which of the threads and terminals a Session's record names are still there, read from the
+/// Host as it is now: the threads most recently active first, the terminals' ids oldest first.
+pub(crate) type Contents<'a> =
+    &'a dyn Fn(&Path, &[ThreadId], &[String]) -> (Vec<ThreadId>, Vec<String>);
 
 pub(crate) struct Sessions {
     /// Where each Session's file is; none keeps them in memory only.
@@ -78,11 +82,37 @@ struct Record {
     created_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     updated_at: Option<u64>,
+    /// The threads that are its: those clients added, and those its threads started. One that
+    /// was deleted since stays named here and is left out of what clients are told.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    threads: Vec<ThreadId>,
+    /// Its terminals' ids, likewise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    terminals: Vec<String>,
 }
 
 impl Record {
+    fn new(directory: &Path, git: Option<GitLocation>) -> Self {
+        Self {
+            directory: directory.to_path_buf(),
+            revision: 0,
+            layout: None,
+            git,
+            created_at: now_ms(),
+            updated_at: None,
+            threads: Vec::new(),
+            terminals: Vec::new(),
+        }
+    }
+
+    /// Whether a Host from before WVE-203 made it for a thread or terminal that started in its
+    /// directory, and no client did anything with it since.
+    fn nobodys(&self) -> bool {
+        self.layout.is_none() && self.threads.is_empty() && self.terminals.is_empty()
+    }
+
     fn session(&self, contents: Contents<'_>, with_layout: bool) -> Session {
-        let (threads, terminals) = contents(&self.directory);
+        let (threads, terminals) = contents(&self.directory, &self.threads, &self.terminals);
         Session {
             directory: self.directory.clone(),
             revision: self.revision,
@@ -102,13 +132,19 @@ impl Record {
 
 impl Sessions {
     /// The Sessions kept in `dir`, but those whose directory is gone, which end as they're
-    /// found; none keeps them in memory.
+    /// found, and those the Host made itself before WVE-203 that no client ever touched, which
+    /// were never anyone's; none keeps them in memory.
     pub(crate) fn load(dir: Option<PathBuf>) -> Self {
         let mut records: BTreeMap<PathBuf, Record> = BTreeMap::new();
         if let Some(dir) = &dir {
             for record in read_dir(dir) {
                 if !record.directory.is_dir() {
                     tracing::info!(directory = %record.directory.display(), "a Session's directory is gone, so it ended");
+                    remove_file(&file_for(dir, &record.directory));
+                    continue;
+                }
+                if record.nobodys() {
+                    tracing::info!(directory = %record.directory.display(), "a Session no client made is dropped");
                     remove_file(&file_for(dir, &record.directory));
                     continue;
                 }
@@ -165,20 +201,63 @@ impl Sessions {
             .map(|record| record.session(contents, true))
     }
 
-    /// Make a Session at `directory` if there's none, without a layout, and tell its watchers.
-    pub(crate) fn make(&self, directory: &Path, git: Option<GitLocation>, contents: Contents<'_>) {
+    /// `sessions/add`: `threads` and `terminals` are the Session's at `directory` from now on,
+    /// which is made first if there's none, without a layout. Its watchers are told when that
+    /// changed anything.
+    pub(crate) fn add(
+        &self,
+        directory: &Path,
+        threads: &[ThreadId],
+        terminals: &[String],
+        git: Option<GitLocation>,
+        contents: Contents<'_>,
+    ) -> Session {
         let mut state = lock(&self.state);
-        if state.records.contains_key(directory) {
+        let made = !state.records.contains_key(directory);
+        let mut record = state
+            .records
+            .get(directory)
+            .cloned()
+            .unwrap_or_else(|| Record::new(directory, git));
+        let joined = join(&mut record, threads, terminals);
+        if !made && !joined {
+            return record.session(contents, true);
+        }
+        self.write(&record);
+        let session = record.session(contents, true);
+        state.records.insert(directory.to_path_buf(), record);
+        tell(
+            &mut state,
+            directory,
+            &SessionUpdatedNotification {
+                session: session.clone(),
+            },
+        );
+        session
+    }
+
+    /// What the thread `by` started is its Session's too: `thread` or `terminal` joins the
+    /// Session at `directory` when `by` is in it. Nothing otherwise, and no Session is made.
+    pub(crate) fn add_started(
+        &self,
+        directory: &Path,
+        by: &ThreadId,
+        thread: Option<&ThreadId>,
+        terminal: Option<&str>,
+        contents: Contents<'_>,
+    ) {
+        let mut state = lock(&self.state);
+        let Some(mut record) = state.records.get(directory).cloned() else {
+            return;
+        };
+        if !record.threads.contains(by) {
             return;
         }
-        let record = Record {
-            directory: directory.to_path_buf(),
-            revision: 0,
-            layout: None,
-            git,
-            created_at: now_ms(),
-            updated_at: None,
-        };
+        let threads: Vec<ThreadId> = thread.cloned().into_iter().collect();
+        let terminals: Vec<String> = terminal.map(str::to_owned).into_iter().collect();
+        if !join(&mut record, &threads, &terminals) {
+            return;
+        }
         self.write(&record);
         let session = record.session(contents, true);
         state.records.insert(directory.to_path_buf(), record);
@@ -187,6 +266,14 @@ impl Sessions {
             directory,
             &SessionUpdatedNotification { session },
         );
+    }
+
+    /// The threads and terminals the Session at `directory` names as its own, if there is one.
+    pub(crate) fn members(&self, directory: &Path) -> Option<(Vec<ThreadId>, Vec<String>)> {
+        lock(&self.state)
+            .records
+            .get(directory)
+            .map(|record| (record.threads.clone(), record.terminals.clone()))
     }
 
     /// `sessions/set`: a new layout for the Session at `directory`, made first if there's none,
@@ -224,6 +311,8 @@ impl Sessions {
             git,
             created_at: current.map_or(now, |record| record.created_at),
             updated_at: Some(now),
+            threads: current.map_or_else(Vec::new, |record| record.threads.clone()),
+            terminals: current.map_or_else(Vec::new, |record| record.terminals.clone()),
         };
         if let Err(error) = self.try_write(&record) {
             return Err(Error::internal_error()
@@ -355,6 +444,22 @@ impl Sessions {
     }
 }
 
+/// Name `threads` and `terminals` in `record`, each once. Whether any was new to it.
+fn join(record: &mut Record, threads: &[ThreadId], terminals: &[String]) -> bool {
+    let before = record.threads.len() + record.terminals.len();
+    for thread in threads {
+        if !record.threads.contains(thread) {
+            record.threads.push(thread.clone());
+        }
+    }
+    for terminal in terminals {
+        if !record.terminals.contains(terminal) {
+            record.terminals.push(terminal.clone());
+        }
+    }
+    record.threads.len() + record.terminals.len() > before
+}
+
 /// Tell the clients watching `directory`, dropping those that have gone.
 fn tell<N>(state: &mut State, directory: &Path, notification: &N)
 where
@@ -416,8 +521,9 @@ mod tests {
 
     use super::*;
 
-    fn nothing(_: &Path) -> (Vec<ThreadId>, Vec<String>) {
-        (Vec::new(), Vec::new())
+    /// Everything a record names is still there.
+    fn all(_: &Path, threads: &[ThreadId], terminals: &[String]) -> (Vec<ThreadId>, Vec<String>) {
+        (threads.to_vec(), terminals.to_vec())
     }
 
     #[test]
@@ -426,18 +532,17 @@ mod tests {
         let work = tempfile::tempdir().expect("tempdir");
         let directory = work.path().to_path_buf();
         let sessions = Sessions::load(Some(kept.path().to_path_buf()));
-        sessions.make(&directory, None, &nothing);
         let first = sessions
             .set(
                 &directory,
                 serde_json::json!({"version": 1, "tabs": []}),
                 Some(0),
                 None,
-                &nothing,
+                &all,
             )
             .expect("sets");
         assert_eq!(first.revision, 1);
-        let stale = sessions.set(&directory, serde_json::json!({}), Some(0), None, &nothing);
+        let stale = sessions.set(&directory, serde_json::json!({}), Some(0), None, &all);
         assert!(stale.is_err_and(|error| errors::is(&error, errors::REVISION_CONFLICT)));
         let second = sessions
             .set(
@@ -445,13 +550,13 @@ mod tests {
                 serde_json::json!({"version": 1, "tabs": [{"id": "a"}]}),
                 None,
                 None,
-                &nothing,
+                &all,
             )
             .expect("sets");
         assert_eq!(second.revision, 2);
 
         let reloaded = Sessions::load(Some(kept.path().to_path_buf()));
-        assert_eq!(reloaded.get(&directory, &nothing), Some(second));
+        assert_eq!(reloaded.get(&directory, &all), Some(second));
     }
 
     #[test]
@@ -460,8 +565,75 @@ mod tests {
         let work = tempfile::tempdir().expect("tempdir");
         let directory = work.path().join("worktree");
         std::fs::create_dir(&directory).expect("mkdir");
-        Sessions::load(Some(kept.path().to_path_buf())).make(&directory, None, &nothing);
+        Sessions::load(Some(kept.path().to_path_buf())).add(
+            &directory,
+            &[ThreadId::new("s-1")],
+            &[],
+            None,
+            &all,
+        );
         std::fs::remove_dir(&directory).expect("rmdir");
+        let reloaded = Sessions::load(Some(kept.path().to_path_buf()));
+        assert_eq!(reloaded.directories(), Vec::<PathBuf>::new());
+        assert_eq!(read_dir(kept.path()), Vec::new());
+    }
+
+    #[test]
+    fn a_session_holds_what_was_added_and_what_its_threads_started() {
+        let kept = tempfile::tempdir().expect("tempdir");
+        let work = tempfile::tempdir().expect("tempdir");
+        let directory = work.path().to_path_buf();
+        let sessions = Sessions::load(Some(kept.path().to_path_buf()));
+        let own = ThreadId::new("s-1");
+        let other = ThreadId::new("s-2");
+
+        // Nothing a thread starts makes a Session, or joins one its starter isn't in.
+        sessions.add_started(&directory, &own, Some(&other), None, &all);
+        assert_eq!(sessions.members(&directory), None);
+
+        let made = sessions.add(&directory, std::slice::from_ref(&own), &[], None, &all);
+        assert_eq!(
+            (made.revision, made.threads),
+            (0, vec![own.clone()])
+        );
+        sessions.add_started(&directory, &other, Some(&ThreadId::new("s-3")), None, &all);
+        assert_eq!(
+            sessions.members(&directory),
+            Some((vec![own.clone()], Vec::new()))
+        );
+        sessions.add_started(&directory, &own, Some(&other), Some("t-1"), &all);
+        // Adding one again changes nothing, and a layout set later keeps them all.
+        sessions.add(
+            &directory,
+            std::slice::from_ref(&own),
+            &["t-1".to_owned()],
+            None,
+            &all,
+        );
+        let set = sessions
+            .set(
+                &directory,
+                serde_json::json!({"version": 2, "tabs": []}),
+                Some(0),
+                None,
+                &all,
+            )
+            .expect("sets");
+        assert_eq!(set.threads, vec![own, other]);
+        assert_eq!(set.terminals, vec!["t-1".to_owned()]);
+
+        let reloaded = Sessions::load(Some(kept.path().to_path_buf()));
+        assert_eq!(reloaded.get(&directory, &all), Some(set));
+    }
+
+    #[test]
+    fn a_session_no_client_made_is_dropped_when_loaded() {
+        let kept = tempfile::tempdir().expect("tempdir");
+        let work = tempfile::tempdir().expect("tempdir");
+        let sessions = Sessions::load(Some(kept.path().to_path_buf()));
+        // As a Host from before WVE-203 kept one for a directory a thread was prompted in.
+        sessions.write(&Record::new(work.path(), None));
+        assert_eq!(read_dir(kept.path()).len(), 1);
         let reloaded = Sessions::load(Some(kept.path().to_path_buf()));
         assert_eq!(reloaded.directories(), Vec::<PathBuf>::new());
         assert_eq!(read_dir(kept.path()), Vec::new());
@@ -471,7 +643,7 @@ mod tests {
     fn a_layout_over_the_limit_is_refused() {
         let sessions = Sessions::load(None);
         let layout = serde_json::json!({"padding": "x".repeat(MAX_LAYOUT)});
-        let refused = sessions.set(Path::new("/tmp"), layout, None, None, &nothing);
+        let refused = sessions.set(Path::new("/tmp"), layout, None, None, &all);
         assert!(refused.is_err());
         assert_eq!(sessions.directories(), Vec::<PathBuf>::new());
     }

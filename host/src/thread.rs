@@ -2006,13 +2006,24 @@ impl Actor {
         if now == self.reported {
             return;
         }
-        // Prompted for the first time since it opened: its directory has a Session (WVE-202).
+        // Prompted for the first time since it opened: one a thread on this Host started is in
+        // that thread's Session, when it has one here (WVE-203).
         if now.blank == Some(false) && self.reported.blank != Some(false) {
-            let scope = now.git.as_ref().map_or_else(
-                || crate::git::canonical(&self.cwd),
-                |git| git.worktree.clone(),
-            );
-            self.shared.make_session(&scope, now.git.clone());
+            let starter = {
+                let summary = lock(&self.summary);
+                summary
+                    .started_by
+                    .clone()
+                    .filter(|_| summary.started_by_host.is_none())
+            };
+            if let Some(starter) = starter {
+                let scope = now.git.as_ref().map_or_else(
+                    || crate::git::canonical(&self.cwd),
+                    |git| git.worktree.clone(),
+                );
+                self.shared
+                    .started_in_session(&scope, &starter, Some(&self.root), None);
+            }
         }
         let notification = ThreadChangedNotification {
             thread_id: self.root.clone(),

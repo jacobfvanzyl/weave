@@ -94,6 +94,8 @@ use weave_host_protocol::queue::QueuePause;
 use weave_host_protocol::queue::RemoveQueuedRequest;
 use weave_host_protocol::queue::RemoveQueuedResponse;
 use weave_host_protocol::queue::ResumeQueueRequest;
+use weave_host_protocol::sessions::ADD_FEATURE as SESSIONS_ADD_FEATURE;
+use weave_host_protocol::sessions::AddToSessionRequest;
 use weave_host_protocol::sessions::END_FEATURE as SESSIONS_END_FEATURE;
 use weave_host_protocol::sessions::EndSessionRequest;
 use weave_host_protocol::sessions::FEATURE as SESSIONS_FEATURE;
@@ -535,6 +537,10 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            answer!(connection, add_to_session),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: WatchSessionsRequest, responder, cx: ConnectionTo<HostClient>| {
                 let connection = Arc::clone(&on_watch_sessions);
                 let client = cx.clone();
@@ -548,7 +554,9 @@ async fn handlers(
                         connection.id,
                         client,
                         directory.as_deref(),
-                        &|directory| shared.session_contents(directory),
+                        &|directory, threads, terminals| {
+                            shared.session_contents(directory, threads, terminals)
+                        },
                         |sessions| {
                             responder.respond(WatchSessionsResponse {
                                 directory: directory.clone(),
@@ -1094,6 +1102,7 @@ impl Connection {
                 CARRY_FEATURE.to_owned(),
                 SESSIONS_FEATURE.to_owned(),
                 SESSIONS_END_FEATURE.to_owned(),
+                SESSIONS_ADD_FEATURE.to_owned(),
             ]
             .into_iter()
             .chain(
@@ -1440,9 +1449,9 @@ impl Connection {
             shared.sessions.located(&directory, git);
         }
         Ok(ListSessionsResponse {
-            sessions: shared
-                .sessions
-                .list(&|directory| shared.session_contents(directory)),
+            sessions: shared.sessions.list(&|directory, threads, terminals| {
+                shared.session_contents(directory, threads, terminals)
+            }),
         })
     }
 
@@ -1454,7 +1463,9 @@ impl Connection {
         shared.sessions.located(&directory, git);
         let session = shared
             .sessions
-            .get(&directory, &|directory| shared.session_contents(directory))
+            .get(&directory, &|directory, threads, terminals| {
+                shared.session_contents(directory, threads, terminals)
+            })
             .ok_or_else(|| errors::no_session(&directory))?;
         Ok(SessionResponse { session })
     }
@@ -1469,12 +1480,31 @@ impl Connection {
             request.layout,
             request.if_revision,
             git,
-            &|directory| shared.session_contents(directory),
+            &|directory, threads, terminals| shared.session_contents(directory, threads, terminals),
         )?;
         Ok(SessionResponse { session })
     }
 
-    /// `sessions/end`: end the Session the directory is in, for good, unless something in it
+    /// `sessions/add`: threads and terminals in the Session's directory are the Session's from
+    /// now on, which is made first if the directory has none.
+    async fn add_to_session(&self, request: AddToSessionRequest) -> Result<SessionResponse, Error> {
+        self.hello_info()?;
+        let shared = &self.shared;
+        let (directory, git) = shared.session_scope(&request.directory).await?;
+        shared
+            .in_directory(&directory, &request.threads, &request.terminals)
+            .await?;
+        let session = shared.sessions.add(
+            &directory,
+            &request.threads,
+            &request.terminals,
+            git,
+            &|directory, threads, terminals| shared.session_contents(directory, threads, terminals),
+        );
+        Ok(SessionResponse { session })
+    }
+
+    /// `sessions/end`: end the Session the directory is in, for good, unless something of its
     /// is busy: its threads close, its terminals end, and it's forgotten.
     async fn end_session(&self, request: EndSessionRequest) -> Result<Empty, Error> {
         self.hello_info()?;
@@ -1558,7 +1588,8 @@ impl Connection {
 
     async fn new_terminal(&self, request: NewTerminalRequest) -> Result<TerminalResponse, Error> {
         let terminals = self.terminals().await?;
-        let (scope, git) = self.shared.session_scope(&request.directory).await?;
+        let (scope, _) = self.shared.session_scope(&request.directory).await?;
+        let opened_from = request.opened_from.clone();
         let start = terminals::Start {
             id: terminals::new_id(),
             directory: request.directory,
@@ -1570,7 +1601,11 @@ impl Connection {
             env: self.shared.config.environment.vars.clone(),
         };
         let terminal = terminals.start(start).await?;
-        self.shared.make_session(&scope, git);
+        // One opened from a Session's thread is that Session's (WVE-203).
+        if let Some(by) = &opened_from {
+            self.shared
+                .started_in_session(&scope, by, None, Some(&terminal.id));
+        }
         Ok(TerminalResponse { terminal })
     }
 
