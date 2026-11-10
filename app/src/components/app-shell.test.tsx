@@ -189,7 +189,7 @@ describe('a Session nobody arranged', () => {
     const dialog = await screen.findByRole('dialog', { name: 'New Block' });
     const hidden = within(dialog).getByRole('group', { name: 'Not shown' });
     expect(within(hidden).getAllByRole('button').map((button) => button.textContent)).toEqual([
-      expect.stringContaining('tests'), expect.stringContaining('nvim protocol/src/terminals.rs'), expect.stringContaining('app'),
+      expect.stringContaining('cargo test -p weave-tui'), expect.stringContaining('nvim protocol/src/terminals.rs'), expect.stringContaining('app'),
     ]);
     expect(within(within(dialog).getByRole('group', { name: 'Closed threads' })).getByRole('button', { name: /Pencil hover/ })).toBeInTheDocument();
   });
@@ -232,7 +232,7 @@ describe('a Session someone arranged', () => {
     expect(within(tabs).getByRole('button', { name: 'New tab' })).toBeInTheDocument();
     // A row of a stacked pane and a column of two, and a terminal floating over them.
     expect(within(session).getByRole('group', { name: 'Pane, Update the Host protocol spec' })).toBeInTheDocument();
-    const tests = within(session).getByRole('group', { name: 'Pane, tests' });
+    const tests = within(session).getByRole('group', { name: 'Pane, cargo test -p weave-tui' });
     expect(within(tests).getByText('cargo: Testing (60%).')).toBeInTheDocument();
     expect(within(tests).getByText(/doesn't draw terminals yet/)).toBeInTheDocument();
     expect(within(session).getByRole('group', { name: 'Pane, Bring Alpha back' })).toBeInTheDocument();
@@ -261,21 +261,29 @@ describe('a Session someone arranged', () => {
     const user = userEvent.setup();
     const session = open();
     // Every Block's rail has the same icons, whatever it shows.
-    for (const name of ['Bring Alpha back', 'tests']) {
+    for (const name of ['Bring Alpha back', 'cargo test -p weave-tui']) {
       for (const label of [`Split ${name} right`, `Split ${name} down`, `Float ${name}`, `Zoom ${name}`, `${name} actions`, `Close ${name}`]) {
         expect(within(session).getByRole('button', { name: label })).toBeInTheDocument();
       }
     }
+    // Under the pointer an icon says what it does, without the Block's name.
+    const hints = within(within(session).getByRole('group', { name: 'Pane, Bring Alpha back' }).querySelector('[data-slot="block-rail"]') as HTMLElement)
+      .getAllByRole('button').map((button) => button.title);
+    expect(hints).toEqual(['Split Right', 'Split Down', 'Float', 'Zoom', 'More', 'Close']);
     await user.click(within(session).getByRole('button', { name: 'Split Bring Alpha back right' }));
     const dialog = await screen.findByRole('dialog', { name: 'New Block' });
     await user.click(within(dialog).getByRole('button', { name: /Nightly dependency check/ }));
     const nightly = await within(session).findByRole('group', { name: 'Pane, Nightly dependency check' });
     expect(within(session).getAllByRole('separator', { name: 'Resize panes' })).toHaveLength(3);
+    // It has the keyboard, which its edge shows while there are others to tell it from.
     expect(nightly).toHaveAttribute('data-focused', 'true');
+    expect(session.querySelectorAll('[data-focus-edge]')).toHaveLength(1);
+    expect(nightly).toHaveAttribute('data-focus-edge', 'true');
 
-    // Zoomed, it fills the tab alone; again, and the others are back.
+    // Zoomed, it fills the tab alone, with no edge; again, and the others are back.
     await user.click(within(session).getByRole('button', { name: 'Zoom Nightly dependency check' }));
     expect(within(session).getAllByRole('group', { name: /^Pane, / })).toHaveLength(1);
+    expect(session.querySelector('[data-focus-edge]')).not.toBeInTheDocument();
     await user.click(within(session).getByRole('button', { name: 'Unzoom Nightly dependency check' }));
     expect(within(session).getAllByRole('group', { name: /^Pane, / })).toHaveLength(4);
 
@@ -313,25 +321,40 @@ describe('a Session someone arranged', () => {
     expect(within(session).getByRole('group', { name: 'Pane, Bring Alpha back' })).toBeInTheDocument();
 
     // A terminal with a command running asks too; one that ends is gone, not hidden.
-    await user.click(within(session).getByRole('button', { name: 'Close tests' }));
-    const ending = await screen.findByRole('alertdialog', { name: 'End tests?' });
+    await user.click(within(session).getByRole('button', { name: 'Close cargo test -p weave-tui' }));
+    const ending = await screen.findByRole('alertdialog', { name: 'End cargo test -p weave-tui?' });
     await user.click(within(ending).getByRole('button', { name: 'End terminal' }));
-    await waitFor(() => expect(within(session).queryByRole('group', { name: 'Pane, tests' })).not.toBeInTheDocument());
+    await waitFor(() => expect(within(session).queryByRole('group', { name: 'Pane, cargo test -p weave-tui' })).not.toBeInTheDocument());
     await user.click(within(session).getByRole('button', { name: /^New Block/ }));
-    expect(within(await screen.findByRole('dialog', { name: 'New Block' })).queryByRole('button', { name: /^tests/ })).not.toBeInTheDocument();
+    expect(within(await screen.findByRole('dialog', { name: 'New Block' })).queryByRole('button', { name: /^cargo test/ })).not.toBeInTheDocument();
   });
 
-  it('renames a terminal from its Block’s own menu, for every device', async () => {
+  it('renames a thread in its Block’s rail, and a terminal nowhere: what’s in it names it', async () => {
     const user = userEvent.setup();
     const session = open();
-    await user.click(within(session).getByRole('button', { name: 'tests actions' }));
-    await user.click(await screen.findByRole('menuitem', { name: 'Rename terminal…' }));
-    const name = await screen.findByRole('textbox', { name: 'Name' });
-    expect(name).toHaveValue('tests');
+    const alpha = within(session).getByRole('group', { name: 'Pane, Bring Alpha back' });
+    await user.dblClick(within(alpha).getByRole('tab', { name: /Bring Alpha back/u }));
+    const name = within(alpha).getByRole('textbox', { name: 'Block name' });
+    expect(name).toHaveValue('Bring Alpha back');
+    // Escape leaves it as it was.
     await user.clear(name);
-    await user.type(name, 'suite');
-    await user.click(screen.getByRole('button', { name: 'Rename' }));
-    expect(await within(session).findByRole('group', { name: 'Pane, suite' })).toBeInTheDocument();
+    await user.type(name, 'Something else{Escape}');
+    expect(within(alpha).getByRole('tab', { name: /Bring Alpha back/u })).toBeInTheDocument();
+    // Return keeps it, for every client.
+    await user.dblClick(within(alpha).getByRole('tab', { name: /Bring Alpha back/u }));
+    await user.clear(within(alpha).getByRole('textbox', { name: 'Block name' }));
+    await user.type(within(alpha).getByRole('textbox', { name: 'Block name' }), 'Alpha, again{Enter}');
+    expect(await within(session).findByRole('group', { name: 'Pane, Alpha, again' })).toBeInTheDocument();
+    expect(within(session).queryByRole('textbox', { name: 'Block name' })).not.toBeInTheDocument();
+
+    // Its menu has no rename, and a terminal's name isn't anyone's to give.
+    await user.click(within(session).getByRole('button', { name: 'Alpha, again actions' }));
+    expect(await screen.findByRole('menuitem', { name: 'Thread status' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /Rename/u })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    const tests = within(session).getByRole('group', { name: 'Pane, cargo test -p weave-tui' });
+    await user.dblClick(within(tests).getByRole('tab', { name: /cargo test -p weave-tui/u }));
+    expect(within(session).queryByRole('textbox', { name: 'Block name' })).not.toBeInTheDocument();
   });
 
   it('drags the edge between two panes to share their space out again', () => {

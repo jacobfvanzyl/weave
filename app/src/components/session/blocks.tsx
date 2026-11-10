@@ -7,10 +7,7 @@ import { platform } from '@/app/platform';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { PathLabel } from '@/components/path-label';
 import { ThreadView, askThread } from '@/components/thread-view';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import type { BlockAction } from '@/components/session/panes';
 import type { SessionBlock } from '@/host/protocol';
@@ -42,6 +39,11 @@ export type BlockType = {
   mark?(block: SessionBlock, context: Pick<BlockContext, 'controller' | 'session'>): ReactNode;
   /** What its rail's menu offers: what's the type's own, every Block having the rest as icons. */
   actions?(block: SessionBlock, context: BlockContext): BlockAction[];
+  /**
+   * Renames what the Block shows, from its name in the rail, where the name is the person's to
+   * give: a thread's. A terminal's follows what's in it, so it has none.
+   */
+  rename?(block: SessionBlock, context: Pick<BlockContext, 'controller' | 'session'>): ((name: string) => void | Promise<void>) | undefined;
   Body(props: { block: SessionBlock; context: BlockContext }): ReactNode;
 };
 
@@ -67,16 +69,21 @@ const thread: BlockType = {
   actions: (block, context) => {
     const summary = summaryOf(block, context);
     if (!summary) return [];
-    const host = context.controller.model.hosts.find(({ id }) => id === summary.hostId);
     const { surface } = context;
     return [
       { title: 'Thread status', run: () => askThread(summary.key, 'status') },
       ...(surface?.status.available
         ? [{ title: surface.status.enabled ? 'Turn the Surface off' : 'Show on the Surface', run: () => surface.setEnabled(!surface.status.enabled) }]
         : []),
-      ...(host?.canRename && summary.state === 'open' ? [{ title: 'Rename thread…', run: () => askThread(summary.key, 'rename') }] : []),
       { title: 'Delete thread…', destructive: true, run: () => askThread(summary.key, 'delete') },
     ];
+  },
+  // An open thread's title, for every client, where its Host renames them. Nothing typed keeps the one it has.
+  rename: (block, context) => {
+    const summary = summaryOf(block, context);
+    const host = context.controller.model.hosts.find(({ id }) => id === summary?.hostId);
+    if (!summary || !host?.canRename || summary.state !== 'open') return undefined;
+    return (title) => title.trim() ? context.controller.actions.renameThread(summary.key, title) : undefined;
   },
   Body({ block, context }) {
     const { controller, session } = context;
@@ -178,57 +185,6 @@ function TerminalText({ terminal }: { terminal: TerminalSummary }) {
 
 const terminalIn = (block: SessionBlock, session: OpenSession) => session.terminals?.find(({ id }) => id === terminalOf(block));
 
-// The terminal being renamed, by id: its Block's menu asks, and its Block shows the dialog.
-let renaming: string | undefined;
-const renameListeners = new Set<() => void>();
-const rename = (id?: string) => {
-  renaming = id;
-  for (const listener of renameListeners) listener();
-};
-const onRename = (listener: () => void) => {
-  renameListeners.add(listener);
-  return () => { renameListeners.delete(listener); };
-};
-
-/** Names a terminal on every device, or without a name clears it. */
-function RenameTerminalDialog({ terminal, onRename: save }: { terminal: TerminalSummary; onRename(id: string, label?: string): Promise<void> }) {
-  const open = useSyncExternalStore(onRename, () => renaming === terminal.id);
-  const [label, setLabel] = useState('');
-  const [error, setError] = useState<string>();
-  useEffect(() => {
-    if (!open) return;
-    setLabel(terminal.label ?? '');
-    setError(undefined);
-    // Starts from the name it has when it opens.
-  }, [open]);
-  return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) rename(undefined); }}>
-      <DialogContent className='w-[min(24rem,calc(100%-2rem))] max-w-none sm:max-w-sm'>
-        <DialogHeader>
-          <DialogTitle>Rename terminal</DialogTitle>
-          <DialogDescription>Every device shows the name. Without one, it's named after its title or its directory.</DialogDescription>
-        </DialogHeader>
-        <form aria-label='Rename terminal' className='grid gap-3' onSubmit={async (event) => {
-          event.preventDefault();
-          setError(undefined);
-          try {
-            await save(terminal.id, label);
-            rename(undefined);
-          } catch (cause) {
-            setError(cause instanceof Error ? cause.message : String(cause));
-          }
-        }}>
-          <Input aria-label='Name' autoFocus maxLength={80} value={label} onChange={(event) => setLabel(event.target.value)} />
-          {error && <Alert variant='destructive'><AlertDescription>{error}</AlertDescription></Alert>}
-          <DialogFooter>
-            <Button type='submit'>Rename</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 const terminal: BlockType = {
   title: (block, { session }) => {
     const found = terminalIn(block, session);
@@ -240,17 +196,12 @@ const terminal: BlockType = {
   },
   actions: (block, { session }) => {
     const found = terminalIn(block, session);
-    if (!found) return [];
+    // Every terminal on this device, where the device draws them.
+    if (!found || !platform().drawsTerminals) return [];
     const size = loadFontSize();
     return [
-      { title: 'Rename terminal…', run: () => rename(found.id) },
-      // Every terminal on this device, where the device draws them.
-      ...(platform().drawsTerminals
-        ? [
-            ...(size < FONT_SIZE.max ? [{ title: 'Larger text', run: () => setFontSize(size + FONT_SIZE.step) }] : []),
-            ...(size > FONT_SIZE.min ? [{ title: 'Smaller text', run: () => setFontSize(size - FONT_SIZE.step) }] : []),
-          ]
-        : []),
+      ...(size < FONT_SIZE.max ? [{ title: 'Larger text', run: () => setFontSize(size + FONT_SIZE.step) }] : []),
+      ...(size > FONT_SIZE.min ? [{ title: 'Smaller text', run: () => setFontSize(size - FONT_SIZE.step) }] : []),
     ];
   },
   Body({ block, context }) {
@@ -258,14 +209,9 @@ const terminal: BlockType = {
     const found = terminalIn(block, session);
     if (!session.terminals) return <Notice><Spinner className='mr-1.5 inline size-3' />Listing the terminals…</Notice>;
     if (!found) return <Notice action={<Button size='sm' variant='outline' onClick={context.onRemove}>Remove from the layout</Button>}>This terminal has ended.</Notice>;
-    return (
-      <>
-        {platform().drawsTerminals
-          ? <NativeTerminal terminal={found} attach={controller.actions.attachTerminal} focused={context.focused} />
-          : <TerminalText terminal={found} />}
-        <RenameTerminalDialog terminal={found} onRename={controller.actions.renameTerminal} />
-      </>
-    );
+    return platform().drawsTerminals
+      ? <NativeTerminal terminal={found} attach={controller.actions.attachTerminal} focused={context.focused} />
+      : <TerminalText terminal={found} />;
   },
 };
 

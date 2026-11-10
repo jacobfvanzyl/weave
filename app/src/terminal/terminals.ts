@@ -47,10 +47,15 @@ export function terminalsInOrder(terminals: TerminalSummary[]): TerminalSummary[
   return [...terminals].sort((left, right) => left.startedAt - right.startedAt || left.id.localeCompare(right.id));
 }
 
-/** What a terminal is called: its name, else its title, else its directory's. */
+/**
+ * What a terminal is called, which follows what's in it and nothing anyone typed: the title its
+ * program set, else the command running in it, else its directory's name. The same terminal reads
+ * the same on every device, and a name given it elsewhere (`label`) isn't shown.
+ */
 export function terminalName(terminal: TerminalSummary): string {
   const directory = (terminal.pwd ?? terminal.scope).replace(/\/+$/, '');
-  return terminal.label || terminal.title || directory.slice(directory.lastIndexOf('/') + 1) || directory || 'Terminal';
+  const running = terminal.command?.running ? terminal.command.command : undefined;
+  return terminal.title || running || directory.slice(directory.lastIndexOf('/') + 1) || directory || 'Terminal';
 }
 
 export type TerminalState =

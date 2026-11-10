@@ -78,11 +78,11 @@ function RenameDialog({ thread, actions, open, onOpenChange }: {
 }
 
 /** What a thread's Block asks of its thread from the Block's own menu: the thread's view answers. */
-export type ThreadAsk = 'status' | 'rename' | 'delete';
+export type ThreadAsk = 'status' | 'delete';
 
 const asks = new Map<string, Set<(what: ThreadAsk) => void>>();
 
-/** Asks the view of the thread `key`, wherever it's on screen, to show its status, or to rename or delete it. */
+/** Asks the view of the thread `key`, wherever it's on screen, to show its status, or to delete it. */
 export function askThread(key: string, what: ThreadAsk) {
   for (const answer of [...(asks.get(key) ?? [])]) answer(what);
 }
@@ -246,8 +246,8 @@ function ConnectionNotice({ host, dispatcher }: { host: HostSummary; dispatcher?
 /**
  * A thread: its header, transcript and composer. On its own it has the whole header, with its
  * title; in a Block (`chrome='block'`, WVE-203) it has none: the Block's rail names it, marks
- * what it's doing, and has its menu, which asks here (`askThread`) for its status, or to rename
- * or delete it.
+ * what it's doing, renames it in place, and has its menu, which asks here (`askThread`) for its
+ * status, or to delete it.
  */
 export function ThreadView({ controller, thread, leading, onSwipeBack, surface, chrome = 'full', onOpenThread, onDeleted }: {
   controller: AppController;
@@ -281,11 +281,9 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface, 
   const [statusShown, setStatusShown] = useState(false);
   useEffect(() => setStatusShown(false), [thread.key]);
   // In a Block, its rail has the thread's menu, which asks here for what needs the thread's view.
-  const [renaming, setRenaming] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   useThreadAsks(thread.key, (what) => {
     if (what === 'status') setStatusShown(true);
-    else if (what === 'rename') setRenaming(true);
     else setConfirmDelete(true);
   });
   const details = (
@@ -330,12 +328,7 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface, 
               {details}
             </ThreadHeader>
           )
-          : summary && (
-            <>
-              <RenameDialog thread={summary} actions={actions} open={renaming} onOpenChange={setRenaming} />
-              <DeleteThreadDialog thread={summary} actions={actions} open={confirmDelete} onOpenChange={setConfirmDelete} onDeleted={onDeleted} />
-            </>
-          )}
+          : summary && <DeleteThreadDialog thread={summary} actions={actions} open={confirmDelete} onOpenChange={setConfirmDelete} onDeleted={onDeleted} />}
         <ThreadStatusSheet
           open={statusShown}
           onOpenChange={setStatusShown}

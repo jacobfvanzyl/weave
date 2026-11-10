@@ -27,9 +27,11 @@ describe('a directory’s terminals', () => {
 });
 
 describe('a terminal', () => {
-  it('is named by its label, then its title, then its directory', () => {
-    expect(terminalName(terminal('a', { label: 'server', title: 'zsh' }))).toBe('server');
-    expect(terminalName(terminal('a', { title: 'vim main.rs' }))).toBe('vim main.rs');
+  it('is named by what is in it: the title its program set, then the command running, then its directory', () => {
+    expect(terminalName(terminal('a', { title: 'vim main.rs', command: { running: true, command: 'vim main.rs src' } }))).toBe('vim main.rs');
+    expect(terminalName(terminal('a', { command: { running: true, command: 'cargo test' } }))).toBe('cargo test');
+    // A command that ended names nothing, and neither does a name someone gave it.
+    expect(terminalName(terminal('a', { label: 'server', command: { running: false, command: 'cargo test', exitCode: 0 } }))).toBe('weave');
     expect(terminalName(terminal('a'))).toBe('weave');
   });
 

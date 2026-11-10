@@ -13,6 +13,7 @@ import {
   PictureInPictureExitIcon,
   PictureInPictureOnIcon,
 } from '@hugeicons/core-free-icons';
+import { NameInput } from '@/components/session/name-input';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import type { SessionBlock, SessionFloating, SessionFrame, SessionNode, SessionTab } from '@/host/protocol';
@@ -47,9 +48,19 @@ export type PaneProps = {
   body(block: SessionBlock): ReactNode;
   /** What a Block's type offers in its rail's menu. */
   menu(block: SessionBlock): BlockAction[];
+  /** Names what the Block shows, where its type's names are the person's to give. */
+  rename?(block: SessionBlock): ((name: string) => void | Promise<void>) | undefined;
   /** How many Blocks the tab has: one alone has nothing to zoom over. */
   inTab: number;
+  /** Whether the Block with the keyboard is marked: when the tab shows others to tell it from. */
+  marksFocus: boolean;
 };
+
+/**
+ * The edge of the Block with the keyboard, where its tab shows others to tell it from: drawn over
+ * the Block, so nothing moves as the keyboard does.
+ */
+const FOCUS_EDGE = "after:pointer-events-none after:absolute after:inset-0 after:z-50 after:border-2 after:border-primary after:content-['']";
 
 /** Something a Block's type offers of its own. */
 export type BlockAction = { title: string; destructive?: boolean; run(): void };
@@ -147,10 +158,10 @@ function useBlockDrag(move: PaneActions['move']) {
 
 type Drag = ReturnType<typeof useBlockDrag>;
 
-/** One of a rail's icons. */
-function RailButton({ label, icon, pressed, onClick }: { label: string; icon: IconSvgElement; pressed?: boolean; onClick(): void }) {
+/** One of a rail's icons: named with its Block for a screen reader, and by what it does under the pointer. */
+function RailButton({ label, hint, icon, pressed, onClick }: { label: string; hint: string; icon: IconSvgElement; pressed?: boolean; onClick(): void }) {
   return (
-    <Button size='icon-sm' variant='ghost' aria-label={label} title={label} aria-pressed={pressed} onClick={onClick}>
+    <Button size='icon-sm' variant='ghost' aria-label={label} title={hint} aria-pressed={pressed} onClick={onClick}>
       <HugeiconsIcon icon={icon} strokeWidth={2} />
     </Button>
   );
@@ -162,12 +173,12 @@ function RailButton({ label, icon, pressed, onClick }: { label: string; icon: Ic
  * tab has another Block to zoom over, a menu of what its type offers, and close. The whole rail
  * is the Block's handle: dragging it moves the Block in front, and dragging a name moves that
  * one, unless `onHandle` takes the rail's drags for itself, as a floating Block's does to move.
+ * A name clicked twice is typed over in place, where the Block's type lets it be renamed.
  * Without `arrange`, as on the iPhone, it has the names, the menu and close.
  */
-export function BlockRail({ blocks, front, focused, floating = false, arrange = true, drag, onHandle, ...props }: PaneProps & {
+export function BlockRail({ blocks, front, floating = false, arrange = true, drag, onHandle, ...props }: PaneProps & {
   blocks: SessionBlock[];
   front: SessionBlock;
-  focused: boolean;
   floating?: boolean;
   arrange?: boolean;
   drag?: Drag;
@@ -178,6 +189,7 @@ export function BlockRail({ blocks, front, focused, floating = false, arrange = 
   const own = props.menu(front);
   const zoomed = props.zoomedId === front.id;
   const handle = Boolean(onHandle ?? drag);
+  const [renaming, setRenaming] = useState<string>();
   return (
     <div data-slot='block-rail' className={cn('flex h-9 shrink-0 items-stretch gap-px border-b border-border bg-title-bar pr-1 text-xs', handle && 'cursor-grab touch-none')}
       onPointerDown={(event) => {
@@ -188,15 +200,25 @@ export function BlockRail({ blocks, front, focused, floating = false, arrange = 
         {blocks.map((block) => {
           const selected = block.id === front.id;
           const label = title(block);
+          const rename = props.rename?.(block);
+          if (rename && renaming === block.id) {
+            return (
+              <div key={block.id} role='tab' aria-selected={selected} className='flex min-w-0 max-w-56 items-center gap-1.5 px-3'
+                onPointerDown={(event) => event.stopPropagation()}>
+                {mark(block)}
+                <NameInput label='Block name' name={label} maxLength={200} className='w-44' onKeep={rename} onDone={() => setRenaming(undefined)} />
+              </div>
+            );
+          }
           return (
             <button key={block.id} type='button' role='tab' aria-selected={selected} title={label}
               className={cn(
-                'flex min-w-0 max-w-56 items-center gap-1.5 border-b-2 border-transparent px-3 text-muted-foreground outline-none',
+                'flex min-w-0 max-w-56 items-center gap-1.5 px-3 text-muted-foreground outline-none',
                 handle && 'cursor-grab',
                 selected && 'text-foreground',
-                selected && focused && 'border-primary',
                 'focus-visible:bg-accent',
               )}
+              onDoubleClick={() => { if (rename) setRenaming(block.id); }}
               onPointerDown={(event) => {
                 if (onHandle) return;
                 // Its own name drags it, not the Block in front.
@@ -211,11 +233,15 @@ export function BlockRail({ blocks, front, focused, floating = false, arrange = 
         })}
       </div>
       <div className='flex shrink-0 items-center gap-0.5' onPointerDown={(event) => event.stopPropagation()}>
-        {arrange && !floating && <RailButton label={`Split ${name} right`} icon={LayoutTwoColumnIcon} onClick={() => actions.split(front.id, 'right')} />}
-        {arrange && !floating && <RailButton label={`Split ${name} down`} icon={LayoutTwoRowIcon} onClick={() => actions.split(front.id, 'down')} />}
-        {arrange && <RailButton label={floating ? `Dock ${name}` : `Float ${name}`} icon={floating ? PictureInPictureExitIcon : PictureInPictureOnIcon} onClick={() => actions.float(front)} />}
+        {arrange && !floating && <RailButton label={`Split ${name} right`} hint='Split Right' icon={LayoutTwoColumnIcon} onClick={() => actions.split(front.id, 'right')} />}
+        {arrange && !floating && <RailButton label={`Split ${name} down`} hint='Split Down' icon={LayoutTwoRowIcon} onClick={() => actions.split(front.id, 'down')} />}
+        {arrange && (
+          <RailButton label={floating ? `Dock ${name}` : `Float ${name}`} hint={floating ? 'Dock' : 'Float'}
+            icon={floating ? PictureInPictureExitIcon : PictureInPictureOnIcon} onClick={() => actions.float(front)} />
+        )}
         {arrange && (props.inTab > 1 || zoomed) && (
-          <RailButton label={zoomed ? `Unzoom ${name}` : `Zoom ${name}`} icon={zoomed ? Minimize01Icon : Maximize01Icon} pressed={zoomed} onClick={() => actions.zoom(front.id)} />
+          <RailButton label={zoomed ? `Unzoom ${name}` : `Zoom ${name}`} hint={zoomed ? 'Unzoom' : 'Zoom'}
+            icon={zoomed ? Minimize01Icon : Maximize01Icon} pressed={zoomed} onClick={() => actions.zoom(front.id)} />
         )}
         <DropdownMenu>
           <DropdownMenuTrigger disabled={own.length === 0} render={<Button size='icon-sm' variant='ghost' aria-label={`${name} actions`} title='More' />}>
@@ -229,7 +255,7 @@ export function BlockRail({ blocks, front, focused, floating = false, arrange = 
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-        <RailButton label={`Close ${name}`} icon={Cancel01Icon} onClick={() => actions.close(front)} />
+        <RailButton label={`Close ${name}`} hint='Close' icon={Cancel01Icon} onClick={() => actions.close(front)} />
       </div>
     </div>
   );
@@ -249,9 +275,10 @@ function PaneView({ pane, drag, ...props }: PaneProps & { pane: Pane; drag?: Dra
   const focused = front.id === focusedId;
   return (
     <div role='group' data-slot='pane' data-pane={front.id} data-alone={pane.children.length === 1 || undefined} data-focused={focused || undefined}
-      aria-label={`Pane, ${props.title(front)}`} className='flex min-h-0 min-w-0 flex-1 flex-col bg-background'
+      data-focus-edge={(focused && props.marksFocus) || undefined} aria-label={`Pane, ${props.title(front)}`}
+      className={cn('relative isolate flex min-h-0 min-w-0 flex-1 flex-col bg-background', focused && props.marksFocus && FOCUS_EDGE)}
       onPointerDownCapture={() => { if (!focused) actions.focus(front.id); }}>
-      <BlockRail {...props} blocks={pane.children} front={front} focused={focused} drag={drag} />
+      <BlockRail {...props} blocks={pane.children} front={front} drag={drag} />
       <Body key={front.id} block={front} body={props.body} />
     </div>
   );
@@ -349,10 +376,14 @@ function FloatingView({ item, bounds, ...props }: PaneProps & { item: SessionFlo
   };
   const style: CSSProperties = { left: `${frame.x * 100}%`, top: `${frame.y * 100}%`, width: `${frame.width * 100}%`, height: `${frame.height * 100}%` };
   return (
-    <div role='group' data-slot='floating-block' data-focused={focused || undefined} aria-label={`Floating, ${props.title(block)}`} style={style}
-      className={cn('absolute z-10 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-md border bg-background shadow-xl', focused ? 'border-primary/60' : 'border-border')}
+    <div role='group' data-slot='floating-block' data-focused={focused || undefined} data-focus-edge={(focused && props.marksFocus) || undefined}
+      aria-label={`Floating, ${props.title(block)}`} style={style}
+      className={cn(
+        'absolute z-10 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-md border border-border bg-background shadow-xl',
+        focused && props.marksFocus && cn(FOCUS_EDGE, 'after:rounded-md'),
+      )}
       onPointerDownCapture={() => { if (!focused) actions.focus(block.id); }}>
-      <BlockRail {...props} blocks={[block]} front={block} focused={focused} floating
+      <BlockRail {...props} blocks={[block]} front={block} floating
         onHandle={(event) => track(event, (from, dx, dy) => ({ ...from, x: from.x + dx, y: from.y + dy }))} />
       <Body key={block.id} block={block} body={props.body} />
       <div role='separator' aria-label={`Resize ${props.title(block)}`} className='absolute right-0 bottom-0 z-10 size-4 cursor-nwse-resize touch-none'

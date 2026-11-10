@@ -240,13 +240,6 @@ describe('ThreadView', () => {
     expect(await screen.findByRole('dialog', { name: /status/i })).toBeInTheDocument();
     await user.keyboard('{Escape}');
 
-    act(() => askThread('h/main', 'rename'));
-    const title = await screen.findByRole('textbox', { name: 'Title' });
-    await user.clear(title);
-    await user.type(title, 'Count every file');
-    await user.click(screen.getByRole('button', { name: 'Rename' }));
-    expect(handlers.renameThread).toHaveBeenCalledWith('h/main', 'Count every file');
-
     // Another thread's Block asks nothing of this one.
     act(() => askThread('h/other', 'delete'));
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();

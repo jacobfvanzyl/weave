@@ -9,6 +9,7 @@ import { type AppController, type CreatedThread, type LayoutChange, type OpenSes
 import { useCommand } from '@/app/commands';
 import { type NewThreadTarget, NewThreadDialog } from '@/components/new-thread-dialog';
 import { type BlockContext, TerminalMark, blockType } from '@/components/session/blocks';
+import { NameInput } from '@/components/session/name-input';
 import { type PaneActions, BlockRail, TabPanes } from '@/components/session/panes';
 import { ThreadHeader } from '@/components/thread-view';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -125,32 +126,6 @@ function NewBlockDialog({ open, onOpenChange, threads, closed, terminals, canTer
   );
 }
 
-/** A tab's name, typed in the tab itself: Return keeps it, Escape leaves it as it was. */
-function TabNameInput({ tab, placeholder, onDone }: { tab: SessionTab; placeholder: string; onDone(title?: string): void }) {
-  const [value, setValue] = useState(tab.title ?? '');
-  const done = useRef(false);
-  const finish = (title?: string) => {
-    if (done.current) return;
-    done.current = true;
-    onDone(title);
-  };
-  return (
-    <input aria-label='Tab name' autoFocus maxLength={80} value={value} placeholder={placeholder}
-      className='h-6 w-36 min-w-0 rounded-sm border border-border bg-background px-1.5 text-xs text-foreground outline-none focus-visible:border-primary'
-      onChange={(event) => setValue(event.target.value)}
-      onClick={(event) => event.stopPropagation()}
-      onDoubleClick={(event) => event.stopPropagation()}
-      onPointerDown={(event) => event.stopPropagation()}
-      onFocus={(event) => event.target.select()}
-      onKeyDown={(event) => {
-        event.stopPropagation();
-        if (event.key === 'Enter') finish(value);
-        else if (event.key === 'Escape') finish(undefined);
-      }}
-      onBlur={() => finish(value)} />
-  );
-}
-
 /** A swipe sideways, for the iPhone's row of Blocks. */
 function useSwipe(onSwipe: (by: number) => void) {
   const start = useRef<{ x: number; y: number }>(undefined);
@@ -262,6 +237,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
   const title = (block: SessionBlock) => blockType(block.type).title(block, { controller, session });
   const mark = (block: SessionBlock) => blockType(block.type).mark?.(block, { controller, session }) ?? null;
   const menu = (block: SessionBlock) => blockType(block.type).actions?.(block, context(block)) ?? [];
+  const rename = (block: SessionBlock) => blockType(block.type).rename?.(block, { controller, session });
   const body = (block: SessionBlock) => {
     const { Body } = blockType(block.type);
     return <Body block={block} context={context(block)} />;
@@ -521,10 +497,8 @@ export function SessionView({ controller, session, members, leading, phone = fal
             }}>
             {renaming === listed.id
               ? (
-                <TabNameInput tab={listed} placeholder={tabName({ ...listed, title: undefined })} onDone={(next) => {
-                  if (next !== undefined) update((current) => renameTab(current, listed.id, next));
-                  setRenaming(undefined);
-                }} />
+                <NameInput label='Tab name' name={listed.title ?? ''} placeholder={tabName({ ...listed, title: undefined })}
+                  onKeep={(next) => update((current) => renameTab(current, listed.id, next))} onDone={() => setRenaming(undefined)} />
               )
               : <span className='truncate'>{name}</span>}
             <Button size='icon-xs' variant='ghost' aria-label={`Close tab ${name}`} title='Close tab' className='shrink-0 opacity-60 hover:opacity-100'
@@ -568,8 +542,8 @@ export function SessionView({ controller, session, members, leading, phone = fal
             {focused && (
               // One Block at a time: the tab's Blocks by name, and the one in front's menu and close.
               <div {...swipe}>
-                <BlockRail blocks={tabBlocks(tab)} front={focused} focused arrange={false} view={view} focusedId={focused.id}
-                  actions={paneActions} title={title} mark={mark} body={body} menu={menu} inTab={inTab} />
+                <BlockRail blocks={tabBlocks(tab)} front={focused} arrange={false} view={view} focusedId={focused.id}
+                  actions={paneActions} title={title} mark={mark} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={false} />
               </div>
             )}
             {focused
@@ -577,7 +551,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
               : empty}
           </>
         )
-        : <TabPanes tab={tab} view={view} focusedId={focused?.id} zoomedId={zoomed?.id} actions={paneActions} title={title} mark={mark} body={body} menu={menu} inTab={inTab} empty={empty} />}
+        : <TabPanes tab={tab} view={view} focusedId={focused?.id} zoomedId={zoomed?.id} actions={paneActions} title={title} mark={mark} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={shown.length > 1} empty={empty} />}
 
       <NewBlockDialog
         open={adding !== undefined}
