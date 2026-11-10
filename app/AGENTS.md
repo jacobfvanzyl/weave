@@ -126,7 +126,11 @@ root.
 
 `bun run mac:install` signs with the Apple Development identity of the iOS app's team, or ad hoc
 (`WEAVE_SIGNING_IDENTITY` names another), and isn't notarized; the app doesn't update itself, so
-install again after pulling. Terminals don't show on the Mac until WVE-205, and Surfaces are the
+install again after pulling. Keep `bundle.macOS.minimumSystemVersion` at 11.0: `tauri build` sets
+`MACOSX_DEPLOYMENT_TARGET` from it, and on macOS 27.2 (2026-11-10) proc-macro libraries linked
+for 12.0 or later come out corrupt (`mis-aligned LINKEDIT string pool`), so the build fails
+finding `serde_derive` and the like. Cargo doesn't rebuild them when only that variable changes:
+after a build with another target, `cargo clean --release --manifest-path src-tauri/Cargo.toml`. Terminals don't show on the Mac until WVE-205, and Surfaces are the
 iPhone's. The menu bar's Thread menu (New Thread ⌘N, Next and Previous Thread ⌘⇧] and ⌘⇧[,
 Focus Composer ⌘L) runs commands the components listen for (`src/app/commands.ts`); closing the
 window hides it, so notifications of threads waiting on the person or finishing keep coming, and
