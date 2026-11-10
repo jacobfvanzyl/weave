@@ -191,16 +191,22 @@ reader holds its owner back rather than the Host buffering.
 - **Tests:** `tests/terminals.rs` drives it all through a real client, against a fake owner that
   leaves out `command` and `opened_from`, and against real holders it builds with cargo.
 
-Sessions (ADR 0031, WVE-202, `sessions.rs`, spec section Sessions) are directories, known by a
-terminal's scope (`Shared::session_scope`), with a layout document the Host stores and versions
-but never reads. `Sessions` keeps the records, one file each in `layouts/` named by a hash of the
-directory and written whole (not `sessions/`, which version 2 journals were moved out of), and the
-`sessions/watch` watchers; `Shared` gives each one its threads and terminals
-(`session_contents`), which are worked out on every answer rather than kept. A thread makes its
-directory's Session when it's first reported not blank (`Actor::update_summary`), a terminal as
-`terminals/new` starts it, and `sessions/set` when there's none. `worktrees/remove` and
+Sessions (ADR 0031, WVE-202, WVE-203, `sessions.rs`, spec section Sessions) are directories, known by a
+terminal's scope (`Shared::session_scope`), with the threads and terminals that are theirs and a
+layout document the Host stores and versions but never reads. `Sessions` keeps the records, one
+file each in `layouts/` named by a hash of the directory and written whole (not `sessions/`, which
+version 2 journals were moved out of), and the `sessions/watch` watchers. A client makes a
+Session, never the Host: `sessions/set` when there's none, and `sessions/add`
+(`Sessions::add`, feature `sessions_add`), which names threads and terminals in the directory
+(`Shared::in_directory`) as the Session's. A record keeps those ids, and `Shared` says which are
+still there (`session_contents`), blank threads too, worked out on every answer. What a
+Session's thread starts joins it (`Shared::started_in_session`): a delegated thread when it's
+first reported not blank (`Actor::update_summary`, by its `started_by` on this Host), and a
+terminal `terminals/new` opens from one (`opened_from`). Nothing else in the directory is the
+Session's, and a record from before WVE-203 that no client set a layout for is dropped when it
+loads. `worktrees/remove` and
 `worktrees/release` end the Sessions in the worktree (`Sessions::end_inside`), `sessions/end`
-ends one for good, closing the threads open in it and ending its terminals first
+ends one for good, closing its own open threads and ending its own terminals first
 (`Shared::close_session`, which refuses while one is busy; feature `sessions_end`), and ones whose
 directory is gone end when the Host starts and when a client lists them. Take the Sessions' lock
 before the registry and the terminals' state, never while holding either. Tests: the `sessions`

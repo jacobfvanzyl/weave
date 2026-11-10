@@ -1421,13 +1421,15 @@ while a thread needs the worktree.
 
 ## Sessions
 
-Status: Built in the Host, 2026-11-09 (WVE-202). ADR 0031; part of
-[WVE-199](https://linear.app/jacobfvanzyl/issue/WVE-199).
+Status: Built in the Host, 2026-11-09 (WVE-202), and changed with the app on 2026-11-10
+(WVE-203): a client makes a Session, which holds what clients add to it, and Blocks no longer
+stack. ADR 0031; part of [WVE-199](https://linear.app/jacobfvanzyl/issue/WVE-199).
 
-A Session is one directory on the Host's computer, and the layout clients show it in: tabs of
-split panes holding Blocks, each of which points at a thread, a terminal or something else on
-this Host. The Host keeps the layout so that every device shows the same one, as Herdr's core
-keeps its spaces' layout. It stores and versions the layout but never reads it.
+A Session is one directory on the Host's computer, the threads and terminals a client put in
+it, and the layout clients show them in: tabs of Blocks, docked side by side or floating, each
+of which points at a thread, a terminal or something else on this Host. The Host keeps the
+layout so that every device shows the same one, as Herdr's core keeps its spaces' layout. It
+stores and versions the layout but never reads it.
 
 **Identity.** A Session is known by its directory, which is a terminal's scope: the deepest
 worktree a directory is in, or the directory itself outside a repository, with symlinks
@@ -1438,19 +1440,31 @@ under Projects with the Dispatcher's `projects/list`, by `git.repo`.
 
 **Lifetime.**
 
-- The Host makes a Session, without a layout, when a thread is first prompted in a directory
-  that has none (a blank thread makes none), when a terminal starts in one, and when a client
-  sets a layout for one.
+- A client makes a Session: by setting a layout for a directory that has none (`sessions/set`),
+  or by adding a thread or terminal to one (`sessions/add`), which makes it without a layout.
+  The Host makes none on its own: a directory where threads only ran from a terminal, a
+  schedule or another program has no Session. A Host that works so says `sessions_add` in
+  `features`. One from before it made a Session for any directory a thread was prompted or a
+  terminal started in; those that no client ever set a layout for are dropped when a Host with
+  the feature loads them.
 - A Session ends with its worktree, through `worktrees/remove` or `worktrees/release`, and when
   its directory is gone, as when git removed the worktree without the Host: such a Session
   ends as the Host starts, and as a client lists Sessions. A client may also end one with
   `sessions/end`.
-- A Session that ends is gone for good, with what was in it. When a client ends one, the
-  threads open in it close, as `thread/close` closes them, its terminals end, and its layout is
-  forgotten; nothing brings it back. Its directory stays, a worktree too, and the next thread or
-  terminal to start there makes a new Session, with no layout. A Host that does this says
-  `sessions_end` in `features`: one from before it only forgot the layout, leaving the threads
-  and terminals without a Session.
+- A Session that ends is gone for good, with what was in it. When a client ends one, its open
+  threads close, as `thread/close` closes them, its terminals end, and its layout is forgotten;
+  nothing brings it back. Its directory stays, a worktree too, and so does whatever else is in
+  the directory that was never the Session's. A Host that does this says `sessions_end` in
+  `features`: one from before it only forgot the layout, leaving the threads and terminals
+  without a Session.
+
+**What's in one.** A Session's threads and terminals are those a client added to it
+(`sessions/add`), as it starts one in a Block or gives a Block to one started elsewhere, and
+those its own threads started: a thread started with the Host's thread tools by a thread in
+it, in the same directory, and a terminal opened from one (`openedFrom`). Nothing else in its
+directory is its: a thread from the TUI or a schedule stays outside until a client adds it. A
+thread that closes stays the Session's, to be opened again; one that's deleted, and a terminal
+that ends, leave it.
 
 Sessions are kept with the Host's other state, one file each in `layouts/` in the Host's
 directory, written whole, so they survive the Host's restarts and updates. A Host inside a
@@ -1464,14 +1478,16 @@ type HostSession = {
   git?: GitLocation;     // absent outside a repository
   createdAt: number;
   updatedAt?: number;    // when its layout was last set
-  threads: threadId[];   // the threads the Host has a record of in it, blank ones aside, most recently active first
-  terminals: string[];   // its terminals' ids, oldest first
+  threads: threadId[];   // its own threads the Host has a record of, open or not, most recently active first
+  terminals: string[];   // its own terminals' ids, oldest first
 };
 ```
 
-`threads` and `terminals` let a client place again a thread or terminal that no Block shows.
-They are as of the answer: `threads/watch` and `terminals/watch` follow them, and
-`sessions/updated` isn't sent when they change.
+`threads` and `terminals` are the Session's own, not all its directory holds, and let a client
+place again a thread or terminal that no Block shows. A thread added before its first prompt is
+among them, though no listing has it yet. `sessions/updated` is sent when one joins;
+`threads/watch` and `terminals/watch` follow what each is doing, and one that's deleted or ends
+leaves without a notification.
 
 **`sessions/list`** `{}` → `{sessions: HostSession[]}`
 
@@ -1492,12 +1508,21 @@ otherwise refused with `revision_conflict` and `data: {revision}`, so a client c
 than overwrite. A layout over 1 MiB serialized (`maxLayout`) is refused as invalid params. The
 directory must exist.
 
+**`sessions/add`** `{directory, threads?, terminals?}` → `{session}`
+
+The threads and terminals are the Session's that `directory` is in from now on, which is made
+first if there's none, without a layout and at revision 0. Each must be in the Session's
+directory: a thread by its worktree, or outside a repository its own directory, and a terminal
+by its scope; otherwise invalid params, and nothing is added. One that's already the Session's
+changes nothing. It leaves the revision as it was, and every client watching the Session is
+sent it when something joined. Feature `sessions_add`.
+
 **`sessions/watch`** `{directory?}` → `{directory?, sessions: HostSession[]}`
 
 The Session `directory` is in, as the Host resolved the directory, or with no `directory` every
 Session, with their layouts. Then, until the connection ends or the client sends
-`sessions/unwatch`, `sessions/updated` `{session}` when one is made or its layout set, with the
-layout, and `sessions/ended` `{directory}` when one ends. Nothing reaches the watcher between
+`sessions/unwatch`, `sessions/updated` `{session}` when one is made, its layout set or
+something joins it, with the layout, and `sessions/ended` `{directory}` when one ends. Nothing reaches the watcher between
 the answer and the first notification. A directory with no Session yet may be watched: the
 answer has no Session, and `sessions/updated` follows when one is made. A device showing a
 Session watches it; a sidebar watches every Session.
@@ -1510,30 +1535,37 @@ without one.
 **`sessions/end`** `{directory}` → `{}`
 
 Ends the Session `directory` is in, for good, as above: its open threads close, its terminals
-end, and its layout is forgotten. Only what's in that Session: a directory inside it that's
-another's, as a worktree nested in it, keeps its own. Refused with `session_busy`, with nothing
-closed, while a thread in it runs a turn or waits on a request, or a terminal in it runs a
-command (`data: {threads, terminals}`); `no_session` when there's none.
+end, and its layout is forgotten. Only what's the Session's: a thread or terminal in its
+directory that was never added to it carries on, and a directory inside it that's another's,
+as a worktree nested in it, keeps its own. Refused with `session_busy`, with nothing closed,
+while a thread of its runs a turn or waits on a request, or a terminal of its runs a command
+(`data: {threads, terminals}`); `no_session` when there's none.
 
 ### The layout
 
 The layout is the clients' document, not the Host's: the Host keeps it as JSON it doesn't read,
 so new Block types never change the protocol. Its shape is in `weave-host-protocol`
 (`sessions::layout`), with golden fixtures and in the JSON Schema the app's types come from, so
-every client agrees on it. A client checks `version` (1 now, `layoutVersion`) before it trusts
-the rest.
+every client agrees on it. A client checks `version` (2 now, `layoutVersion`) before it trusts
+the rest. A Block in a tab is docked in the tab's tree, alone in its place, or floats over it,
+where it can be minimized: put away as its name, to bring back. Version 1 also had `stack`
+nodes, Blocks one behind another in one place; a client reading one keeps a stack's first Block
+where it was and leaves the rest out, which carry on without a Block.
 
 ```ts
-type SessionLayout = { version: 1; tabs: SessionTab[] };
+type SessionLayout = { version: 2; tabs: SessionTab[] };
 type SessionTab = {
   id: string;                    // unique in the layout
   title?: string;                // the person's name for it
-  root?: SessionNode;            // absent for an empty tab
-  floating?: { block: SessionBlock; frame: { x; y; width; height } }[]; // fractions of the tab, last on top
+  root?: SessionNode;            // its docked Blocks; absent for a tab with none
+  floating?: {                   // last on top
+    block: SessionBlock;
+    frame: { x; y; width; height }; // fractions of the tab; where it comes back to when minimized
+    minimized?: boolean;
+  }[];
 };
 type SessionNode =
   | { kind: "row" | "column"; children: SessionNode[]; sizes?: number[] } // relative shares
-  | { kind: "stack"; children: SessionBlock[] }                          // one behind another
   | ({ kind: "block" } & SessionBlock);
 type SessionBlock = {
   id: string;                    // unique in the layout
@@ -1542,8 +1574,8 @@ type SessionBlock = {
 };
 ```
 
-What stays on each device is never written to it: focus, zoom, the tab in front, the Block in
-front of a stack, scroll positions, and how a device presents the layout, as a phone shows each
+What stays on each device is never written to it: focus, zoom, the tab in front, scroll
+positions, and how a device presents the layout, as a phone shows each
 tab as a stack. A client without a Block's type shows the type and props as text (ADR 0018's
 text floor). A Block points at what it shows, and the Host knows nothing of that: a client that
 closes one closes its thread (`thread/close`), which can be shown again, or ends its terminal
