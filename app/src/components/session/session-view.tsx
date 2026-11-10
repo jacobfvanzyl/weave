@@ -4,12 +4,12 @@
 // every device; which tab and Block are in front, focus and zoom are this device's own.
 import { useEffect, useMemo, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { Add01Icon, Cancel01Icon, ComputerTerminal01Icon, BubbleChatIcon, MoreHorizontalIcon } from '@hugeicons/core-free-icons';
+import { Add01Icon, Cancel01Icon, ComputerTerminal01Icon, BubbleChatIcon } from '@hugeicons/core-free-icons';
 import { type AppController, type CreatedThread, type LayoutChange, type OpenSession, type TerminalSummary, type ThreadSummary, threadKey } from '@/app/app-controller';
 import { useCommand } from '@/app/commands';
 import { type NewThreadTarget, NewThreadDialog } from '@/components/new-thread-dialog';
 import { type BlockContext, TerminalMark, blockType } from '@/components/session/blocks';
-import { type PaneActions, TabPanes } from '@/components/session/panes';
+import { type PaneActions, BlockRail, TabPanes } from '@/components/session/panes';
 import { ThreadHeader } from '@/components/thread-view';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
@@ -23,9 +23,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import type { SessionBlock, SessionTab } from '@/host/protocol';
 import { cn } from '@/lib/utils';
 import { blockOfTerminal, blockOfThread, place, terminalBlock, terminalOf, threadBlock, threadOf } from '@/session/blocks';
@@ -55,8 +53,8 @@ import { terminalBusy, terminalName, terminalsInOrder } from '@/terminal/termina
 
 const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-/** What a new Block shows: a thread or terminal to start, or one that isn't shown. */
-function AddBlockDialog({ open, onOpenChange, threads, closed, terminals, canTerminals, onNewThread, onNewTerminal, onThread, onTerminal }: {
+/** What a new Block shows: a thread or terminal to start, or one the Session has that no Block shows. */
+function NewBlockDialog({ open, onOpenChange, threads, closed, terminals, canTerminals, onNewThread, onNewTerminal, onThread, onTerminal }: {
   open: boolean;
   onOpenChange(open: boolean): void;
   /** The Session's open threads no Block shows, and its closed ones. */
@@ -75,8 +73,8 @@ function AddBlockDialog({ open, onOpenChange, threads, closed, terminals, canTer
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='w-[min(26rem,calc(100%-2rem))] max-w-none sm:max-w-md'>
         <DialogHeader>
-          <DialogTitle>Show a thread or terminal</DialogTitle>
-          <DialogDescription>It shows here on every device.</DialogDescription>
+          <DialogTitle>New Block</DialogTitle>
+          <DialogDescription>What it shows: something new, or a thread or terminal of this Session that no Block shows. It's placed here on every device.</DialogDescription>
         </DialogHeader>
         <div className='grid max-h-[60dvh] gap-3 overflow-y-auto'>
           <div role='group' aria-label='New' className='grid gap-0.5'>
@@ -127,31 +125,29 @@ function AddBlockDialog({ open, onOpenChange, threads, closed, terminals, canTer
   );
 }
 
-function RenameTabDialog({ tab, name, onClose, onRename }: { tab?: SessionTab; name: string; onClose(): void; onRename(title: string): void }) {
-  const [title, setTitle] = useState('');
-  useEffect(() => {
-    if (tab) setTitle(tab.title ?? '');
-    // Starts from the name it has when it opens.
-  }, [tab?.id]);
+/** A tab's name, typed in the tab itself: Return keeps it, Escape leaves it as it was. */
+function TabNameInput({ tab, placeholder, onDone }: { tab: SessionTab; placeholder: string; onDone(title?: string): void }) {
+  const [value, setValue] = useState(tab.title ?? '');
+  const done = useRef(false);
+  const finish = (title?: string) => {
+    if (done.current) return;
+    done.current = true;
+    onDone(title);
+  };
   return (
-    <Dialog open={tab !== undefined} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className='w-[min(24rem,calc(100%-2rem))] max-w-none sm:max-w-sm'>
-        <DialogHeader>
-          <DialogTitle>Rename tab</DialogTitle>
-          <DialogDescription>Every device shows the name. Without one, a tab is named after what it shows: {name}.</DialogDescription>
-        </DialogHeader>
-        <form aria-label='Rename tab' className='grid gap-3' onSubmit={(event) => {
-          event.preventDefault();
-          onRename(title);
-          onClose();
-        }}>
-          <Input aria-label='Name' autoFocus maxLength={80} value={title} onChange={(event) => setTitle(event.target.value)} />
-          <DialogFooter>
-            <Button type='submit'>Rename</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <input aria-label='Tab name' autoFocus maxLength={80} value={value} placeholder={placeholder}
+      className='h-6 w-36 min-w-0 rounded-sm border border-border bg-background px-1.5 text-xs text-foreground outline-none focus-visible:border-primary'
+      onChange={(event) => setValue(event.target.value)}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+      onFocus={(event) => event.target.select()}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === 'Enter') finish(value);
+        else if (event.key === 'Escape') finish(undefined);
+      }}
+      onBlur={() => finish(value)} />
   );
 }
 
@@ -265,7 +261,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
   });
   const title = (block: SessionBlock) => blockType(block.type).title(block, { controller, session });
   const mark = (block: SessionBlock) => blockType(block.type).mark?.(block, { controller, session }) ?? null;
-  const menu = (block: SessionBlock) => blockType(block.type).actions?.(block, { controller, session }) ?? [];
+  const menu = (block: SessionBlock) => blockType(block.type).actions?.(block, context(block)) ?? [];
   const body = (block: SessionBlock) => {
     const { Body } = blockType(block.type);
     return <Body block={block} context={context(block)} />;
@@ -277,7 +273,8 @@ export function SessionView({ controller, session, members, leading, phone = fal
   const [error, setError] = useState<string>();
   const [adding, setAdding] = useState<{ target: Target }>();
   const [newThread, setNewThread] = useState<{ target: Target; dialog: NewThreadTarget }>();
-  const [renaming, setRenaming] = useState<SessionTab>();
+  // The tab being renamed in place, by id.
+  const [renaming, setRenaming] = useState<string>();
   const [confirm, setConfirm] = useState<{ title: string; description: string; action: string; run(): void }>();
 
   const showThread = (threadId: string, target: Target = here()) => {
@@ -378,19 +375,22 @@ export function SessionView({ controller, session, members, leading, phone = fal
       end(blocks);
       update((current) => removeTab(current, closing.id));
     };
-    const ended = blocks.map(ending);
-    const count = { threads: ended.filter(({ thread }) => thread).length, terminals: ended.filter(({ terminal }) => terminal).length };
-    if (count.threads + count.terminals === 0) {
+    // An empty tab has nothing to lose.
+    if (blocks.length === 0) {
       run();
       return;
     }
+    const ended = blocks.map(ending);
+    const count = { threads: ended.filter(({ thread }) => thread).length, terminals: ended.filter(({ terminal }) => terminal).length };
     const parts = [
       ...(count.threads ? [`closes ${count.threads === 1 ? 'its thread' : `its ${count.threads} threads`}`] : []),
       ...(count.terminals ? [`ends ${count.terminals === 1 ? 'its terminal' : `its ${count.terminals} terminals`}`] : []),
     ];
     setConfirm({
       title: `Close ${tabName(closing)}?`,
-      description: `Closing the tab ${parts.join(' and ')}${ended.some(({ busy }) => busy) ? ', and something in it is still running' : ''}. Threads open again from the list of closed threads; terminals that end are gone.`,
+      description: parts.length > 0
+        ? `Closing the tab ${parts.join(' and ')}${ended.some(({ busy }) => busy) ? ', and something in it is still running' : ''}. Threads open again from the list of closed threads; terminals that end are gone.`
+        : `Closing the tab takes its ${blocks.length === 1 ? 'Block' : `${blocks.length} Blocks`} out of the layout, on every device.`,
       action: 'Close tab',
       run,
     });
@@ -458,7 +458,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
   useCommand('terminal.new', () => void startTerminal(), canTerminals);
   useCommand('block.add', () => setAdding({ target: here() }));
   useCommand('tab.new', openTab);
-  useCommand('tab.rename', () => setRenaming(tab));
+  useCommand('tab.rename', () => setRenaming(tab.id));
   useCommand('tab.close', () => closeTab(tab));
   useCommand('tab.next', () => stepTab(1), layout.tabs.length > 1);
   useCommand('tab.previous', () => stepTab(-1), layout.tabs.length > 1);
@@ -481,86 +481,76 @@ export function SessionView({ controller, session, members, leading, phone = fal
   const empty = (
     <div data-slot='empty-tab' className='flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center'>
       <p className='text-sm font-medium'>Nothing in this tab</p>
-      <p className='max-w-xs text-xs text-muted-foreground'>Start a thread or a terminal here, or show one that isn't on screen.</p>
-      <div className='flex flex-wrap justify-center gap-1.5'>
-        <Button onClick={() => startThread()}>New thread</Button>
-        {canTerminals && <Button variant='outline' onClick={() => void startTerminal()}>New terminal</Button>}
-        {notShown > 0 && <Button variant='outline' onClick={() => setAdding({ target: here() })}>Show one of {notShown} not shown</Button>}
-      </div>
+      <p className='max-w-xs text-xs text-muted-foreground'>
+        A Block shows a thread or a terminal: a new one, or one of this Session's that isn't shown{notShown > 0 ? `, of which there ${notShown === 1 ? 'is 1' : `are ${notShown}`}` : ''}.
+      </p>
+      <Button onClick={() => setAdding({ target: here() })}>New Block</Button>
     </div>
   );
 
-  const add = (
-    <Button size={notShown > 0 ? 'sm' : 'icon'} variant='ghost' data-tab-drop='new'
-      aria-label={notShown > 0 ? `Show a thread or terminal, ${notShown} not shown` : 'Show a thread or terminal'}
-      title='Show a thread or terminal' onClick={() => setAdding({ target: here() })}>
+  const newBlock = (
+    <Button size={phone ? (notShown > 0 ? 'sm' : 'icon') : 'sm'} variant='ghost' className='shrink-0'
+      aria-label={notShown > 0 ? `New Block, ${notShown} not shown` : 'New Block'}
+      title={notShown > 0 ? `New Block: ${notShown} of this Session's threads and terminals aren't shown` : 'New Block'}
+      onClick={() => setAdding({ target: here() })}>
       <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-      {notShown > 0 && notShown}
+      {!phone && 'New Block'}
+      {notShown > 0 && <span className='text-muted-foreground'>{notShown}</span>}
     </Button>
   );
-  const tabMenu = (
-    <DropdownMenu>
-      <DropdownMenuTrigger render={<Button size='icon' variant='ghost' aria-label='Tab actions' />}>
-        <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align='end'>
-        {phone && (
-          <>
-            <DropdownMenuGroup>
-              {layout.tabs.map((listed, index) => (
-                <DropdownMenuItem key={listed.id} onClick={() => changeView((current) => showTab(current, listed.id))}>
-                  {listed.id === tab.id ? '✓ ' : ''}{index + 1}. {tabName(listed)}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-          </>
-        )}
-        <DropdownMenuGroup>
-          <DropdownMenuItem onClick={openTab}>New tab</DropdownMenuItem>
-          <DropdownMenuItem onClick={() => setRenaming(tab)}>Rename tab…</DropdownMenuItem>
-          {phone && focused && menu(focused).map((item) => <DropdownMenuItem key={item.title} onClick={item.run}>{item.title}</DropdownMenuItem>)}
-          {phone && focused && <DropdownMenuItem variant='destructive' onClick={() => closeBlock(focused)}>Close {title(focused)}</DropdownMenuItem>}
-          <DropdownMenuItem variant='destructive' onClick={() => closeTab(tab)}>Close tab</DropdownMenuItem>
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+  // The tabs: each with its name, which is typed in place to rename it, and its own close; then
+  // a + for a new one, which a Block dragged onto it moves into.
+  const tabRail = (
+    <div role='tablist' aria-label='Tabs' className='flex h-full min-w-0 flex-1 items-stretch gap-px overflow-x-auto'>
+      {layout.tabs.map((listed) => {
+        const selected = listed.id === tab.id;
+        const name = tabName(listed);
+        const show = () => changeView((current) => showTab(current, listed.id));
+        return (
+          <div key={listed.id} role='tab' tabIndex={0} aria-selected={selected} aria-label={name} data-tab-drop={listed.id} title={name}
+            className={cn(
+              'flex max-w-56 min-w-0 shrink-0 cursor-default items-center gap-1 border-b-2 border-transparent pr-1 pl-3 text-xs text-muted-foreground outline-none focus-visible:bg-accent',
+              selected && 'border-primary text-foreground',
+            )}
+            onClick={show}
+            onDoubleClick={() => setRenaming(listed.id)}
+            onKeyDown={(event) => {
+              if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+              event.preventDefault();
+              show();
+            }}>
+            {renaming === listed.id
+              ? (
+                <TabNameInput tab={listed} placeholder={tabName({ ...listed, title: undefined })} onDone={(next) => {
+                  if (next !== undefined) update((current) => renameTab(current, listed.id, next));
+                  setRenaming(undefined);
+                }} />
+              )
+              : <span className='truncate'>{name}</span>}
+            <Button size='icon-xs' variant='ghost' aria-label={`Close tab ${name}`} title='Close tab' className='shrink-0 opacity-60 hover:opacity-100'
+              onClick={(event) => {
+                event.stopPropagation();
+                closeTab(listed);
+              }}>
+              <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+            </Button>
+          </div>
+        );
+      })}
+      <Button size='icon' variant='ghost' aria-label='New tab' title='New tab' data-tab-drop='new' className='shrink-0 self-center' onClick={openTab}>
+        <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+      </Button>
+    </div>
   );
   const swipe = useSwipe(stepBlock);
   const sessionName = directoryName(session.directory);
+  const inTab = tabBlocks(tab).length;
 
   return (
     <section aria-label={`Session ${sessionName}`} data-slot='session-view' data-session={session.key} className='flex min-h-0 min-w-0 flex-1 flex-col'>
       <ThreadHeader leading={leading}>
-        {phone
-          ? (
-            <div className='min-w-0 flex-1 py-1.5'>
-              <h2 className='truncate text-sm font-semibold'>{sessionName}</h2>
-              <p className='truncate text-[0.6875rem] text-muted-foreground'>
-                {layout.tabs.length > 1 ? `Tab ${layout.tabs.findIndex(({ id }) => id === tab.id) + 1} of ${layout.tabs.length} · ` : ''}{host?.name}
-              </p>
-            </div>
-          )
-          : (
-            <div role='tablist' aria-label='Tabs' className='flex h-full min-w-0 flex-1 items-stretch gap-px overflow-x-auto'>
-              {layout.tabs.map((listed) => {
-                const selected = listed.id === tab.id;
-                return (
-                  <button key={listed.id} type='button' role='tab' aria-selected={selected} data-tab-drop={listed.id} title={tabName(listed)}
-                    className={cn(
-                      'flex max-w-48 min-w-0 shrink-0 items-center gap-1.5 border-b-2 border-transparent px-3 text-xs text-muted-foreground outline-none focus-visible:bg-accent',
-                      selected && 'border-primary text-foreground',
-                    )}
-                    onClick={() => changeView((current) => showTab(current, listed.id))}
-                    onDoubleClick={() => setRenaming(listed)}>
-                    <span className='truncate'>{tabName(listed)}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        {add}
-        {tabMenu}
+        {tabRail}
+        {newBlock}
       </ThreadHeader>
       {(error ?? model.error) && (
         <Alert variant='destructive' className='m-2 w-auto has-data-[slot=alert-action]:pr-8'>
@@ -575,19 +565,11 @@ export function SessionView({ controller, session, members, leading, phone = fal
       {phone
         ? (
           <>
-            {tabBlocks(tab).length > 1 && (
-              <div role='tablist' aria-label='Blocks in this tab' className='flex h-9 shrink-0 items-stretch gap-px overflow-x-auto border-b border-border bg-title-bar px-1' {...swipe}>
-                {tabBlocks(tab).map((block) => {
-                  const selected = block.id === focused?.id;
-                  return (
-                    <button key={block.id} type='button' role='tab' aria-selected={selected}
-                      className={cn('flex max-w-44 min-w-0 shrink-0 items-center gap-1.5 border-b-2 border-transparent px-2.5 text-xs text-muted-foreground', selected && 'border-primary text-foreground')}
-                      onClick={() => focus(block.id)}>
-                      {mark(block)}
-                      <span className='truncate'>{title(block)}</span>
-                    </button>
-                  );
-                })}
+            {focused && (
+              // One Block at a time: the tab's Blocks by name, and the one in front's menu and close.
+              <div {...swipe}>
+                <BlockRail blocks={tabBlocks(tab)} front={focused} focused arrange={false} view={view} focusedId={focused.id}
+                  actions={paneActions} title={title} mark={mark} body={body} menu={menu} inTab={inTab} />
               </div>
             )}
             {focused
@@ -595,9 +577,9 @@ export function SessionView({ controller, session, members, leading, phone = fal
               : empty}
           </>
         )
-        : <TabPanes tab={tab} view={view} focusedId={focused?.id} zoomedId={zoomed?.id} actions={paneActions} title={title} mark={mark} body={body} menu={menu} empty={empty} />}
+        : <TabPanes tab={tab} view={view} focusedId={focused?.id} zoomedId={zoomed?.id} actions={paneActions} title={title} mark={mark} body={body} menu={menu} inTab={inTab} empty={empty} />}
 
-      <AddBlockDialog
+      <NewBlockDialog
         open={adding !== undefined}
         onOpenChange={(open) => { if (!open) setAdding(undefined); }}
         threads={hidden.filter(({ state }) => state !== 'closed')}
@@ -624,8 +606,6 @@ export function SessionView({ controller, session, members, leading, phone = fal
         }}
       />
       <NewThreadDialog controller={controller} target={newThread?.dialog} onCreated={created} onClose={() => setNewThread(undefined)} />
-      <RenameTabDialog tab={renaming} name={renaming ? tabName({ ...renaming, title: undefined }) : ''} onClose={() => setRenaming(undefined)}
-        onRename={(name) => { if (renaming) update((current) => renameTab(current, renaming.id, name)); }} />
       <AlertDialog open={confirm !== undefined} onOpenChange={(open) => { if (!open) setConfirm(undefined); }}>
         <AlertDialogContent>
           <AlertDialogHeader>

@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppActions, AppController, OpenThread, HostSummary } from '@/app/app-controller';
 import { type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
-import { ThreadView } from './thread-view';
+import { ThreadView, askThread } from './thread-view';
 
 const actions = (): AppActions => ({
   selectThread: vi.fn(),
@@ -217,26 +217,43 @@ describe('ThreadView', () => {
     expect(await screen.findByText("Couldn't rename it: a title is at most 200 characters.")).toBeInTheDocument();
   });
 
-  it('keeps a thin row of its own in a Block, whose pane names it', async () => {
+  it('has no header of its own in a Block, whose rail asks it for its status, a rename or its deletion', async () => {
     const user = userEvent.setup();
     const handlers = actions();
-    const thread: OpenThread = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [] };
+    const thread: OpenThread = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [], mcpServers: [] };
     const opened = vi.fn();
+    const deleted = vi.fn();
     const shown = controller(thread, handlers);
     shown.model.threads[0] = { ...shown.model.threads[0], activity: 'running', clients: 3, continuedIn: { key: 'h/next', label: 'Count again' } };
-    render(<ThreadView controller={shown} thread={thread} chrome='block' onOpenThread={opened} />);
-    // No heading of its own: the pane's strip has its title.
+    render(<ThreadView controller={shown} thread={thread} chrome='block' onOpenThread={opened} onDeleted={deleted} />);
+    // The Block's rail has its title, its mark and its menu: nothing of them here.
     expect(screen.queryByRole('heading', { name: 'Count the files' })).not.toBeInTheDocument();
-    const bar = document.querySelector('[data-slot="thread-bar"]') as HTMLElement;
-    expect(within(bar).getByText('Claude')).toBeInTheDocument();
-    expect(within(bar).getByRole('img', { name: 'Running' })).toBeInTheDocument();
-    expect(within(bar).getByLabelText('2 other clients attached')).toBeInTheDocument();
-    await user.click(within(bar).getByRole('button', { name: 'Thread actions' }));
-    expect(await screen.findByRole('menuitem', { name: 'Thread status' })).toBeInTheDocument();
-    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('button', { name: 'Thread actions' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('2 other clients attached')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-slot="thread-header"]')).not.toBeInTheDocument();
     // The thread it continues in opens through the Session, which may be another.
     await user.click(screen.getByRole('button', { name: 'Open' }));
     expect(opened).toHaveBeenCalledWith('h/next');
     expect(handlers.selectThread).not.toHaveBeenCalled();
+
+    act(() => askThread('h/main', 'status'));
+    expect(await screen.findByRole('dialog', { name: /status/i })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    act(() => askThread('h/main', 'rename'));
+    const title = await screen.findByRole('textbox', { name: 'Title' });
+    await user.clear(title);
+    await user.type(title, 'Count every file');
+    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    expect(handlers.renameThread).toHaveBeenCalledWith('h/main', 'Count every file');
+
+    // Another thread's Block asks nothing of this one.
+    act(() => askThread('h/other', 'delete'));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    act(() => askThread('h/main', 'delete'));
+    const confirm = await screen.findByRole('alertdialog', { name: 'Delete Count the files?' });
+    await user.click(within(confirm).getByRole('button', { name: 'Delete' }));
+    expect(handlers.deleteThread).toHaveBeenCalledWith('h/main');
+    expect(deleted).toHaveBeenCalled();
   });
 });

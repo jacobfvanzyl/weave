@@ -11,11 +11,13 @@ import {
 } from '@/components/ui/alert-dialog';
 
 /** Confirms deleting a thread, from its own menu or its row in the list. */
-export function DeleteThreadDialog({ thread, actions, open, onOpenChange }: {
+export function DeleteThreadDialog({ thread, actions, open, onOpenChange, onDeleted }: {
   thread: ThreadSummary;
   actions: AppController['actions'];
   open: boolean;
   onOpenChange(open: boolean): void;
+  /** The person confirmed: what showed the thread lets go of it. */
+  onDeleted?(): void;
 }) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -28,7 +30,10 @@ export function DeleteThreadDialog({ thread, actions, open, onOpenChange }: {
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction variant='destructive' onClick={() => void actions.deleteThread(thread.key)}>Delete</AlertDialogAction>
+          <AlertDialogAction variant='destructive' onClick={() => {
+            void actions.deleteThread(thread.key);
+            onDeleted?.();
+          }}>Delete</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

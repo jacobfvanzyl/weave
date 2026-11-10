@@ -89,6 +89,7 @@ function joined() {
   const deviceListeners = new Set<(message: FromSurface) => void>();
   const surfaceListeners = new Set<(message: ToSurface) => void>();
   const toSurface: ToSurface[] = [];
+  const fromSurface: FromSurface[] = [];
   const setStatus = (next: Partial<SurfaceStatus>) => {
     status = { ...status, ...next };
     for (const listener of statusListeners) listener(status);
@@ -108,11 +109,12 @@ function joined() {
   const end: SurfaceEnd = {
     onMessage: (listener) => { surfaceListeners.add(listener); return () => surfaceListeners.delete(listener); },
     send: (message) => {
+      fromSurface.push(message);
       if (message.kind === 'ready') setStatus({ connected: status.enabled });
       for (const listener of deviceListeners) listener(message);
     },
   };
-  return { link, end, toSurface };
+  return { link, end, toSurface, fromSurface };
 }
 
 describe('a Surface', () => {
@@ -169,13 +171,15 @@ describe('a Surface', () => {
 
   it('scrolls the Surface from the scrubber, and follows the end again from Latest', async () => {
     const user = userEvent.setup();
-    const { link, end, toSurface } = joined();
+    const { link, end, toSurface, fromSurface } = joined();
     const thread: OpenThread = { key: 'h/main', transcript: transcript(reply('Counting.')), canSteer: true, queued: [] };
     const phone = render(<AppShell controller={controller(thread, actions())} surfaceLink={link} />);
     render(<SurfaceApp end={end} />);
     const onPhone = within(phone.container);
     const scrubber = await onPhone.findByRole('slider', { name: 'Scroll the Surface' });
     expect(onPhone.queryByRole('button', { name: 'Latest' })).not.toBeInTheDocument();
+    // The Surface says where it is once it has the transcript, which would undo what it says next.
+    await waitFor(() => expect(fromSurface).toContainEqual(expect.objectContaining({ kind: 'position' })));
 
     // The Surface says it's scrolled up from the end.
     act(() => end.send({ kind: 'position', fraction: 0.5, following: false, scrollable: true }));
@@ -184,7 +188,8 @@ describe('a Surface', () => {
     await user.keyboard('{PageUp}');
     expect(toSurface).toContainEqual({ kind: 'scroll', fraction: 0.3 });
     await user.click(onPhone.getByRole('button', { name: 'Latest' }));
-    expect(toSurface.at(-1)).toEqual({ kind: 'scroll', to: 'end' });
+    // The last it was asked to scroll: a transcript the device was still gathering may follow.
+    expect(toSurface.filter(({ kind }) => kind === 'scroll').at(-1)).toEqual({ kind: 'scroll', to: 'end' });
   });
 
   it('hands the display back when turned off, and the iPhone shows the thread again', async () => {
@@ -195,12 +200,12 @@ describe('a Surface', () => {
     render(<SurfaceApp end={end} />);
     const onPhone = within(phone.container);
     await onPhone.findByText('The thread is on your Surface.');
-    await user.click(onPhone.getByRole('button', { name: 'Thread actions' }));
+    await user.click(onPhone.getByRole('button', { name: 'Count the files actions' }));
     await user.click(await screen.findByRole('menuitem', { name: 'Turn the Surface off' }));
     expect(link.setEnabled).toHaveBeenCalledWith(false);
     await waitFor(() => expect(onPhone.getByText('Counting the files now.')).toBeInTheDocument());
     expect(link.setLandscape).toHaveBeenLastCalledWith(false);
-    await user.click(onPhone.getByRole('button', { name: 'Thread actions' }));
+    await user.click(onPhone.getByRole('button', { name: 'Count the files actions' }));
     expect(await screen.findByRole('menuitem', { name: 'Show on the Surface' })).toBeInTheDocument();
   });
 

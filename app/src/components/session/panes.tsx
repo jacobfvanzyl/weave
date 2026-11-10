@@ -1,11 +1,20 @@
-// A tab's panes on the Mac and the iPad (WVE-203): rows and columns with edges to drag, a strip
-// of its Blocks atop each pane, Blocks floating over them, and dragging a Block by its name to
-// another pane's middle or edge, or to a tab.
+// A tab's panes on the Mac and the iPad (WVE-203): rows and columns with edges to drag, a rail
+// atop each pane with its Blocks' names and the same icons for any Block, Blocks floating over
+// them, and dragging a Block by its rail to another pane's middle or edge, or to a tab.
 import { Fragment, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { Cancel01Icon, MoreHorizontalIcon } from '@hugeicons/core-free-icons';
+import {
+  Cancel01Icon,
+  LayoutTwoColumnIcon,
+  LayoutTwoRowIcon,
+  Maximize01Icon,
+  Minimize01Icon,
+  MoreHorizontalIcon,
+  PictureInPictureExitIcon,
+  PictureInPictureOnIcon,
+} from '@hugeicons/core-free-icons';
 import { Button } from '@/components/ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import type { SessionBlock, SessionFloating, SessionFrame, SessionNode, SessionTab } from '@/host/protocol';
 import { cn } from '@/lib/utils';
 import { type Pane, type Path, type Side, type Split, type Target, fitFrame, newTab, shares } from '@/session/layout';
@@ -36,9 +45,17 @@ export type PaneProps = {
   title(block: SessionBlock): string;
   mark(block: SessionBlock): ReactNode;
   body(block: SessionBlock): ReactNode;
-  /** What a Block's type adds to its menu. */
-  menu(block: SessionBlock): { title: string; run(): void }[];
+  /** What a Block's type offers in its rail's menu. */
+  menu(block: SessionBlock): BlockAction[];
+  /** How many Blocks the tab has: one alone has nothing to zoom over. */
+  inTab: number;
 };
+
+/** Something a Block's type offers of its own. */
+export type BlockAction = { title: string; destructive?: boolean; run(): void };
+
+/** An icon, as the icon set gives them. */
+type IconSvgElement = Parameters<typeof HugeiconsIcon>[0]['icon'];
 
 /** The least share of a split a pane keeps when its edge is dragged. */
 const MIN_SHARE = 0.1;
@@ -130,95 +147,95 @@ function useBlockDrag(move: PaneActions['move']) {
 
 type Drag = ReturnType<typeof useBlockDrag>;
 
-/** A Block's own menu: what its pane's strip offers for the Block in front. */
-function BlockMenu({ block, title, floating, zoomed, actions, own }: {
-  block: SessionBlock;
-  title: string;
-  floating: boolean;
-  zoomed: boolean;
-  actions: PaneActions;
-  /** What the Block's type offers of its own. */
-  own: { title: string; run(): void }[];
-}) {
+/** One of a rail's icons. */
+function RailButton({ label, icon, pressed, onClick }: { label: string; icon: IconSvgElement; pressed?: boolean; onClick(): void }) {
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger render={<Button size='icon-sm' variant='ghost' aria-label={`${title} Block actions`} />}>
-        <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align='end'>
-        <DropdownMenuGroup>
-          {!floating && <DropdownMenuItem onClick={() => actions.split(block.id, 'right')}>Split right…</DropdownMenuItem>}
-          {!floating && <DropdownMenuItem onClick={() => actions.split(block.id, 'down')}>Split down…</DropdownMenuItem>}
-          <DropdownMenuItem onClick={() => actions.zoom(block.id)}>{zoomed ? 'Unzoom' : 'Zoom'}</DropdownMenuItem>
-          <DropdownMenuItem onClick={() => actions.float(block)}>{floating ? 'Dock' : 'Float'}</DropdownMenuItem>
-          <DropdownMenuItem onClick={() => actions.toNewTab(block)}>Move to a new tab</DropdownMenuItem>
-        </DropdownMenuGroup>
-        {own.length > 0 && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              {own.map((item) => <DropdownMenuItem key={item.title} onClick={item.run}>{item.title}</DropdownMenuItem>)}
-            </DropdownMenuGroup>
-          </>
-        )}
-        <DropdownMenuSeparator />
-        <DropdownMenuGroup>
-          <DropdownMenuItem variant='destructive' onClick={() => actions.close(block)}>Close</DropdownMenuItem>
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Button size='icon-sm' variant='ghost' aria-label={label} title={label} aria-pressed={pressed} onClick={onClick}>
+      <HugeiconsIcon icon={icon} strokeWidth={2} />
+    </Button>
   );
 }
 
 /**
- * A pane's strip: a name for each of its Blocks, the one in front picked out, then that Block's
- * menu and its close. A name is dragged to move its Block, unless `onHandle` takes the strip's
- * drags for itself, as a floating Block's does to move.
+ * A Block's rail, atop its pane: a name for each of the pane's Blocks, the one in front picked
+ * out, then the same icons whatever the Block is: split right, split down, float, zoom when its
+ * tab has another Block to zoom over, a menu of what its type offers, and close. The whole rail
+ * is the Block's handle: dragging it moves the Block in front, and dragging a name moves that
+ * one, unless `onHandle` takes the rail's drags for itself, as a floating Block's does to move.
+ * Without `arrange`, as on the iPhone, it has the names, the menu and close.
  */
-function Strip({ blocks, front, focused, floating = false, drag, onHandle, ...props }: PaneProps & {
+export function BlockRail({ blocks, front, focused, floating = false, arrange = true, drag, onHandle, ...props }: PaneProps & {
   blocks: SessionBlock[];
   front: SessionBlock;
   focused: boolean;
   floating?: boolean;
+  arrange?: boolean;
   drag?: Drag;
   onHandle?(event: ReactPointerEvent): void;
 }) {
   const { actions, title, mark } = props;
+  const name = title(front);
+  const own = props.menu(front);
+  const zoomed = props.zoomedId === front.id;
+  const handle = Boolean(onHandle ?? drag);
   return (
-    <div data-slot='pane-strip' className={cn('flex h-8 shrink-0 items-stretch gap-px border-b border-border bg-title-bar pr-1 text-xs', onHandle && 'cursor-grab touch-none')}
-      onPointerDown={onHandle}>
+    <div data-slot='block-rail' className={cn('flex h-9 shrink-0 items-stretch gap-px border-b border-border bg-title-bar pr-1 text-xs', handle && 'cursor-grab touch-none')}
+      onPointerDown={(event) => {
+        if (onHandle) onHandle(event);
+        else drag?.start(event, front, name);
+      }}>
       <div role='tablist' aria-label='Blocks in this pane' className='flex min-w-0 flex-1 items-stretch overflow-hidden'>
         {blocks.map((block) => {
           const selected = block.id === front.id;
-          const name = title(block);
+          const label = title(block);
           return (
-            <button key={block.id} type='button' role='tab' aria-selected={selected} title={name}
+            <button key={block.id} type='button' role='tab' aria-selected={selected} title={label}
               className={cn(
-                'flex min-w-0 max-w-56 items-center gap-1.5 border-b-2 border-transparent px-2.5 text-muted-foreground outline-none',
-                !onHandle && 'touch-none',
+                'flex min-w-0 max-w-56 items-center gap-1.5 border-b-2 border-transparent px-3 text-muted-foreground outline-none',
+                handle && 'cursor-grab',
                 selected && 'text-foreground',
                 selected && focused && 'border-primary',
                 'focus-visible:bg-accent',
               )}
-              onPointerDown={(event) => { if (!onHandle) drag?.start(event, block, name); }}
+              onPointerDown={(event) => {
+                if (onHandle) return;
+                // Its own name drags it, not the Block in front.
+                event.stopPropagation();
+                drag?.start(event, block, label);
+              }}
               onClick={() => { if (!drag?.wasDrag()) actions.focus(block.id); }}>
               {mark(block)}
-              <span className='truncate'>{name}</span>
+              <span className='truncate'>{label}</span>
             </button>
           );
         })}
       </div>
       <div className='flex shrink-0 items-center gap-0.5' onPointerDown={(event) => event.stopPropagation()}>
-        <BlockMenu block={front} title={title(front)} floating={floating} zoomed={props.zoomedId === front.id} actions={actions} own={props.menu(front)} />
-        <Button size='icon-sm' variant='ghost' aria-label={`Close ${title(front)}`} onClick={() => actions.close(front)}>
-          <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
-        </Button>
+        {arrange && !floating && <RailButton label={`Split ${name} right`} icon={LayoutTwoColumnIcon} onClick={() => actions.split(front.id, 'right')} />}
+        {arrange && !floating && <RailButton label={`Split ${name} down`} icon={LayoutTwoRowIcon} onClick={() => actions.split(front.id, 'down')} />}
+        {arrange && <RailButton label={floating ? `Dock ${name}` : `Float ${name}`} icon={floating ? PictureInPictureExitIcon : PictureInPictureOnIcon} onClick={() => actions.float(front)} />}
+        {arrange && (props.inTab > 1 || zoomed) && (
+          <RailButton label={zoomed ? `Unzoom ${name}` : `Zoom ${name}`} icon={zoomed ? Minimize01Icon : Maximize01Icon} pressed={zoomed} onClick={() => actions.zoom(front.id)} />
+        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger disabled={own.length === 0} render={<Button size='icon-sm' variant='ghost' aria-label={`${name} actions`} title='More' />}>
+            <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='end'>
+            <DropdownMenuGroup>
+              {own.map((item) => (
+                <DropdownMenuItem key={item.title} variant={item.destructive ? 'destructive' : undefined} onClick={item.run}>{item.title}</DropdownMenuItem>
+              ))}
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <RailButton label={`Close ${name}`} icon={Cancel01Icon} onClick={() => actions.close(front)} />
       </div>
     </div>
   );
 }
 
-/** What fills a pane under its strip: the Block in front. */
+/** What fills a pane under its rail: the Block in front. */
 const Body = ({ block, body }: { block: SessionBlock; body: PaneProps['body'] }) => (
   <div data-block-id={block.id} role='tabpanel' className='flex min-h-0 min-w-0 flex-1 flex-col'>
     {body(block)}
@@ -234,7 +251,7 @@ function PaneView({ pane, drag, ...props }: PaneProps & { pane: Pane; drag?: Dra
     <div role='group' data-slot='pane' data-pane={front.id} data-alone={pane.children.length === 1 || undefined} data-focused={focused || undefined}
       aria-label={`Pane, ${props.title(front)}`} className='flex min-h-0 min-w-0 flex-1 flex-col bg-background'
       onPointerDownCapture={() => { if (!focused) actions.focus(front.id); }}>
-      <Strip {...props} blocks={pane.children} front={front} focused={focused} drag={drag} />
+      <BlockRail {...props} blocks={pane.children} front={front} focused={focused} drag={drag} />
       <Body key={front.id} block={front} body={props.body} />
     </div>
   );
@@ -335,7 +352,7 @@ function FloatingView({ item, bounds, ...props }: PaneProps & { item: SessionFlo
     <div role='group' data-slot='floating-block' data-focused={focused || undefined} aria-label={`Floating, ${props.title(block)}`} style={style}
       className={cn('absolute z-10 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-md border bg-background shadow-xl', focused ? 'border-primary/60' : 'border-border')}
       onPointerDownCapture={() => { if (!focused) actions.focus(block.id); }}>
-      <Strip {...props} blocks={[block]} front={block} focused={focused} floating
+      <BlockRail {...props} blocks={[block]} front={block} focused={focused} floating
         onHandle={(event) => track(event, (from, dx, dy) => ({ ...from, x: from.x + dx, y: from.y + dy }))} />
       <Body key={block.id} block={block} body={props.body} />
       <div role='separator' aria-label={`Resize ${props.title(block)}`} className='absolute right-0 bottom-0 z-10 size-4 cursor-nwse-resize touch-none'

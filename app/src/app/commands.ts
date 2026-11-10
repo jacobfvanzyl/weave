@@ -27,7 +27,7 @@ const spec = (id: string, title: string, group: CommandGroup, keys?: string): Co
 export const COMMANDS = [
   spec('thread.new', 'New Thread', 'Session', 'Mod+N'),
   spec('terminal.new', 'New Terminal', 'Session', 'Mod+Shift+N'),
-  spec('block.add', 'Show a Thread or Terminal…', 'Session', 'Mod+O'),
+  spec('block.add', 'New Block…', 'Session', 'Mod+O'),
   spec('session.new', 'New Session…', 'Session'),
   spec('session.end', 'End Session…', 'Session'),
   spec('palette.open', 'Command Palette…', 'Session', 'Mod+K'),

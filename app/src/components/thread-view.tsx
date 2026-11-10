@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEve
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ArrowLeft01Icon, Cancel01Icon, Delete02Icon, Edit02Icon, InformationCircleIcon, MoreHorizontalIcon, SparklesIcon, StopIcon, Tv01Icon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
 import type { AgentUpdateNotice, AppController, DispatcherSummary, HostSummary, OpenThread, ThreadSummary } from '@/app/app-controller';
-import { subdirectory } from '@/app/thread-list';
 import { usePhoneLayout } from '@/app/use-phone-layout';
 import { useUpdateNotice } from '@/app/use-update-notice';
 import { allSubagents, findSubagent, threadLabel, waitsForAnswer } from '@/chat/acp-transcript';
@@ -78,12 +77,36 @@ function RenameDialog({ thread, actions, open, onOpenChange }: {
   );
 }
 
-function ThreadMenu({ thread, actions, canRename, onStatus, surface, compact }: {
+/** What a thread's Block asks of its thread from the Block's own menu: the thread's view answers. */
+export type ThreadAsk = 'status' | 'rename' | 'delete';
+
+const asks = new Map<string, Set<(what: ThreadAsk) => void>>();
+
+/** Asks the view of the thread `key`, wherever it's on screen, to show its status, or to rename or delete it. */
+export function askThread(key: string, what: ThreadAsk) {
+  for (const answer of [...(asks.get(key) ?? [])]) answer(what);
+}
+
+/** Answers `askThread` for the thread `key` while the component is mounted. */
+function useThreadAsks(key: string, answer: (what: ThreadAsk) => void) {
+  const latest = useRef(answer);
+  latest.current = answer;
+  useEffect(() => {
+    const own = (what: ThreadAsk) => latest.current(what);
+    const answering = asks.get(key) ?? new Set();
+    answering.add(own);
+    asks.set(key, answering);
+    return () => {
+      answering.delete(own);
+      if (answering.size === 0) asks.delete(key);
+    };
+  }, [key]);
+}
+
+function ThreadMenu({ thread, actions, canRename, onStatus, surface }: {
   thread: ThreadSummary;
   actions: AppController['actions'];
   canRename?: boolean;
-  /** In a Block's thin row. */
-  compact?: boolean;
   /** Show the thread's status sheet. */
   onStatus(): void;
   /** A connected display the thread can be shown on (WVE-183). */
@@ -94,7 +117,7 @@ function ThreadMenu({ thread, actions, canRename, onStatus, surface, compact }: 
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger render={<Button size={compact ? 'icon-xs' : 'icon'} variant='ghost' aria-label='Thread actions' />}>
+        <DropdownMenuTrigger render={<Button size='icon' variant='ghost' aria-label='Thread actions' />}>
           <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} />
         </DropdownMenuTrigger>
         <DropdownMenuContent align='end'>
@@ -222,10 +245,11 @@ function ConnectionNotice({ host, dispatcher }: { host: HostSummary; dispatcher?
 
 /**
  * A thread: its header, transcript and composer. On its own it has the whole header, with its
- * title; in a Block (`chrome='block'`, WVE-203) the pane names it, and it keeps a thin row of what
- * is the thread's own: its agent, what it's doing, who else is attached, and its menu.
+ * title; in a Block (`chrome='block'`, WVE-203) it has none: the Block's rail names it, marks
+ * what it's doing, and has its menu, which asks here (`askThread`) for its status, or to rename
+ * or delete it.
  */
-export function ThreadView({ controller, thread, leading, onSwipeBack, surface, chrome = 'full', onOpenThread }: {
+export function ThreadView({ controller, thread, leading, onSwipeBack, surface, chrome = 'full', onOpenThread, onDeleted }: {
   controller: AppController;
   thread: OpenThread;
   leading?: ReactNode;
@@ -238,6 +262,8 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface, 
   chrome?: 'full' | 'block';
   /** Shows another thread, as the one this one continues in; `selectThread` without it. */
   onOpenThread?(key: string): void;
+  /** The person deleted the thread from its Block's menu. */
+  onDeleted?(): void;
 }) {
   const { model, actions } = controller;
   const summary = model.threads.find(({ key }) => key === thread.key);
@@ -254,6 +280,14 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface, 
   const [update, dismissUpdate] = useUpdateNotice(thread.key, thread.update);
   const [statusShown, setStatusShown] = useState(false);
   useEffect(() => setStatusShown(false), [thread.key]);
+  // In a Block, its rail has the thread's menu, which asks here for what needs the thread's view.
+  const [renaming, setRenaming] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  useThreadAsks(thread.key, (what) => {
+    if (what === 'status') setStatusShown(true);
+    else if (what === 'rename') setRenaming(true);
+    else setConfirmDelete(true);
+  });
   const details = (
     <>
       <ActivityIndicator activity={summary?.activity} />
@@ -264,7 +298,7 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface, 
         </Badge>
       )}
       {summary && (
-        <ThreadMenu thread={summary} actions={actions} canRename={host?.canRename} onStatus={() => setStatusShown(true)} compact={chrome === 'block'}
+        <ThreadMenu thread={summary} actions={actions} canRename={host?.canRename} onStatus={() => setStatusShown(true)}
           surface={phone && surface?.status.available ? { enabled: surface.status.enabled, setEnabled: surface.setEnabled } : undefined} />
       )}
     </>
@@ -296,22 +330,11 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface, 
               {details}
             </ThreadHeader>
           )
-          : (
-            <div data-slot='thread-bar' className='flex h-8 shrink-0 items-center gap-1.5 border-b border-border px-2 text-[0.6875rem] text-muted-foreground'>
-              {summary && (
-                <p className='flex min-w-0 flex-1 items-center gap-1'>
-                  <span className='shrink-0'>{summary.agentName}</span>
-                  {subdirectory(summary) && (
-                    <>
-                      <span aria-hidden='true'>·</span>
-                      <span className='truncate'>{subdirectory(summary)}</span>
-                    </>
-                  )}
-                </p>
-              )}
-              {!summary && <span className='flex-1' />}
-              {details}
-            </div>
+          : summary && (
+            <>
+              <RenameDialog thread={summary} actions={actions} open={renaming} onOpenChange={setRenaming} />
+              <DeleteThreadDialog thread={summary} actions={actions} open={confirmDelete} onOpenChange={setConfirmDelete} onDeleted={onDeleted} />
+            </>
           )}
         <ThreadStatusSheet
           open={statusShown}

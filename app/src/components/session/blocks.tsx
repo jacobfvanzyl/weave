@@ -6,12 +6,13 @@ import { type AppController, type OpenSession, type TerminalSummary, type Thread
 import { platform } from '@/app/platform';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { PathLabel } from '@/components/path-label';
-import { ThreadView } from '@/components/thread-view';
+import { ThreadView, askThread } from '@/components/thread-view';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
+import type { BlockAction } from '@/components/session/panes';
 import type { SessionBlock } from '@/host/protocol';
 import { cn } from '@/lib/utils';
 import { TERMINAL_BLOCK, THREAD_BLOCK, terminalOf, threadOf } from '@/session/blocks';
@@ -39,8 +40,8 @@ export type BlockType = {
   title(block: SessionBlock, context: Pick<BlockContext, 'controller' | 'session'>): string;
   /** A mark of what it's doing, beside its name. */
   mark?(block: SessionBlock, context: Pick<BlockContext, 'controller' | 'session'>): ReactNode;
-  /** What its own menu offers, besides what every Block's does. */
-  actions?(block: SessionBlock, context: Pick<BlockContext, 'controller' | 'session'>): { title: string; run(): void }[];
+  /** What its rail's menu offers: what's the type's own, every Block having the rest as icons. */
+  actions?(block: SessionBlock, context: BlockContext): BlockAction[];
   Body(props: { block: SessionBlock; context: BlockContext }): ReactNode;
 };
 
@@ -62,6 +63,21 @@ const thread: BlockType = {
     const summary = summaryOf(block, context);
     return <ActivityIndicator activity={summary?.activity} unread={summary ? context.controller.model.unread.has(summary.key) : false} />;
   },
+  // Closing the thread is the rail's close; what else is a thread's own is here.
+  actions: (block, context) => {
+    const summary = summaryOf(block, context);
+    if (!summary) return [];
+    const host = context.controller.model.hosts.find(({ id }) => id === summary.hostId);
+    const { surface } = context;
+    return [
+      { title: 'Thread status', run: () => askThread(summary.key, 'status') },
+      ...(surface?.status.available
+        ? [{ title: surface.status.enabled ? 'Turn the Surface off' : 'Show on the Surface', run: () => surface.setEnabled(!surface.status.enabled) }]
+        : []),
+      ...(host?.canRename && summary.state === 'open' ? [{ title: 'Rename thread…', run: () => askThread(summary.key, 'rename') }] : []),
+      { title: 'Delete thread…', destructive: true, run: () => askThread(summary.key, 'delete') },
+    ];
+  },
   Body({ block, context }) {
     const { controller, session } = context;
     const threadId = threadOf(block);
@@ -72,7 +88,7 @@ const thread: BlockType = {
     if (open) {
       return (
         <ThreadView controller={threadController(controller, key)} thread={open} chrome='block'
-          onOpenThread={context.onOpenThread} surface={context.surface} onSwipeBack={context.onSwipeBack} />
+          onOpenThread={context.onOpenThread} surface={context.surface} onSwipeBack={context.onSwipeBack} onDeleted={context.onRemove} />
       );
     }
     if (controller.model.error) {
