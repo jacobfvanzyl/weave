@@ -42,3 +42,11 @@ The Mac runs the same React app in Tauri, and the iPad and iPhone keep Capacitor
 - **One engine on Apple's devices.** The Mac's web view is WKWebView, the same engine as on the iPad. Linux and Windows, later, bring WebKitGTK and WebView2.
 - **Terminal bytes never cross a bridge on any device,** as ADR 0022 already requires on iOS.
 - **New work for a Mac app:** signing, notarization and updates (WVE-204).
+
+## Settled in WVE-204 (2026-11-10)
+
+- **The shell is `app/src-tauri`,** a crate outside the repository's Cargo workspace, with its own lockfile, so Tauri's dependencies don't join the workspace's build.
+- **The Mac shares the computer's pairing.** The core proves itself with the pairing and Secure Enclave key the CLI keeps (`weave-host-client`'s `paired`, written by `weave dispatcher connect`), so the Mac is one device to the Dispatcher, and revoking it cuts off both.
+- **The core proves every connection itself,** the Dispatcher's API included, and hands the page connections already open. The page never holds the key nor asks it to sign: it renders what agents write.
+- **This Mac's own Host stays reachable without the Dispatcher,** over its socket, as ADR 0030 keeps for local clients; every other Host goes through the Dispatcher.
+- **Signing, notarization and updates:** for now a release build signed with the person's Apple Development identity and installed by `bun run mac:install`; no notarization or updater until the app goes beyond this Mac. Linux and Windows stay later.

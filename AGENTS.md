@@ -10,12 +10,12 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | `acp-core/` | ACP (`weave-acp-core`): agent launch, the ACP connection, client-side handlers, protocol trace. No UI. Read `acp-core/AGENTS.md`. |
 | `dispatcher/` | The Dispatcher (`weave-dispatcher`, run as `weave dispatcher`, ADR 0027): a client of the person's Hosts, as a service, that keeps triggers and Bots and starts their work there, and keeps the person's Projects (WVE-189). Hosts join it and keep a connection open to it (ADR 0030); it never dials them, and carries the person's devices' connections to them (WVE-195). Its state is SQLite. Runs no agents. Read `dispatcher/AGENTS.md`. |
 | `remote/` | The server's end of remote access (`weave-remote`), which the Host and the Dispatcher share: the WebSocket, which the Dispatcher listens on and a Host serves over the connections it opens to it; the Dispatcher's turning it on with pairing and its Tailscale Serve entry, whose `Serve` a Host uses only to remove the one it made before WVE-197; pairing offers and signature checks; and the first requests on a Host's connection to the Dispatcher it joined. Each program keeps its own devices, and only the Dispatcher pairs any. |
-| `host-client/` | A Rust client of the Host (`weave-host-client`): hello, typed requests, the Host's messages in order, opening threads; a WebSocket to the Dispatcher and device credentials, a Host's Secure Enclave key among them; and connections the Dispatcher carries to the person's Hosts (`carry`), the only way a client off a Host's computer reaches it. |
+| `host-client/` | A Rust client of the Host (`weave-host-client`): hello, typed requests, the Host's messages in order, opening threads; a WebSocket to the Dispatcher and device credentials, a Host's Secure Enclave key among them; and connections the Dispatcher carries to the person's Hosts (`carry`), the only way a client off a Host's computer reaches it; and the computer's own pairing with the Dispatcher (`paired`), which the CLI and the Mac's app share. |
 | `cli/` | The `weave` binary and its subcommands (`weave-cli`), Host autostart and its launchd and systemd services included. Read `cli/AGENTS.md`. |
 | `tui/` | The interactive terminal client (`weave-tui`): fullscreen transcript or inline viewport, chat state, composer. Read `tui/AGENTS.md`. |
 | `fake-agent/` | A scripted ACP agent (`weave-fake-agent`) for tests and live runs. Read `fake-agent/AGENTS.md`. |
 | `holder/` | The holder (`weave-holder`, ADR 0022): keeps one terminal's PTY, shell and screen alive for the Host, with libghostty-vt, which it builds with Zig at the commit `ghostty.toml` pins. Read `holder/AGENTS.md`. |
-| `app/` | The weave app: a React and Capacitor client of the weave Host for iPad and iPhone; WVE-91. WVE-199 takes it to Sessions of Blocks under Projects (ADR 0031) and to the Mac in Tauri (ADR 0032). Read `app/AGENTS.md` before working in it. |
+| `app/` | The weave app: a React and Capacitor client of the weave Host for iPad and iPhone; WVE-91. The same React runs on the Mac in Tauri (ADR 0032, WVE-204): `app/src-tauri`, a crate outside the Cargo workspace whose core links `weave-host-client`. WVE-199 takes it to Sessions of Blocks under Projects (ADR 0031). Read `app/AGENTS.md` before working in it. |
 | `trackpad/` | Independent native iPhone/iPad trackpad and Mac companion; WVE-81. Read `trackpad/AGENTS.md` before working in it. |
 | `scripts/` | `update-hosts`: rebuild weave in release, install a copy in `~/.local/bin` and restart the Host, here and on the person's other computers over SSH. |
 | `docs/adr/` | Decisions, from ADR 0008 on. |
@@ -31,7 +31,9 @@ Issues use Personal Linear workspace `jacobfvanzyl`, team WVE, and the pinned CL
 
 ## The Rust workspace
 
-The Rust crates form one Cargo workspace at the repository root (`Cargo.toml`), which builds
+The Rust crates form one Cargo workspace at the repository root (`Cargo.toml`), apart from the Mac
+app's Tauri shell (`app/src-tauri`), which keeps its own lockfile and builds with `bun run mac:*`
+in `app/` (see `app/AGENTS.md`). The workspace builds
 `weave`, a standalone terminal client for ACP agents (Claude, Codex, Gemini or any ACP command),
 and the weave Host it connects to. Work is tracked in WVE issues: read the live issue before
 implementation. Each crate's own guide is the `AGENTS.md` in its directory.

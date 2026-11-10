@@ -2,14 +2,16 @@
 
 This directory owns the weave app: a client of the weave Host for the iPad and iPhone, which it
 reaches through the Dispatcher it pairs with (ADR 0030, WVE-196), built with React in a Capacitor
-shell (ADR 0015, `../docs/adr/0015-bring-alpha-back-as-the-host-client-in-capacitor.md`).
+shell (ADR 0015, `../docs/adr/0015-bring-alpha-back-as-the-host-client-in-capacitor.md`), and
+the same React on the Mac in Tauri (ADR 0032, WVE-204; `src-tauri/`).
 It is Alpha, brought back from commit `e30f6e93`, chat-first. Work is tracked under WVE-91; read
 the live issue and the spec, `docs/specs/wve-91-host-client.md`, before implementation, and use
 the repository's pinned Linear CLI and tracker conventions from `../docs/agents/issue-tracker.md`.
 
 WVE-199 reworks it. Projects, and Sessions laying out Blocks of threads and terminals, replace
 the thread list (ADR 0031). The same React runs on the Mac in Tauri beside the Capacitor shell
-(ADR 0032). Until those issues land, the layout below is current.
+(ADR 0032), today's app for now (WVE-204). Until the rest of WVE-199 lands, the layout below is
+current.
 
 ## Boundaries
 
@@ -23,6 +25,15 @@ the thread list (ADR 0031). The same React runs on the Mac in Tauri beside the C
   directly, and has no fallback while the Dispatcher is away: it says so and shows the Hosts it
   last listed. It keeps one pairing (`src/host/storage.ts`), and deletes the records and keys an
   earlier version kept per Host once it has.
+- The Mac is the exception for its own Host (ADR 0032, WVE-204). Its app's Rust core reaches this
+  Mac's Host over its Unix socket, as local clients do (ADR 0030), with or without the Dispatcher,
+  and every other Host through the Dispatcher. The core opens every connection and proves the
+  device itself, then relays it to the page, which speaks the Host protocol and the Dispatcher's
+  API on it as anywhere else (`src/host/routes.ts` is the seam, `src/mac/routes.ts` the Mac's
+  side). The page never holds the key nor asks for a signature. The Mac shares the pairing and
+  Secure Enclave key the computer's CLI keeps (`weave dispatcher connect`,
+  `~/.local/state/weave/client/`): it's one device to the Dispatcher, and forgetting the
+  Dispatcher in the app forgets the CLI's pairing too.
 - Use the glossary's terms (`../CONTEXT.md`): threads, Hosts, directories, turns, steers,
   pending requests. A Session is ADR 0031's, not a thread. The code says thread too (WVE-200),
   and keeps session for ACP's names and payloads. Alpha's Threads, Connections, Workspaces and
@@ -44,6 +55,9 @@ the thread list (ADR 0031). The same React runs on the Mac in Tauri beside the C
 | `src/terminal` | Terminals beside a thread (WVE-153): the native plugin's bridge, the hook that lays a surface out and keeps it attached, and the layout this device keeps for each thread (`terminal-layout.ts`). The panel is `src/components/terminal-panel.tsx`. |
 | `ios` | The Capacitor shell: `SceneDelegate.swift` (device idiom, keyboard layout, the web view over the native terminals), `DeviceKeyPlugin.swift` (the device's Secure Enclave key for the Dispatcher, and `DeviceKeys`, which signs with it), `Surface.swift` (a Surface's scene, its web view and the plugin that relays to it), and the native terminal: `NativeTerminalPlugin.swift`, `TerminalStream.swift` (the stream's WebSocket, on which it says the Dispatcher's preamble itself), `TerminalView.swift` (keyboard, key bar, selection) and `WeaveTerminalRenderer.mm` (libghostty-vt and CoreText). `ios/App/Native/` is generated and ignored; `ios/App/Tests/` holds the renderer's tests. |
 | `scripts/ios.ts` | Builds, installs and launches the iOS app. |
+| `src/mac` | The Mac's side (ADR 0032): the connections its core relays, its routes and the pairing it shares with the CLI (`routes.ts`), and its shell's menu commands, notifications and `weave://` links (`shell.ts`, `notices.ts`). `src/app/commands.ts` carries the menu's commands to the components, until WVE-203's command registry. |
+| `src-tauri` | The Mac's Tauri shell: its Rust core (`src/core.rs`: this Mac's Host on its socket, the Dispatcher with `weave-host-client`, pairing), the relay to the page (`src/relay.rs`), the menu bar (`src/menu.rs`), and the window, links and notifications (`src/lib.rs`). A crate of its own, outside the repository's Cargo workspace, with its own lockfile and `target/`. `tests/relay.rs` runs the core against a dev Host and a dev Dispatcher. |
+| `scripts/mac.ts` | Builds the Mac app in release, signs it, and installs it in `~/Applications`. |
 | `scripts/ghostty.ts` | Puts libghostty-vt for iOS, its headers and the terminal fonts in `ios/App/Native/`, built once per Ghostty pin (`../holder/ghostty.toml`); `ios.ts build` runs it first. |
 
 The UI reads one `AppController`: `useHostController` from the Dispatcher and the Hosts it
@@ -69,6 +83,9 @@ bun run ios:install -- --device <udid>   # install and launch it (`xcrun devicec
 bun run native:test          # the native terminal's renderer, built for macOS, and its codec against the holder's
 bun scripts/terminal-check.ts            # the native terminal in a simulator, through a dev Dispatcher to a dev Host, with screenshots
 bun scripts/protocol-types.ts            # regenerate src/host/protocol.ts from the Host's schema
+bun run mac:dev              # the Mac app around Vite's dev server, reloading as you edit
+bun run mac:test             # the core's tests (a dev Host and Dispatcher) and clippy
+bun run mac:install          # release build, signed, in ~/Applications; -- --open to open it
 bun scripts/record-journals.ts [name…]   # record the transcript tests' journals from a dev Host
 ```
 
@@ -93,6 +110,28 @@ Dispatcher no Host has joined, `unpaired`, the pairing screen, `markdown`, the f
 Markdown reply, and `terminals`, a thread with its worktree's terminals); `?surface` in another tab is a Surface for a phone tab at `?mock=…&idiom=phone`; `?idiom=phone` or `?idiom=pad`
 stands in for the device in a browser, since the layout follows the device, not the window's width. A debug build takes the scenario as a launch argument
 instead: `xcrun simctl launch <device> com.veezee.weave --mock running`.
+
+### The Mac
+
+The Mac app is `src-tauri/` around the same page. `bun run mac:dev` starts Vite (`bun run dev`)
+and opens the app on it, rebuilding the core when its Rust changes; the page reloads as you edit,
+and the core closes the page's connections when it does. It reaches the installed Host on this
+Mac (`~/.local/state/weave/daemon/daemon.sock`, or `$WEAVE_DAEMON_DIR`'s) and the Dispatcher the
+computer is paired with: the person's own, so be careful what a dev build does there. Until the
+computer is paired, it shows the pairing screen, which takes the link or URL and code from `weave
+pair`, as `weave dispatcher connect` does. `bun run mac:test` needs `(cd .. && cargo build -p
+weave-cli)` first, or its relay test skips. Its build goes beside the workspace's, never in it:
+its own `src-tauri/target/` and `Cargo.lock`, the toolchain and `clippy.toml` from the repository
+root.
+
+`bun run mac:install` signs with the Apple Development identity of the iOS app's team, or ad hoc
+(`WEAVE_SIGNING_IDENTITY` names another), and isn't notarized; the app doesn't update itself, so
+install again after pulling. Terminals don't show on the Mac until WVE-205, and Surfaces are the
+iPhone's. The menu bar's Thread menu (New Thread ⌘N, Next and Previous Thread ⌘⇧] and ⌘⇧[,
+Focus Composer ⌘L) runs commands the components listen for (`src/app/commands.ts`); closing the
+window hides it, so notifications of threads waiting on the person or finishing keep coming, and
+a click opens the thread. `weave://thread/<host>/<thread>` opens a thread and
+`weave://pair-dispatcher?…` offers a pairing, once the app is installed.
 
 ## Conventions
 
