@@ -67,3 +67,16 @@ So the app is organised as Project → Session → Blocks.
     inside a Project or not. `sessions/set` may name the revision it builds on, and a client may end a
     Session by hand.
   - WVE-189 settles the Project record and its commands.
+
+## Settled in WVE-203 (2026-11-10)
+
+- **Closing a Block closes what it shows.** This replaces "closing it hides what it shows, which keeps running", above and in ADR 0022's amendment.
+  - A thread closes, as `thread/close` does, and stays among its Session's closed threads, from where it opens again in a Block. A thread exists apart from its Block.
+  - A terminal ends. It is one to one with its Block: a terminal that ends anywhere takes its Block with it.
+  - A client asks first when that would cut something off: a turn running, a thread waiting on the person, or a command running in the terminal.
+  - Only a deliberate close does this. A Block that leaves a layout otherwise, as when another device's write drops it, leaves its thread or terminal running, to be shown again.
+- **Nothing is placed for the person.** A thread or terminal started elsewhere, as by an agent, has no Block until someone gives it one: clients list what a Session has that isn't shown. Placing puts a Block in the focused pane, for every device.
+- **A Session nobody arranged shows its open threads in one pane,** the most recently active in front. Clients don't save that until the person changes something.
+- **Apps list Sessions, not threads.** A Session shows for every directory with a thread or terminal, whether or not its Host has made one of it yet; the Dispatcher's Projects group them, and those in no Project stay under their Host.
+- **"Tab" is the word,** not Rex's "window": the document says tabs, and the Mac app has windows of its own.
+- **A change to a layout names the revision it was made on** (`ifRevision`). When another device saved first, the client makes the change again on what that device saved, so neither loses the other's.

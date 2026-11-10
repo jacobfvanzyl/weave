@@ -15,7 +15,7 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | `tui/` | The interactive terminal client (`weave-tui`): fullscreen transcript or inline viewport, chat state, composer. Read `tui/AGENTS.md`. |
 | `fake-agent/` | A scripted ACP agent (`weave-fake-agent`) for tests and live runs. Read `fake-agent/AGENTS.md`. |
 | `holder/` | The holder (`weave-holder`, ADR 0022): keeps one terminal's PTY, shell and screen alive for the Host, with libghostty-vt, which it builds with Zig at the commit `ghostty.toml` pins. Read `holder/AGENTS.md`. |
-| `app/` | The weave app: a React and Capacitor client of the weave Host for iPad and iPhone; WVE-91. The same React runs on the Mac in Tauri (ADR 0032, WVE-204): `app/src-tauri`, a crate outside the Cargo workspace whose core links `weave-host-client`. WVE-199 takes it to Sessions of Blocks under Projects (ADR 0031). Read `app/AGENTS.md` before working in it. |
+| `app/` | The weave app: a React and Capacitor client of the weave Host for iPad and iPhone; WVE-91. The same React runs on the Mac in Tauri (ADR 0032, WVE-204): `app/src-tauri`, a crate outside the Cargo workspace whose core links `weave-host-client`. It lists the person's Sessions under their Projects and shows each as tabs of Blocks, laid out from the document its Host keeps (ADR 0031, WVE-203). Read `app/AGENTS.md` before working in it. |
 | `trackpad/` | Independent native iPhone/iPad trackpad and Mac companion; WVE-81. Read `trackpad/AGENTS.md` before working in it. |
 | `scripts/` | `update-hosts`: rebuild weave in release, install a copy in `~/.local/bin` and restart the Host, here and on the person's other computers over SSH. |
 | `docs/adr/` | Decisions, from ADR 0008 on. |

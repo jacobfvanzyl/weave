@@ -8,10 +8,11 @@ It is Alpha, brought back from commit `e30f6e93`, chat-first. Work is tracked un
 the live issue and the spec, `docs/specs/wve-91-host-client.md`, before implementation, and use
 the repository's pinned Linear CLI and tracker conventions from `../docs/agents/issue-tracker.md`.
 
-WVE-199 reworks it. Projects, and Sessions laying out Blocks of threads and terminals, replace
-the thread list (ADR 0031). The same React runs on the Mac in Tauri beside the Capacitor shell
-(ADR 0032), today's app for now (WVE-204). Until the rest of WVE-199 lands, the layout below is
-current.
+WVE-199 reworks it, and WVE-203 did the middle of that: the app lists the person's Sessions,
+under their Projects, and shows one as tabs of Blocks, laid out from the document its Host keeps
+(ADR 0031). The same React runs on the Mac in Tauri beside the Capacitor shell (ADR 0032,
+WVE-204). Still to come: Bots and richer tiles in the list (WVE-192), terminals drawn on the Mac
+(WVE-205), and Block types of the person's own (WVE-206).
 
 ## Boundaries
 
@@ -39,31 +40,43 @@ current.
   and keeps session for ACP's names and payloads. Alpha's Threads, Connections, Workspaces and
   archiving are gone.
 - Portal, Workspaces, the Host Browser, the Client Browser and Electron stay in history. Bring
-  something back only when an issue asks for it. Terminals came back in WVE-153 (ADR 0022): a
-  worktree's terminals in a panel beside a thread, drawn natively.
+  something back only when an issue asks for it. Terminals came back in WVE-153 (ADR 0022), drawn
+  natively on the iPad and iPhone, and since WVE-203 each is a Block in its Session's layout.
+- A Session's layout is every device's (ADR 0031): what changes its tabs, panes and Blocks goes to
+  the Host (`sessions/set`), under the revision it was made on, and is made again on what another
+  device saved first. Which tab and Block are in front, focus and zoom are the device's own
+  (`src/session/view.ts`) and never written to it. Closing a Block closes its thread, which can
+  be shown again, or ends its terminal; nothing is placed for the person, so what a Session has
+  that no Block shows is listed as not shown.
+- Everything the person does to a layout is a command (`src/app/commands.ts`): keys, the Mac's
+  menu bar, a Block's menu and the palette run the same ones. Add to the table there, and handle
+  it with `useCommand` in the component that can do it.
 
 ## Layout
 
 | Path | Owns |
 | --- | --- |
-| `src/app` | The controller seam (`app-controller.ts`), the thread list's rules (`thread-list.ts`), read state (`thread-read-state.ts`), the mock and Host controllers, and hooks. |
-| `src/host` | The Host protocol's and the Dispatcher's generated types (`protocol.ts`, never edited by hand), the Host connection (`connection.ts`), the Dispatcher's API and the connections it carries (`dispatcher.ts`), the pairing (`storage.ts`), device keys, journal following, and the store behind the Host controller (`host-store.ts`). |
+| `src/app` | The controller seam (`app-controller.ts`), the platform seam beside it (`platform.ts`: what differs between Capacitor, Tauri and a browser), the commands and their keys (`commands.ts`), what the app works out from the listed threads (`thread-list.ts`), read state (`thread-read-state.ts`), the mock and Host controllers, and hooks. |
+| `src/session` | A Session's layout, with no I/O: the document's tree operations (`layout.ts`), the Block types' names and props (`blocks.ts`), each device's own view of a layout (`view.ts`), and the Sessions there are, under Projects or Hosts (`sessions.ts`, with the Dispatcher's rule for which Project a directory is in). |
+| `src/host` | The Host protocol's and the Dispatcher's generated types (`protocol.ts`, never edited by hand), the Host connection (`connection.ts`), the Dispatcher's API and the connections it carries (`dispatcher.ts`), the pairing (`storage.ts`), device keys, journal following, the store behind the Host controller (`host-store.ts`), and the Sessions the Hosts keep, with the layout changes still to save (`sessions.ts`). |
 | `src/chat` | The ACP transcript (`acp-transcript.ts`) and its views: the chat pane, tool calls and their terminals, plans, subagents, elicitations; the recorded journals its tests read (`fixtures/journals`). |
-| `src/components` | The shell (`app-shell.tsx`), the thread list and view (`thread-list.tsx`, `thread-view.tsx`), the banner and dialogs, and the thread's status sheet (`thread-status-sheet.tsx`, WVE-160: its MCP servers, from the header's menu); `ui` and `ai-elements` are shadcn and AI Elements components. |
+| `src/components` | The shell (`app-shell.tsx`), the list of Sessions (`session-list.tsx`), a Session on screen (`session/session-view.tsx`: tabs, what's not shown, closing, and the iPhone's one Block at a time; `session/panes.tsx`: panes, their strips, edges to drag, floating Blocks and dragging a Block; `session/blocks.tsx`: how each Block type draws, and the text floor for one the app doesn't have), a thread (`thread-view.tsx`, with a thin row of its own inside a Block), the command palette, the banner and dialogs, and the thread's status sheet (`thread-status-sheet.tsx`, WVE-160: its MCP servers, from the thread's menu); `ui` and `ai-elements` are shadcn and AI Elements components. |
 | `src/markdown` | What agent Markdown renders as beyond Streamdown's defaults (WVE-122), kept inert: no script, no fetch, no navigation without consent. `MessageResponse` (`src/components/ai-elements/message.tsx`) puts it together. |
 | `src/surface` | A Surface (WVE-183): the messages and the projection the iPhone sends (`surface-messages.ts`), the link between the two web views (`surface-link.ts`, a BroadcastChannel between tabs in a browser), the iPhone's hook and scrubber, and the Surface's page (`surface-app.tsx`). |
-| `src/terminal` | Terminals beside a thread (WVE-153): the native plugin's bridge, the hook that lays a surface out and keeps it attached, and the layout this device keeps for each thread (`terminal-layout.ts`). The panel is `src/components/terminal-panel.tsx`. |
+| `src/terminal` | Terminals (WVE-153): the native plugin's bridge, the hook that lays a surface out under a Block and keeps it attached, and what the app shows of a terminal, with the font size this device keeps (`terminals.ts`). A terminal's Block is in `src/components/session/blocks.tsx`. |
 | `ios` | The Capacitor shell: `SceneDelegate.swift` (device idiom, keyboard layout, the web view over the native terminals), `DeviceKeyPlugin.swift` (the device's Secure Enclave key for the Dispatcher, and `DeviceKeys`, which signs with it), `Surface.swift` (a Surface's scene, its web view and the plugin that relays to it), and the native terminal: `NativeTerminalPlugin.swift`, `TerminalStream.swift` (the stream's WebSocket, on which it says the Dispatcher's preamble itself), `TerminalView.swift` (keyboard, key bar, selection) and `WeaveTerminalRenderer.mm` (libghostty-vt and CoreText). `ios/App/Native/` is generated and ignored; `ios/App/Tests/` holds the renderer's tests. |
 | `scripts/ios.ts` | Builds, installs and launches the iOS app. |
-| `src/mac` | The Mac's side (ADR 0032): the connections its core relays, its routes and the pairing it shares with the CLI (`routes.ts`), and its shell's menu commands, notifications and `weave://` links (`shell.ts`, `notices.ts`). `src/app/commands.ts` carries the menu's commands to the components, until WVE-203's command registry. |
-| `src-tauri` | The Mac's Tauri shell: its Rust core (`src/core.rs`: this Mac's Host on its socket, the Dispatcher with `weave-host-client`, pairing), the relay to the page (`src/relay.rs`), the menu bar (`src/menu.rs`), and the window, links and notifications (`src/lib.rs`). A crate of its own, outside the repository's Cargo workspace, with its own lockfile and `target/`. `tests/relay.rs` runs the core against a dev Host and a dev Dispatcher. |
+| `src/mac` | The Mac's side (ADR 0032): the connections its core relays, its routes and the pairing it shares with the CLI (`routes.ts`), and its shell's menu bar, which lists the app's commands, notifications and `weave://` links (`shell.ts`, `notices.ts`). |
+| `src-tauri` | The Mac's Tauri shell: its Rust core (`src/core.rs`: this Mac's Host on its socket, the Dispatcher with `weave-host-client`, pairing), the relay to the page (`src/relay.rs`), the menu bar, with the commands the page tells it (`src/menu.rs`), and the window, links and notifications (`src/lib.rs`). A crate of its own, outside the repository's Cargo workspace, with its own lockfile and `target/`. `tests/relay.rs` runs the core against a dev Host and a dev Dispatcher. |
 | `scripts/mac.ts` | Builds the Mac app in release, signs it, and installs it in `~/Applications`. |
 | `scripts/ghostty.ts` | Puts libghostty-vt for iOS, its headers and the terminal fonts in `ios/App/Native/`, built once per Ghostty pin (`../holder/ghostty.toml`); `ios.ts build` runs it first. |
 
 The UI reads one `AppController`: `useHostController` from the Dispatcher and the Hosts it
 lists, or `useMockController` from fixtures with `?mock=`. Keep components free of I/O: they take
 the model and call actions. Until the app is paired with the Dispatcher, `AppShell` shows the
-pairing screen (`pair-dispatcher.tsx`).
+pairing screen (`pair-dispatcher.tsx`). Several threads are on screen at once: the Session's view
+says which (`showThreads`), the model has each (`open`), and what's done in one names it
+(`forThread`, or `threadController` for a component that reads one thread).
 
 The Host protocol's types, and the Dispatcher's API beside them, come from the Rust
 (`../protocol/tests/schema.rs`). After a protocol change there, regenerate them, and never edit
@@ -107,7 +120,9 @@ journals, and review the snapshot's diff.
 `?mock=` picks a fixture scenario (`list`, `thread`, `running`, `unreachable`, a Host the
 Dispatcher can't reach, `offline`, the Dispatcher itself out of reach, `banner`, `empty`, a
 Dispatcher no Host has joined, `unpaired`, the pairing screen, `markdown`, the fake agent's rich
-Markdown reply, and `terminals`, a thread with its worktree's terminals); `?surface` in another tab is a Surface for a phone tab at `?mock=…&idiom=phone`; `?idiom=phone` or `?idiom=pad`
+Markdown reply, `terminals`, a thread with its worktree's terminals to place, and `session`, a
+Session someone arranged: two tabs, panes split and stacked, a floating terminal and a Block of a
+type the app doesn't have); `?surface` in another tab is a Surface for a phone tab at `?mock=…&idiom=phone`; `?idiom=phone` or `?idiom=pad`
 stands in for the device in a browser, since the layout follows the device, not the window's width. A debug build takes the scenario as a launch argument
 instead: `xcrun simctl launch <device> com.veezee.weave --mock running`.
 
@@ -130,12 +145,16 @@ install again after pulling. Keep `bundle.macOS.minimumSystemVersion` at 11.0: `
 `MACOSX_DEPLOYMENT_TARGET` from it, and on macOS 27.2 (2026-11-10) proc-macro libraries linked
 for 12.0 or later come out corrupt (`mis-aligned LINKEDIT string pool`), so the build fails
 finding `serde_derive` and the like. Cargo doesn't rebuild them when only that variable changes:
-after a build with another target, `cargo clean --release --manifest-path src-tauri/Cargo.toml`. Terminals don't show on the Mac until WVE-205, and Surfaces are the
-iPhone's. The menu bar's Thread menu (New Thread ⌘N, Next and Previous Thread ⌘⇧] and ⌘⇧[,
-Focus Composer ⌘L) runs commands the components listen for (`src/app/commands.ts`); closing the
-window hides it, so notifications of threads waiting on the person or finishing keep coming, and
-a click opens the thread. `weave://thread/<host>/<thread>` opens a thread and
-`weave://pair-dispatcher?…` offers a pairing, once the app is installed.
+after a build with another target, `cargo clean --release --manifest-path src-tauri/Cargo.toml`. A terminal's Block on the Mac says what the terminal is and what runs in it, until WVE-205
+draws them, and Surfaces are the iPhone's. The menu bar's Session, Tab, Block and Go menus are
+the app's commands, which the page tells the core when it starts (`set_menu`), with their keys
+(`src/app/commands.ts`): ⌘D and ⌘⇧D split, ⌘W closes the Block with the keyboard, ⌘T a tab, ⌘⇧[
+and ⌘⇧] the tabs, ⌘⌥ and an arrow the Block that way, ⌘⇧↩ zoom, ⌘N a thread, ⌘⇧N a terminal, ⌘K
+the palette. On the Mac only the menu bar hears those keys; on the iPad and in a browser the
+page does. Closing the window (its red button) hides it, so notifications of threads waiting on
+the person or finishing keep coming, and a click shows the thread in its Session.
+`weave://thread/<host>/<thread>` does the same and `weave://pair-dispatcher?…` offers a pairing,
+once the app is installed.
 
 ## Conventions
 

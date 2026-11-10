@@ -7889,7 +7889,7 @@ expression: schema()
         "id",
         "type"
       ],
-      "description": "What one pane shows. It points at something on the Session's Host, such as a thread or a\nterminal, and owns nothing: closing it hides what it shows, which keeps running."
+      "description": "What one pane shows. It points at something on the Session's Host, such as a thread or a\nterminal, which the Host doesn't read. A client that closes one closes what it shows: a\nthread, which can be shown again, or a terminal, which ends with its Block (ADR 0031)."
     },
     "SessionStack": {
       "type": "object",

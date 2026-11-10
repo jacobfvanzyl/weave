@@ -141,11 +141,15 @@ A named piece of the person's work, kept by the Dispatcher, with at most one loc
 _Avoid_: workspace, space, repo
 
 **Session**:
-One directory on one Host, for a repository one of its worktrees, holding a layout of Blocks that every device shares. Its Host keeps it; a Project's Sessions are those in its locations.
+One directory on one Host, for a repository one of its worktrees, holding tabs of Blocks laid out the same on every device. Its Host keeps it; a Project's Sessions are those in its locations.
 _Avoid_: workspace, space, window
 
+**Tab**:
+One arrangement of Blocks in a Session: side by side, one behind another, or floating over the rest. A Session has one or more.
+_Avoid_: window, workspace, page
+
 **Block**:
-What one pane of a Session's layout shows, of a type: a thread, a terminal, or another thing on the Session's Host.
+What one place in a tab shows, of a type: a thread, a terminal, or another thing on the Session's Host. Closing one closes what it shows: a thread, which can be shown again in another Block, or a terminal, which ends with it.
 _Avoid_: pane, panel, widget
 
 ### Repositories

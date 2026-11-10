@@ -5658,7 +5658,8 @@ export interface SessionStack {
 }
 /**
  * What one pane shows. It points at something on the Session's Host, such as a thread or a
- * terminal, and owns nothing: closing it hides what it shows, which keeps running.
+ * terminal, which the Host doesn't read. A client that closes one closes what it shows: a
+ * thread, which can be shown again, or a terminal, which ends with its Block (ADR 0031).
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SessionBlock".
