@@ -11,8 +11,9 @@ the repository's pinned Linear CLI and tracker conventions from `../docs/agents/
 WVE-199 reworks it, and WVE-203 did the middle of that: the app lists the person's Sessions,
 under their Projects, and shows one as tabs of Blocks, laid out from the document its Host keeps
 (ADR 0031). The same React runs on the Mac in Tauri beside the Capacitor shell (ADR 0032,
-WVE-204). Still to come: Bots and richer tiles in the list (WVE-192), terminals drawn on the Mac
-(WVE-205), and Block types of the person's own (WVE-206).
+WVE-204), where terminals are drawn in the page by libghostty-vt in WebAssembly (WVE-205). Still
+to come: Bots in the list (WVE-178, once the Dispatcher keeps them), and Block types of the
+person's own (WVE-206).
 
 ## Boundaries
 
@@ -72,12 +73,15 @@ WVE-204). Still to come: Bots and richer tiles in the list (WVE-192), terminals 
 | `src/markdown` | What agent Markdown renders as beyond Streamdown's defaults (WVE-122), kept inert: no script, no fetch, no navigation without consent. `MessageResponse` (`src/components/ai-elements/message.tsx`) puts it together. |
 | `src/surface` | A Surface (WVE-183): the messages and the projection the iPhone sends (`surface-messages.ts`), the link between the two web views (`surface-link.ts`, a BroadcastChannel between tabs in a browser), the iPhone's hook and scrubber, and the Surface's page (`surface-app.tsx`). |
 | `src/terminal` | Terminals (WVE-153): the native plugin's bridge, the hook that lays a surface out under a Block and keeps it attached, and what the app shows of a terminal, with the font size this device keeps (`terminals.ts`). A terminal's name follows what's in it (its title, else the command running, else its directory), so the app renames none and shows no `label`. A terminal's Block is in `src/components/session/blocks.tsx`. |
+| `src/terminal/web` | The Mac's terminal, drawn in the page (WVE-205): libghostty-vt in WebAssembly (`core.ts`, whose struct offsets are `wasm/terminal.c`'s), the stream as the page speaks it (`stream.ts`), the canvas with its keyboard, mouse, selection and links (`view.ts`, `keys.ts`, `links.ts`), the module and fonts every terminal shares (`runtime.ts`), and the hook that keeps a view attached (`use-web-terminal.ts`), with the states the native one has. `generated/` is built and ignored. A frame's arrays are views of the module's memory: read them before the next call on any terminal. |
+| `wasm/terminal.c` | What sits between libghostty-vt and the page, in the same WebAssembly module: a screen restored, written and read back as rows of cells, and keys, the mouse and pastes encoded by the modes the screen is in. No libc and no imports. |
 | `ios` | The Capacitor shell: `SceneDelegate.swift` (device idiom, keyboard layout, the web view over the native terminals), `DeviceKeyPlugin.swift` (the device's Secure Enclave key for the Dispatcher, and `DeviceKeys`, which signs with it), `Surface.swift` (a Surface's scene, its web view and the plugin that relays to it), and the native terminal: `NativeTerminalPlugin.swift`, `TerminalStream.swift` (the stream's WebSocket, on which it says the Dispatcher's preamble itself), `TerminalView.swift` (keyboard, key bar, selection) and `WeaveTerminalRenderer.mm` (libghostty-vt and CoreText). `ios/App/Native/` is generated and ignored; `ios/App/Tests/` holds the renderer's tests. |
 | `scripts/ios.ts` | Builds, installs and launches the iOS app. |
-| `src/mac` | The Mac's side (ADR 0032): the connections its core relays, its routes and the pairing it shares with the CLI (`routes.ts`), and its shell's menu bar, which lists the app's commands, notifications and `weave://` links (`shell.ts`, `notices.ts`). |
-| `src-tauri` | The Mac's Tauri shell: its Rust core (`src/core.rs`: this Mac's Host on its socket, the Dispatcher with `weave-host-client`, pairing), the relay to the page (`src/relay.rs`), the menu bar, with the commands the page tells it (`src/menu.rs`), and the window, links and notifications (`src/lib.rs`). A crate of its own, outside the repository's Cargo workspace, with its own lockfile and `target/`. `tests/relay.rs` runs the core against a dev Host and a dev Dispatcher. |
+| `src/mac` | The Mac's side (ADR 0032): the connections its core relays, its routes and the pairing it shares with the CLI (`routes.ts`), its shell's menu bar, which lists the app's commands, notifications and `weave://` links (`shell.ts`, `notices.ts`, and `notify.ts` for a terminal's program's), and the page the terminal check opens (`terminal-check.tsx`). |
+| `src-tauri` | The Mac's Tauri shell: its Rust core (`src/core.rs`: this Mac's Host on its socket, the Dispatcher with `weave-host-client`, pairing), the relay to the page (`src/relay.rs`), terminals' streams, which the page opens as WebSockets on a loopback port and the core passes through to the Host's (`src/terminals.rs`), the menu bar, with the commands the page tells it (`src/menu.rs`), the window, links, notifications and the clipboard (`src/lib.rs`), and the terminal check's files (`src/check.rs`). A crate of its own, outside the repository's Cargo workspace, with its own lockfile and `target/`. `tests/relay.rs` runs the core against a dev Host and a dev Dispatcher, terminals' streams included when the holder is built. |
 | `scripts/mac.ts` | Builds the Mac app in release, signs it, and installs it in `~/Applications`. |
-| `scripts/ghostty.ts` | Puts libghostty-vt for iOS, its headers and the terminal fonts in `ios/App/Native/`, built once per Ghostty pin (`../holder/ghostty.toml`); `ios.ts build` runs it first. |
+| `scripts/mac-terminal-check.ts` | Runs the built Mac app on one terminal of a dev Host and checks what it draws and how fast. |
+| `scripts/ghostty.ts` | Puts libghostty-vt for iOS, its headers and the terminal fonts in `ios/App/Native/`, built once per Ghostty pin (`../holder/ghostty.toml`); `ios.ts build` runs it first. With `web`, builds libghostty-vt for wasm32 at the same pin, links `wasm/terminal.c` with it, and puts the module and fonts in `src/terminal/web/generated/`; the Mac's builds run it first. |
 
 The UI reads one `AppController`: `useHostController` from the Dispatcher and the Hosts it
 lists, or `useMockController` from fixtures with `?mock=`. Keep components free of I/O: they take
@@ -107,6 +111,8 @@ bun scripts/protocol-types.ts            # regenerate src/host/protocol.ts from 
 bun run mac:dev              # the Mac app around Vite's dev server, reloading as you edit
 bun run mac:test             # the core's tests (a dev Host and Dispatcher) and clippy
 bun run mac:install          # release build, signed, in ~/Applications; -- --open to open it
+bun run ghostty:web          # the Mac's terminal: libghostty-vt in WebAssembly, into src/terminal/web/generated
+bun run mac:terminal-check   # the built app on a dev Host's terminal: what it draws, a flood, a key to its frame
 bun scripts/record-journals.ts [name…]   # record the transcript tests' journals from a dev Host
 ```
 
@@ -153,12 +159,26 @@ install again after pulling. Keep `bundle.macOS.minimumSystemVersion` at 11.0: `
 `MACOSX_DEPLOYMENT_TARGET` from it, and on macOS 27.2 (2026-11-10) proc-macro libraries linked
 for 12.0 or later come out corrupt (`mis-aligned LINKEDIT string pool`), so the build fails
 finding `serde_derive` and the like. Cargo doesn't rebuild them when only that variable changes:
-after a build with another target, `cargo clean --release --manifest-path src-tauri/Cargo.toml`. A terminal's Block on the Mac says what the terminal is and what runs in it, until WVE-205
-draws them, and Surfaces are the iPhone's. The menu bar's Session, Tab, Block and Go menus are
+after a build with another target, `cargo clean --release --manifest-path src-tauri/Cargo.toml`. Surfaces are the iPhone's.
+
+Terminals on the Mac are drawn in the page (WVE-205): libghostty-vt in WebAssembly on a canvas,
+from the holder's Ghostty pin, so it decodes the holder's snapshots. `bun run ghostty:web` builds
+the module (`mac:dev` and `mac:install` run it first; its first run fetches Ghostty and the pinned
+Zig, as the holder's build does), and a build of the page without it says a terminal has nothing
+to draw with. Tests of the module and the stream skip without it. The page opens a WebSocket per
+terminal at an address the core offers once (`terminal_stream`), and the core passes it through
+to the Host's stream, on this Mac's `terminals.sock` or through the Dispatcher; the page never
+reaches the Dispatcher's WebSocket itself. ⌘ keys are the app's; Option types the layout's
+characters; ⌘-click opens a link; ⌘= ⌘- ⌘0 size the text. `bun run mac:terminal-check` runs the
+built app (`bun run tauri build --bundles app`) on a dev Host's terminal, with the debug `weave`
+and holder built, and puts pictures of the canvas and its measurements in
+`/Volumes/External/Build/weave-mac-terminal-check`; its window comes to the front while it runs.
+The module and fonts are in every build of the page that has them, the iPad's too, about 10 MB.
+A browser alone draws no terminals. The menu bar's Session, Tab, Block and Go menus are
 the app's commands, which the page tells the core when it starts (`set_menu`), with their keys
 (`src/app/commands.ts`): ⌘D and ⌘⇧D split, ⌘W closes the Block with the keyboard, ⌘T a tab, ⌘⇧[
 and ⌘⇧] the tabs, ⌘⌥ and an arrow the Block that way, ⌘⇧↩ zoom, ⌘N a thread, ⌘⇧N a terminal, ⌘K
-the palette. On the Mac only the menu bar hears those keys; on the iPad and in a browser the
+the palette, ⌘= ⌘- ⌘0 the text size of terminals. On the Mac only the menu bar hears those keys; on the iPad and in a browser the
 page does. Closing the window (its red button) hides it, so notifications of threads waiting on
 the person or finishing keep coming, and a click shows the thread in its Session.
 `weave://thread/<host>/<thread>` does the same and `weave://pair-dispatcher?…` offers a pairing,
