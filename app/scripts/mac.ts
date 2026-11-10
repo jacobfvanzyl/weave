@@ -59,7 +59,11 @@ switch (command) {
     if (!existsSync(built)) throw new Error(`Tauri built no app at ${built}.`);
     const installed = resolve(homedir(), 'Applications/Weave.app');
     const wasRunning = await running();
-    if (wasRunning) await run(['osascript', '-e', 'quit app "Weave"']);
+    if (wasRunning) {
+      await run(['osascript', '-e', 'quit app "Weave"']);
+      // Gone before its files are, and before it's opened again: `open` fails on one still quitting.
+      for (let tries = 0; tries < 100 && await running(); tries += 1) await Bun.sleep(100);
+    }
     await rm(installed, { recursive: true, force: true });
     await cp(built, installed, { recursive: true, verbatimSymlinks: true });
     // Launch Services learns its `weave://` scheme from the copy.
