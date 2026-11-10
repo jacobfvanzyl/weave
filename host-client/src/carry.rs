@@ -36,9 +36,12 @@ use tokio_util::compat::TokioAsyncReadCompatExt as _;
 use tokio_util::compat::TokioAsyncWriteCompatExt as _;
 use weave_host_protocol::HostClient;
 use weave_host_protocol::devices::DeviceId;
+use weave_host_protocol::devices::NewDevice;
 use weave_host_protocol::dispatcher::CarriedStream;
 use weave_host_protocol::dispatcher::DISPATCHER_CARRY_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_PROTOCOL;
+use weave_host_protocol::dispatcher::DISPATCHER_SUBPROTOCOL;
+use weave_host_protocol::dispatcher::DispatcherHello;
 use weave_host_protocol::dispatcher::DispatcherChallengeRequest;
 use weave_host_protocol::dispatcher::DispatcherHelloRequest;
 use weave_host_protocol::dispatcher::HostUnavailable;
@@ -164,28 +167,7 @@ pub async fn open(
             let mut socket = open_websocket(url, DISPATCHER_CARRY_SUBPROTOCOL)
                 .await
                 .map_err(|error| lost(error.to_string()))?;
-            let challenge = ask(&mut socket, 1, &DispatcherChallengeRequest {})
-                .await
-                .map_err(|error| dispatcher_error(error, &lost))?;
-            if challenge.dispatcher_id != *dispatcher_id {
-                return Err(CarryError::Refused(
-                    "another Dispatcher answers there now; pair with it again".to_owned(),
-                ));
-            }
-            let message =
-                dispatcher_auth_message(&challenge.dispatcher_id, device_id, &challenge.nonce);
-            let signature = key.sign(&message).map_err(CarryError::Refused)?;
-            let hello = DispatcherHelloRequest {
-                protocol: DISPATCHER_PROTOCOL,
-                client: client.clone(),
-                auth: Some(Auth::Device {
-                    device_id: device_id.clone(),
-                    signature,
-                }),
-            };
-            ask(&mut socket, 2, &hello)
-                .await
-                .map_err(|error| dispatcher_error(error, &lost))?;
+            prove(&mut socket, client, dispatcher_id, device_id, key, &lost).await?;
             let opened = ask(&mut socket, 3, &request)
                 .await
                 .map_err(|error| opening_error(error, &lost))?;
@@ -215,6 +197,98 @@ pub async fn open(
             Ok((Carried::Socket(reader, writer), opened))
         }
     }
+}
+
+/// The Dispatcher's WebSocket, in text frames.
+pub type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// The Dispatcher's challenge, signed, and `dispatcher/hello` as the paired device, on a
+/// WebSocket just opened to it: ids 1 and 2.
+async fn prove(
+    socket: &mut Socket,
+    client: &ClientInfo,
+    dispatcher_id: &str,
+    device_id: &DeviceId,
+    key: &DeviceKey,
+    lost: &impl Fn(String) -> CarryError,
+) -> Result<DispatcherHello, CarryError> {
+    let challenge = ask(socket, 1, &DispatcherChallengeRequest {})
+        .await
+        .map_err(|error| dispatcher_error(error, lost))?;
+    if challenge.dispatcher_id != dispatcher_id {
+        return Err(CarryError::Refused(
+            "another Dispatcher answers there now; pair with it again".to_owned(),
+        ));
+    }
+    let message = dispatcher_auth_message(&challenge.dispatcher_id, device_id, &challenge.nonce);
+    let signature = key.sign(&message).map_err(CarryError::Refused)?;
+    let hello = DispatcherHelloRequest {
+        protocol: DISPATCHER_PROTOCOL,
+        client: client.clone(),
+        auth: Some(Auth::Device {
+            device_id: device_id.clone(),
+            signature,
+        }),
+    };
+    ask(socket, 2, &hello)
+        .await
+        .map_err(|error| dispatcher_error(error, lost))
+}
+
+/// The Dispatcher's API at `url`, said hello to as the paired device, for a client that passes
+/// it through rather than speaking it itself: the Mac's app relays it to its page, which never
+/// holds the device's key (ADR 0032). What follows on the socket is the page's, its own ids
+/// from 1.
+pub async fn api(
+    url: &str,
+    client: &ClientInfo,
+    dispatcher_id: &str,
+    device_id: &DeviceId,
+    key: &DeviceKey,
+) -> Result<(Socket, DispatcherHello), CarryError> {
+    let lost = |why: String| CarryError::Dispatcher {
+        at: url.to_owned(),
+        why,
+    };
+    let mut socket = open_websocket(url, DISPATCHER_SUBPROTOCOL)
+        .await
+        .map_err(|error| lost(error.to_string()))?;
+    let hello = prove(&mut socket, client, dispatcher_id, device_id, key, &lost).await?;
+    Ok((socket, hello))
+}
+
+/// Pairs with the Dispatcher at `url` with the code `weave pair` showed, as a device called
+/// `name` with `key`, and gives its API, said hello to as that device, as [`api`] does.
+pub async fn pair(
+    url: &str,
+    client: &ClientInfo,
+    code: &str,
+    name: &str,
+    key: &DeviceKey,
+) -> Result<(Socket, DispatcherHello), CarryError> {
+    let lost = |why: String| CarryError::Dispatcher {
+        at: url.to_owned(),
+        why,
+    };
+    let mut socket = open_websocket(url, DISPATCHER_SUBPROTOCOL)
+        .await
+        .map_err(|error| lost(error.to_string()))?;
+    let hello = DispatcherHelloRequest {
+        protocol: DISPATCHER_PROTOCOL,
+        client: client.clone(),
+        auth: Some(Auth::Pair {
+            code: code.to_owned(),
+            device: NewDevice {
+                name: name.to_owned(),
+                public_key: key.jwk(),
+                service: false,
+            },
+        }),
+    };
+    let hello = ask(&mut socket, 1, &hello)
+        .await
+        .map_err(|error| dispatcher_error(error, &lost))?;
+    Ok((socket, hello))
 }
 
 /// A connection to `host` through the Dispatcher at `via`, said hello to as `client` with the
@@ -288,7 +362,7 @@ fn opening_error(error: Error, lost: &impl Fn(String) -> CarryError) -> CarryErr
 /// Send `request` as `id` on the WebSocket and wait for its answer. A connection that fails or
 /// closes first fails it with [`errors::HOST_UNAVAILABLE`].
 async fn ask<R>(
-    socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    socket: &mut Socket,
     id: u64,
     request: &R,
 ) -> Result<R::Response, Error>

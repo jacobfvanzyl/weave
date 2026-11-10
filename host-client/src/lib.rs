@@ -14,6 +14,7 @@ pub mod carry;
 #[cfg(target_os = "macos")]
 mod enclave;
 mod key_file;
+pub mod paired;
 pub mod remote;
 
 use agent_client_protocol::ConnectTo;
