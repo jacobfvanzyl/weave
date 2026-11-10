@@ -41,8 +41,8 @@ use weave_host_protocol::dispatcher::CarriedStream;
 use weave_host_protocol::dispatcher::DISPATCHER_CARRY_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_PROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_SUBPROTOCOL;
-use weave_host_protocol::dispatcher::DispatcherHello;
 use weave_host_protocol::dispatcher::DispatcherChallengeRequest;
+use weave_host_protocol::dispatcher::DispatcherHello;
 use weave_host_protocol::dispatcher::DispatcherHelloRequest;
 use weave_host_protocol::dispatcher::HostUnavailable;
 use weave_host_protocol::dispatcher::OpenHostRequest;
@@ -361,11 +361,7 @@ fn opening_error(error: Error, lost: &impl Fn(String) -> CarryError) -> CarryErr
 
 /// Send `request` as `id` on the WebSocket and wait for its answer. A connection that fails or
 /// closes first fails it with [`errors::HOST_UNAVAILABLE`].
-async fn ask<R>(
-    socket: &mut Socket,
-    id: u64,
-    request: &R,
-) -> Result<R::Response, Error>
+async fn ask<R>(socket: &mut Socket, id: u64, request: &R) -> Result<R::Response, Error>
 where
     R: JsonRpcRequest + Serialize,
     R::Response: DeserializeOwned,

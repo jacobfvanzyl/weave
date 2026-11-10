@@ -162,20 +162,24 @@ pub fn new_key() -> io::Result<DeviceKey> {
 /// The key this computer proves itself to the Dispatcher with.
 pub fn key() -> io::Result<DeviceKey> {
     let path = key_path()?;
-    DeviceKey::read(&path).map_err(io::Error::other)?.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!(
-                "{} is gone; pair again with `weave dispatcher connect`",
-                path.display()
-            ),
-        )
-    })
+    DeviceKey::read(&path)
+        .map_err(io::Error::other)?
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "{} is gone; pair again with `weave dispatcher connect`",
+                    path.display()
+                ),
+            )
+        })
 }
 
 /// The time now, in milliseconds since the Unix epoch, for [`Paired::paired_at`].
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
 }
