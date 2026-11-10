@@ -14,7 +14,11 @@
     "ghostty": "bun scripts/ghostty.ts",
     "native:test": "bun scripts/native-tests.ts",
     "ios:build": "bun scripts/ios.ts build",
-    "ios:install": "bun scripts/ios.ts install"
+    "ios:install": "bun scripts/ios.ts install",
+    "mac:dev": "bun --bun run tauri dev",
+    "mac:install": "bun scripts/mac.ts install",
+    "mac:test": "cargo test --manifest-path src-tauri/Cargo.toml && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets",
+    "tauri": "tauri"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -30,6 +34,9 @@
     "@shadcn/react": "^0.3.0",
     "@streamdown/code": "2.0.0",
     "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/api": "2.12.4",
+    "@tauri-apps/plugin-deep-link": "2.6.3",
+    "@tauri-apps/plugin-notification": "2.8.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "katex": "^0.19.1",
@@ -51,6 +58,7 @@
   "devDependencies": {
     "@capacitor/cli": "^8.3.4",
     "@capacitor/ios": "^8.3.4",
+    "@tauri-apps/cli": "2.12.4",
     "@testing-library/jest-dom": "^6.10.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
