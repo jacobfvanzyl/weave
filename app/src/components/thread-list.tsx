@@ -6,6 +6,7 @@ import { type DirectoryGroup, subdirectory, threadListView } from '@/app/thread-
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { DeleteThreadDialog } from '@/components/delete-thread-dialog';
 import { type NewThreadTarget, NewThreadDialog } from '@/components/new-thread-dialog';
+import { useCommand } from '@/app/commands';
 import { RemoveWorktreeDialog } from '@/components/remove-worktree-dialog';
 import { Badge } from '@/components/ui/badge';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu';
@@ -236,6 +237,8 @@ export function ThreadList({ controller, onOpen, onOpenHosts }: {
   const [query, setQuery] = useState('');
   const [showClosed, setShowClosed] = useState(false);
   const [newThread, setNewThread] = useState<NewThreadTarget>();
+  // The Mac's New Thread (⌘N), once a Host can start one.
+  useCommand('thread.new', () => { if (model.hosts.some(({ status }) => status === 'connected')) setNewThread({}); });
   const pull = usePullToRefresh(actions.refresh);
   const view = threadListView(model.threads, model.hosts, { query, showClosed });
   const host = (id: string) => model.hosts.find((item) => item.id === id);
@@ -243,6 +246,8 @@ export function ThreadList({ controller, onOpen, onOpenHosts }: {
   const listed = view.hosts.some(({ directories }) => directories.length > 0);
   const { dispatcher } = model;
   const away = dispatcher !== undefined && dispatcher.status !== 'connected';
+  // A Host still connected while the Dispatcher is away, as the Mac's own over its socket, isn't greyed out.
+  const hostAway = (paired: HostSummary) => away && paired.status !== 'connected';
   const unreachable = model.hosts.filter(({ status }) => status !== 'connected').length + (away ? 1 : 0);
   const open = (key: string) => {
     actions.selectThread(key);
@@ -307,10 +312,10 @@ export function ThreadList({ controller, onOpen, onOpenHosts }: {
           </Empty>
         )}
         {listed && view.hosts.map(({ host: paired, directories }) => (
-          <SidebarGroup key={paired.id} role='group' aria-label={paired.name} data-away={away || undefined}
-            className={cn('py-1.5', away && 'opacity-60')}>
+          <SidebarGroup key={paired.id} role='group' aria-label={paired.name} data-away={hostAway(paired) || undefined}
+            className={cn('py-1.5', hostAway(paired) && 'opacity-60')}>
             <HostHeading host={paired} onNewThread={() => setNewThread({ hostId: paired.id })} />
-            {!away && paired.status !== 'connected' && paired.error && (
+            {!hostAway(paired) && paired.status !== 'connected' && paired.error && (
               <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>{paired.error}</p>
             )}
             {directories.map((group) => (

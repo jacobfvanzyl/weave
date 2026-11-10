@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ArrowLeft01Icon, SidebarLeftIcon } from '@hugeicons/core-free-icons';
 import type { AppController } from '@/app/app-controller';
-import { waitingCount } from '@/app/thread-list';
+import { threadListView, waitingCount } from '@/app/thread-list';
+import { useCommand } from '@/app/commands';
 import { usePhoneLayout } from '@/app/use-phone-layout';
 import { HostsDialog } from '@/components/hosts-dialog';
 import { PairingScreen } from '@/components/pair-dispatcher';
@@ -114,6 +115,17 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
   const openHosts = () => setHostsOpen(true);
   const { model } = controller;
   const unpaired = !model.starting && (!model.dispatcher || model.dispatcher.status === 'revoked');
+  // The Mac's Next and Previous Thread (⌘⇧] and ⌘⇧[), in the list's order.
+  const step = (by: number) => {
+    const keys = threadListView(model.threads, model.hosts).hosts
+      .flatMap(({ directories }) => directories.flatMap(({ threads }) => threads.map(({ key }) => key)));
+    if (keys.length === 0) return;
+    const at = model.selectedKey ? keys.indexOf(model.selectedKey) : -1;
+    const next = at < 0 ? (by > 0 ? 0 : keys.length - 1) : (at + by + keys.length) % keys.length;
+    controller.actions.selectThread(keys[next]);
+  };
+  useCommand('thread.next', () => step(1));
+  useCommand('thread.previous', () => step(-1));
   useEffect(() => {
     if (pairingOffer && !unpaired) setHostsOpen(true);
     // A link opened while paired asks in the Hosts dialog; unpaired, on the pairing screen.

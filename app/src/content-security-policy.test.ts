@@ -19,7 +19,7 @@ describe('contentSecurityPolicy', () => {
     expect(directives.get('object-src')).toEqual(["'none'"]);
   });
 
-  it('reaches Hosts only over their WebSockets', () => {
-    expect(directives.get('connect-src')).toEqual(["'self'", 'ws:', 'wss:']);
+  it("reaches Hosts only over their WebSockets, or on the Mac through its app's core", () => {
+    expect(directives.get('connect-src')).toEqual(["'self'", 'ws:', 'wss:', 'ipc:', 'http://ipc.localhost']);
   });
 });

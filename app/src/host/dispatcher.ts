@@ -47,7 +47,12 @@ export type DispatcherCredentials =
   /** A paired device, which signs the connection's challenge. */
   | ({ method: 'device' } & Omit<DispatcherPairing, 'url'>)
   /** A device pairing with the code `weave pair` showed. */
-  | { method: 'pair'; code: string; name: string; key: DeviceKey };
+  | { method: 'pair'; code: string; name: string; key: DeviceKey }
+  /**
+   * A connection the device proved before the page had it: the Mac's core says hello with the
+   * key it holds, and hands over the connection and the Dispatcher's answer (ADR 0032).
+   */
+  | { method: 'proven'; hello(): DispatcherHello };
 
 /** JSON-RPC 2.0's own code for a method the other side doesn't have. */
 const METHOD_NOT_FOUND = -32601;
@@ -126,6 +131,8 @@ type Ask = <M extends DispatcherMethod>(method: M, params: DispatcherRequests[M]
 async function prove(ask: Ask, client: ClientInfo, credentials: DispatcherCredentials): Promise<DispatcherHello> {
   let auth: Auth | undefined;
   switch (credentials.method) {
+    case 'proven':
+      return credentials.hello();
     case 'local':
       break;
     case 'pair':
@@ -206,6 +213,8 @@ export class DispatcherConnection {
       connection.#transport = await options.connector(events, signal);
     } catch (cause) {
       if (signal?.aborted) throw abandoned();
+      // The Mac's core says itself why it couldn't open the connection, as for a device it unpaired.
+      if (cause instanceof ConnectError) throw cause;
       throw new ConnectError('connection', `Couldn't reach the Dispatcher: ${describe(cause)}`, cause);
     }
     connection.#requests.use(connection.#transport);

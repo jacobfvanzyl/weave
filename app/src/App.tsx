@@ -4,13 +4,18 @@ import { useNativeKeyboard } from '@/app/use-native-keyboard';
 import { usePairingLink } from '@/app/use-pairing-link';
 import { useState } from 'react';
 import { AppShell } from '@/components/app-shell';
+import { useMacShell } from '@/mac/shell';
 import { SurfaceApp } from '@/surface/surface-app';
 import { deviceSurfaceLink } from '@/surface/surface-link';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
 function HostApp() {
   const [surfaceLink] = useState(deviceSurfaceLink);
-  return <AppShell controller={useHostController()} pairingOffer={usePairingLink()} surfaceLink={surfaceLink} />;
+  const controller = useHostController();
+  // On the Mac, its menu bar, notifications and `weave://` links (ADR 0032).
+  const macOffer = useMacShell(controller);
+  const pairingOffer = usePairingLink() ?? macOffer;
+  return <AppShell controller={controller} pairingOffer={pairingOffer} surfaceLink={surfaceLink} />;
 }
 
 function MockApp() {

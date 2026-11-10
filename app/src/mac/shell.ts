@@ -1,0 +1,97 @@
+// What the Mac's shell adds around the app (ADR 0032): its menu bar's commands, notifications for
+// threads that need the person or finished while the app isn't in front, and `weave://` links,
+// which open a thread or offer a pairing.
+import { useEffect, useRef, useState } from 'react';
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrent, onOpenUrl } from '@tauri-apps/plugin-deep-link';
+import { isPermissionGranted, onAction, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
+import type { AppController, ThreadSummary } from '@/app/app-controller';
+import { isCommand, runCommand } from '@/app/commands';
+import { pairingLink } from '@/host/storage';
+import { noticesFor, threadLink } from './notices';
+import { onMac } from './routes';
+
+/** Brings the window to the front, as a click on a notification or a link should. */
+const front = async () => {
+  const window = getCurrentWindow();
+  await window.show().catch(() => {});
+  await window.unminimize().catch(() => {});
+  await window.setFocus().catch(() => {});
+};
+
+/** The menu bar's commands, run in the page. */
+function useMenu() {
+  useEffect(() => {
+    if (!onMac()) return;
+    const listening = listen<string>('menu', ({ payload }) => {
+      if (isCommand(payload)) runCommand(payload);
+    });
+    return () => { void listening.then((unlisten) => unlisten()).catch(() => {}); };
+  }, []);
+}
+
+/** Notifies of threads that need the person, or finished, while the window isn't in front; a click opens the thread. */
+function useNotifications(controller: AppController) {
+  const before = useRef<readonly ThreadSummary[]>([]);
+  const allowed = useRef<boolean | undefined>(undefined);
+  const select = useRef(controller.actions.selectThread);
+  select.current = controller.actions.selectThread;
+  const threads = controller.model.threads;
+  useEffect(() => {
+    if (!onMac()) return;
+    const listening = onAction(({ actionId, notification }) => {
+      const key = notification?.extra?.thread;
+      if (actionId !== 'tap' || typeof key !== 'string') return;
+      select.current(key);
+      void front();
+    });
+    return () => { void listening.then((listener) => listener.unregister()).catch(() => {}); };
+  }, []);
+  useEffect(() => {
+    const notices = noticesFor(before.current, threads);
+    before.current = threads;
+    if (!onMac() || notices.length === 0 || document.hasFocus()) return;
+    void (async () => {
+      allowed.current ??= await isPermissionGranted() || await requestPermission() === 'granted';
+      if (!allowed.current) return;
+      for (const notice of notices) sendNotification({ title: notice.title, body: notice.body, extra: { thread: notice.key } });
+    })().catch(() => {});
+  }, [threads]);
+}
+
+/** `weave://thread/…` opens the thread; a pairing link is offered, as the Camera's is on the iPad. */
+function useLinks(controller: AppController) {
+  const [offer, setOffer] = useState<{ url: string; code: string }>();
+  const select = useRef(controller.actions.selectThread);
+  select.current = controller.actions.selectThread;
+  useEffect(() => {
+    if (!onMac()) return;
+    const take = (urls: string[] | null) => {
+      for (const url of urls ?? []) {
+        const key = threadLink(url);
+        if (key) {
+          select.current(key);
+          void front();
+          continue;
+        }
+        const pairing = pairingLink(url);
+        if (pairing) {
+          setOffer(pairing);
+          void front();
+        }
+      }
+    };
+    void getCurrent().then(take).catch(() => {});
+    const listening = onOpenUrl(take);
+    return () => { void listening.then((unlisten) => unlisten()).catch(() => {}); };
+  }, []);
+  return offer;
+}
+
+/** The Mac's shell around the app: nothing elsewhere. A pairing link it was opened with, for the person to confirm. */
+export function useMacShell(controller: AppController) {
+  useMenu();
+  useNotifications(controller);
+  return useLinks(controller);
+}

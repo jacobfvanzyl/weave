@@ -7,6 +7,7 @@ import { type DeviceKey, nativeDeviceKey, webCryptoDeviceKey } from '@/host/devi
 import { HostStore } from '@/host/host-store';
 import { HOST_PROTOCOL } from '@/host/protocol';
 import { preferencesStorage } from '@/host/storage';
+import { MAC_KEY, macKey, macRoutes, macStorage, onMac } from '@/mac/routes';
 import type { AppController, AppModel } from './app-controller';
 import { useAppResume } from './use-app-resume';
 import { useNetworkChange } from './use-network-change';
@@ -23,7 +24,25 @@ const lostKey = (): DeviceKey => ({
   forget: async () => {},
 });
 
+/**
+ * The Mac's store (ADR 0032): its core reaches this Mac's Host and the Dispatcher, with the
+ * pairing and key the computer's CLI shares; it draws no terminals until WVE-205.
+ */
+function macStore() {
+  return new HostStore({
+    storage: macStorage(),
+    keyFor: () => macKey,
+    newKey: async () => ({ keyId: MAC_KEY, key: macKey }),
+    routes: macRoutes(),
+    terminals: false,
+    clientTools: { [HOST_PROTOCOL.clientTools.clipboardWrite]: clipboardWrite((text) => navigator.clipboard.writeText(text)) },
+    client,
+    deviceName: 'Mac',
+  });
+}
+
 function newStore() {
+  if (onMac()) return macStore();
   const native = Capacitor.isNativePlatform();
   const idiom = document.documentElement.dataset.deviceIdiom;
   return new HostStore({

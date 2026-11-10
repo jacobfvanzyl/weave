@@ -12,8 +12,9 @@ export const contentSecurityPolicy = [
   "img-src 'self' data: blob:",
   "media-src 'self' data: blob:",
   "font-src 'self' data:",
-  // The Dispatcher is paired by address, so any WebSocket.
-  "connect-src 'self' ws: wss:",
+  // The Dispatcher is paired by address, so any WebSocket. On the Mac, the page reaches its Rust
+  // core over Tauri's IPC, which isn't the network (ADR 0032).
+  "connect-src 'self' ws: wss: ipc: http://ipc.localhost",
   "object-src 'none'",
   "base-uri 'none'",
 ].join('; ');

@@ -81,6 +81,7 @@ import {
 } from '@/components/ui/message-scroller';
 import { Context, ContextContent, ContextTrigger } from '@/components/ai-elements/context';
 import { cn } from '@/lib/utils';
+import { useCommand } from '@/app/commands';
 
 export type ChatPaneActions = {
   setDraftText?(threadId: string, text: string): void;
@@ -568,6 +569,8 @@ function Composer({
   );
   const draftRef = useRef(draft);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // The Mac's Focus Composer (⌘L).
+  useCommand('composer.focus', () => textareaRef.current?.focus());
   const running = model.turn.status === 'running';
   const text = draft.text;
   useEffect(() => {

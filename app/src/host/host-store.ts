@@ -29,8 +29,9 @@ import { ThreadReadState } from '@/app/thread-read-state';
 import { type ClientTool, toolError } from './client-tools';
 import { CONNECTION_CLOSED, ConnectError, HostConnection, HostError, type HostEvent, type OpenedThread } from './connection';
 import type { DeviceKey } from './device-key';
-import { DISPATCHER, DispatcherConnection, type SocketOpener, carriedConnector } from './dispatcher';
+import type { DispatcherConnection, SocketOpener } from './dispatcher';
 import { JournalFollower, originLabel, transcriptEvents } from './journal';
+import { type Routes, hostCredentials, webRoutes } from './routes';
 import {
   HOST_PROTOCOL,
   type AgentSummary,
@@ -58,7 +59,14 @@ export type HostStoreOptions = {
   /** A new device key, for pairing with the Dispatcher. */
   newKey(): Promise<{ keyId: string; key: DeviceKey }>;
   /** A WebSocket to the Dispatcher: its API, or a connection it carries to a Host. */
-  socket: SocketOpener;
+  socket?: SocketOpener;
+  /**
+   * How the device reaches the Dispatcher and the Hosts, in place of `socket`'s WebSockets: the
+   * Mac's core (ADR 0032), which also reaches this Mac's own Host over its socket.
+   */
+  routes?: Routes;
+  /** Whether this device draws the Hosts' terminals: not on the Mac until WVE-205. Defaults to true. */
+  terminals?: boolean;
   client: ClientInfo;
   /** What a new pairing calls this device when the person names it nothing else. */
   deviceName: string;
@@ -122,6 +130,11 @@ type HostEntry = {
   attachCut?: boolean;
   /** No more tries until the person asks: the Host refuses this device, or speaks another protocol. */
   stopped: boolean;
+  /** This computer's own Host, reached over its socket rather than through the Dispatcher. */
+  local?: boolean;
+  /** Reconnecting to this computer's own Host, which the Dispatcher's listing doesn't drive. */
+  retry?: ReturnType<typeof setTimeout>;
+  attempt?: number;
 };
 
 /** A thread this client follows: where its journal is up to, what it shows, and what waits to be sent. */
@@ -253,7 +266,10 @@ const meta = (value: unknown, ...path: string[]): unknown =>
  */
 export class HostStore {
   readonly #options: HostStoreOptions;
+  readonly #routes: Routes;
   #dispatcher?: DispatcherEntry;
+  /** This computer's own Host, which the device reaches over its socket: only on the Mac. */
+  #local?: string;
   /** In the Dispatcher's order. */
   #hosts = new Map<string, HostEntry>();
   readonly #followed = new Map<string, Followed>();
@@ -273,6 +289,9 @@ export class HostStore {
 
   constructor(options: HostStoreOptions) {
     this.#options = options;
+    if (options.routes) this.#routes = options.routes;
+    else if (options.socket) this.#routes = webRoutes(options.socket);
+    else throw new Error('The store needs a way to reach the Dispatcher: `socket` or `routes`.');
   }
 
   subscribe = (listener: () => void) => {
@@ -300,7 +319,35 @@ export class HostStore {
     this.#adopt(record);
     this.#changed();
     await this.#forgetOldHosts();
+    await this.#findLocal();
     await this.#connectDispatcher();
+  }
+
+  /**
+   * This computer's own Host, if one answers on its socket: listed with the others, but reached
+   * over its socket, with or without the Dispatcher (ADR 0030's local clients).
+   */
+  async #findLocal() {
+    const local = this.#routes.local;
+    if (!local || this.#stopped) return;
+    const hostId = await local.find().catch(() => undefined);
+    if (!hostId || this.#stopped) return;
+    this.#local = hostId;
+    this.#adoptLocal();
+  }
+
+  /** Lists this computer's own Host and connects to it, once it's known. */
+  #adoptLocal() {
+    const hostId = this.#local;
+    if (!hostId || !this.#dispatcher) return;
+    let entry = this.#hosts.get(hostId);
+    if (!entry) {
+      entry = this.#entry(hostId, 'This Mac');
+      this.#hosts.set(hostId, entry);
+    }
+    entry.local = true;
+    this.#changed();
+    if (!entry.connection && !entry.connecting) void this.#connect(entry);
   }
 
   /** Closes every connection. */
@@ -318,7 +365,12 @@ export class HostStore {
    */
   async refresh() {
     const dispatcher = this.#dispatcher;
-    if (!dispatcher || dispatcher.stopped || this.#stopped) return;
+    if (!dispatcher || this.#stopped) return;
+    // This computer's own Host answers without the Dispatcher.
+    if (dispatcher.stopped) {
+      await Promise.all([...this.#hosts.values()].filter((entry) => entry.local).map((entry) => this.#wake(entry)));
+      return;
+    }
     dispatcher.relists = 0;
     await Promise.all([this.#wakeDispatcher(dispatcher), ...[...this.#hosts.values()].map((entry) => this.#wake(entry))]);
   }
@@ -353,7 +405,7 @@ export class HostStore {
     }
     if (entry.connection || entry.connecting || entry.stopped || this.#hosts.get(entry.hostId) !== entry) return;
     // One the Dispatcher can't reach comes back when it lists it connected.
-    if (entry.listed && !entry.listed.connected) return;
+    if (!entry.local && entry.listed && !entry.listed.connected) return;
     await this.#connect(entry);
   }
 
@@ -553,10 +605,9 @@ export class HostStore {
     const current = () => this.#dispatcher === dispatcher && dispatcher.connecting === connecting && !this.#stopped;
     let connection: DispatcherConnection | undefined;
     try {
-      connection = await DispatcherConnection.connect({
-        connector: this.#options.socket(record.url, DISPATCHER.subprotocol),
+      connection = await this.#routes.dispatcher({
+        pairing: { url: record.url, dispatcherId: record.dispatcherId, deviceId: record.deviceId, key },
         client: this.#options.client,
-        credentials: { method: 'device', dispatcherId: record.dispatcherId, deviceId: record.deviceId, key },
         onClosed: (close) => { if (connection) this.#dispatcherClosed(dispatcher, connection, close); },
         signal: connecting.signal,
       });
@@ -651,7 +702,8 @@ export class HostStore {
     dispatcher.status = status;
     dispatcher.stopped = true;
     dispatcher.error = error;
-    for (const entry of this.#hosts.values()) this.#closeHost(entry);
+    // This computer's own Host is reached without it.
+    for (const entry of this.#hosts.values()) if (!entry.local) this.#closeHost(entry);
     this.#changed();
   }
 
@@ -663,6 +715,7 @@ export class HostStore {
     const dispatcher = this.#dispatcher;
     if (!dispatcher || dispatcher.status === 'revoked') return;
     this.#haltDispatcher(dispatcher, 'revoked', 'The Dispatcher revoked this device, which has forgotten the pairing. Pair it again to reach your Hosts.');
+    for (const entry of this.#hosts.values()) this.#closeHost(entry);
     this.#hosts = new Map();
     this.#followed.clear();
     this.#selectedKey = undefined;
@@ -701,9 +754,9 @@ export class HostStore {
     clearTimeout(dispatcher.relist);
     dispatcher.relist = undefined;
     const before = this.#hosts;
-    // A Host it no longer has is gone, with its threads.
+    // A Host it no longer has is gone, with its threads; this computer's own stays.
     for (const [hostId, entry] of before) {
-      if (hosts.some((host) => host.hostId === hostId)) continue;
+      if (entry.local || hosts.some((host) => host.hostId === hostId)) continue;
       this.#closeHost(entry);
       this.#unfollow(hostId);
     }
@@ -713,10 +766,15 @@ export class HostStore {
       entry.listed = host;
       return [host.hostId, entry];
     }));
+    const local = this.#local ? before.get(this.#local) : undefined;
+    if (local && !this.#hosts.has(local.hostId)) this.#hosts.set(local.hostId, local);
     const connecting: Promise<void>[] = [];
     for (const entry of this.#hosts.values()) {
       if (entry.connection || entry.connecting || entry.stopped) continue;
-      if (entry.listed?.connected) {
+      if (entry.local) {
+        // Its socket, whatever the Dispatcher says; a retry under way tries again itself.
+        if (!entry.retry) connecting.push(this.#connect(entry));
+      } else if (entry.listed?.connected) {
         connecting.push(this.#connect(entry));
       } else if (entry.listed) {
         entry.status = 'unreachable';
@@ -727,7 +785,7 @@ export class HostStore {
     await this.#keepHosts(dispatcher);
     await Promise.all(connecting);
     if (this.#dispatcher !== dispatcher) return;
-    if ([...this.#hosts.values()].some((entry) => !entry.connection && !entry.connecting && !entry.stopped)) this.#relist(dispatcher);
+    if ([...this.#hosts.values()].some((entry) => !entry.local && !entry.connection && !entry.connecting && !entry.stopped)) this.#relist(dispatcher);
     else dispatcher.relists = 0;
   }
 
@@ -757,13 +815,18 @@ export class HostStore {
    */
   async #connect(entry: HostEntry) {
     const dispatcher = this.#dispatcher;
-    if (this.#stopped || !dispatcher || dispatcher.stopped) return;
+    const local = entry.local ? this.#routes.local : undefined;
+    // This computer's own Host is reached without the Dispatcher; every other only through it.
+    if (this.#stopped || !dispatcher || (!local && dispatcher.stopped)) return;
+    clearTimeout(entry.retry);
+    entry.retry = undefined;
     this.#drop(entry);
     entry.connecting?.abort();
     const connecting = new AbortController();
     entry.connecting = connecting;
     const timeout = this.#options.connectTimeout ?? 15_000;
-    const timer = setTimeout(() => connecting.abort(new Error(`${entry.name} didn't answer through the Dispatcher within ${timeout / 1_000} seconds.`)), timeout);
+    const how = local ? 'on its socket' : 'through the Dispatcher';
+    const timer = setTimeout(() => connecting.abort(new Error(`${entry.name} didn't answer ${how} within ${timeout / 1_000} seconds.`)), timeout);
     // Any try after the first is reconnecting.
     entry.status = entry.connected || entry.status !== 'connecting' ? 'reconnecting' : 'connecting';
     this.#changed();
@@ -773,10 +836,10 @@ export class HostStore {
     let connection: HostConnection | undefined;
     try {
       connection = await HostConnection.connect({
-        connector: carriedConnector(this.#options.socket, pairing, entry.hostId, this.#options.client),
+        connector: local?.connector ?? this.#routes.host({ pairing, hostId: entry.hostId, client: this.#options.client }),
         client: this.#options.client,
         capabilities: this.#capabilities(),
-        credentials: { method: 'dispatcher' },
+        credentials: hostCredentials(Boolean(local)),
         // What it sends during hello, its close included, is answered by `connect` failing.
         onEvent: (event) => { if (connection) this.#event(entry, connection, event); },
         signal: connecting.signal,
@@ -800,6 +863,7 @@ export class HostStore {
   async #connected(entry: HostEntry, connection: HostConnection) {
     entry.connection = connection;
     entry.connected = true;
+    entry.attempt = 0;
     entry.status = 'connected';
     entry.error = undefined;
     this.#changed();
@@ -836,10 +900,25 @@ export class HostStore {
     }
   }
 
-  /** A Host's connection failed or dropped: the Dispatcher lists the Hosts again before long, and says whether it still reaches it. */
+  /**
+   * A Host's connection failed or dropped: the Dispatcher lists the Hosts again before long, and
+   * says whether it still reaches it. This computer's own Host is tried again on its socket,
+   * backing off.
+   */
   #away(entry: HostEntry) {
     this.#changed();
-    if (this.#dispatcher && this.#hosts.get(entry.hostId) === entry) this.#relist(this.#dispatcher);
+    if (this.#hosts.get(entry.hostId) !== entry) return;
+    if (entry.local) {
+      if (entry.retry || this.#stopped) return;
+      const delay = this.#backoff(entry.attempt ?? 0);
+      entry.attempt = (entry.attempt ?? 0) + 1;
+      entry.retry = setTimeout(() => {
+        entry.retry = undefined;
+        void this.#connect(entry);
+      }, delay);
+      return;
+    }
+    if (this.#dispatcher) this.#relist(this.#dispatcher);
   }
 
   /** Stops trying until the person asks, saying why. */
@@ -860,6 +939,8 @@ export class HostStore {
 
   /** Lets go of a Host's connection and any try under way. */
   #closeHost(entry: HostEntry) {
+    clearTimeout(entry.retry);
+    entry.retry = undefined;
     entry.connecting?.abort();
     entry.connecting = undefined;
     this.#drop(entry);
@@ -1733,10 +1814,12 @@ export class HostStore {
     let connection: DispatcherConnection | undefined;
     let adopted: DispatcherEntry | undefined;
     try {
-      connection = await DispatcherConnection.connect({
-        connector: this.#options.socket(url, DISPATCHER.subprotocol),
+      connection = await this.#routes.pair({
+        url,
+        code: input.code.replaceAll(/[\s-]/g, ''),
+        name: input.name?.trim() || this.#options.deviceName,
+        key,
         client: this.#options.client,
-        credentials: { method: 'pair', code: input.code.replaceAll(/[\s-]/g, ''), name: input.name?.trim() || this.#options.deviceName, key },
         onClosed: (close) => { if (adopted && connection) this.#dispatcherClosed(adopted, connection, close); },
       });
     } catch (error) {
@@ -1761,6 +1844,8 @@ export class HostStore {
     adopted = this.#adopt(record);
     this.#error = undefined;
     await this.#forgetOldHosts();
+    if (this.#local) this.#adoptLocal();
+    else await this.#findLocal();
     await this.#dispatcherConnected(adopted, connection);
   }
 
@@ -1801,7 +1886,7 @@ export class HostStore {
         ...(entry.connection?.supports(HOST_PROTOCOL.features.listFiles) ? { canBrowse: true } : {}),
         ...(entry.connection?.supports(HOST_PROTOCOL.features.rename) ? { canRename: true } : {}),
         ...(entry.connection?.supports(HOST_PROTOCOL.features.worktrees) ? { canWorktree: true } : {}),
-        ...(entry.connection?.supports(HOST_PROTOCOL.features.terminals) ? { canTerminals: true } : {}),
+        ...(this.#options.terminals !== false && entry.connection?.supports(HOST_PROTOCOL.features.terminals) ? { canTerminals: true } : {}),
       });
       agents[hostId] = entry.agents.map(({ id, name }) => ({ id, name }));
       const agentName = (agentId: string) => entry.agents.find(({ id }) => id === agentId)?.name ?? agentId;
