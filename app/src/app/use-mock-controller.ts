@@ -1,19 +1,27 @@
 import { useEffect, useMemo, useReducer, useRef } from 'react';
 import { createAcpShowcaseTranscript, createMarkdownShowcaseTranscript } from '@/chat/acp-showcase';
 import { type AcpTranscript, type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
-import type { ContentBlock, McpServerStatus } from '@/host/protocol';
+import type { ContentBlock, McpServerStatus, SessionLayout } from '@/host/protocol';
+import { terminalBlock, threadBlock } from '@/session/blocks';
+import { LAYOUT_VERSION, firstLayout, tidy } from '@/session/layout';
+import { sessionOfThread } from '@/session/sessions';
 import {
   type AgentChoice,
   type AppController,
   type AppModel,
   type DispatcherSummary,
   type HostSummary,
+  type OpenThread,
+  type ProjectSummary,
   type PromptImage,
   type QueuedPrompt,
   type RepositoryListing,
   type TerminalSummary,
+  type ThreadActions,
   type ThreadGit,
   type ThreadSummary,
+  sessionKey,
+  sessionOfKey,
   threadKey,
 } from './app-controller';
 import { ThreadReadState } from './thread-read-state';
@@ -22,9 +30,10 @@ import { ThreadReadState } from './thread-read-state';
  * Fixture states for UI work and tests. `unpaired` is the pairing screen, before the app pairs
  * with the Dispatcher; `empty`, a Dispatcher no Host has joined; `unreachable`, a Host the
  * Dispatcher can't reach; `offline`, the Dispatcher itself out of reach, with the Hosts it last
- * listed.
+ * listed; `session`, a Session someone arranged: two tabs, threads and terminals split, stacked
+ * and floating, and a Block of a type the app doesn't have.
  */
-export const MOCK_SCENARIOS = ['list', 'thread', 'running', 'unreachable', 'offline', 'banner', 'empty', 'unpaired', 'markdown', 'terminals'] as const;
+export const MOCK_SCENARIOS = ['list', 'thread', 'running', 'unreachable', 'offline', 'banner', 'empty', 'unpaired', 'markdown', 'terminals', 'session'] as const;
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
 export const mockScenarioFromLocation = (search = location.search): MockScenario => {
@@ -222,7 +231,48 @@ type MockState = {
   repositories: MockRepositories;
   /** By Host. */
   terminals: Record<string, TerminalSummary[]>;
+  /** The Session on screen, by key. */
+  sessionKey?: string;
+  /** Sessions' layouts, by key: arranged, or as each first showed. */
+  layouts: Record<string, SessionLayout>;
+  /** The layouts someone arranged, which a Host would keep. */
+  saved: string[];
+  /** The threads on screen, by key. */
+  shown: string[];
 };
+
+/** The person's Projects: weave, on the Mac. */
+const PROJECTS: ProjectSummary[] = [{ id: 'p-weave', name: 'weave', locations: [{ hostId: MAC, path: WEAVE }] }];
+
+/** The `session` scenario's layout of the weave repository's main worktree. */
+const arranged = (): SessionLayout => tidy({
+  version: LAYOUT_VERSION,
+  tabs: [
+    {
+      id: 'tab-work',
+      root: {
+        kind: 'row',
+        sizes: [0.55, 0.45],
+        children: [
+          { kind: 'stack', children: [threadBlock('protocol-spec', 'b-spec'), threadBlock('steer-tui', 'b-steer')] },
+          {
+            kind: 'column',
+            children: [
+              { kind: 'stack', children: [terminalBlock('t-tests', 'b-tests')] },
+              { kind: 'stack', children: [threadBlock('alpha-back', 'b-alpha')] },
+            ],
+          },
+        ],
+      },
+      floating: [{ block: terminalBlock('t-block', 'b-block'), frame: { x: 0.3, y: 0.2, width: 0.4, height: 0.4 } }],
+    },
+    {
+      id: 'tab-notes',
+      title: 'Notes',
+      root: { kind: 'stack', children: [{ id: 'b-browser', type: 'weave.browser', props: { url: 'https://example.com/docs' } }] },
+    },
+  ],
+});
 
 /** The `markdown` scenario's thread, which shows the fake agent's rich Markdown reply. */
 const MARKDOWN = 'rich-markdown';
@@ -235,10 +285,10 @@ const transcriptFor = (thread: ThreadSummary): AcpTranscript => {
 
 const initialState = (scenario: MockScenario, now: number): MockState => {
   if (scenario === 'unpaired') {
-    return { model: { hosts: [], threads: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {}, terminals: {} };
+    return { model: { hosts: [], threads: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {}, terminals: {}, layouts: {}, saved: [], shown: [] };
   }
   if (scenario === 'empty') {
-    return { model: { dispatcher: DISPATCHER, hosts: [], threads: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {}, terminals: {} };
+    return { model: { dispatcher: DISPATCHER, hosts: [], threads: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {}, terminals: {}, layouts: {}, saved: [], shown: [] };
   }
   const list = scenario === 'markdown'
     ? [summary(MAC, MARKDOWN, WEAVE, 'Render rich Markdown', 'claude', 0, now, { git: onMain }), ...threads(now)]
@@ -251,16 +301,25 @@ const initialState = (scenario: MockScenario, now: number): MockState => {
         ? threadKey(MAC, MARKDOWN)
         : scenario === 'terminals'
           ? threadKey(MAC, 'steer-tui')
-          : undefined;
+          : scenario === 'session'
+            ? threadKey(MAC, 'protocol-spec')
+            : undefined;
+  const selected = list.find(({ key }) => key === selectedKey);
+  const main = sessionKey(MAC, WEAVE);
   return {
     model: {
       dispatcher: dispatcher(scenario === 'offline', now),
       hosts: hosts(now, scenario),
       threads: list,
       agents: { [MAC]: AGENTS, [SERVER]: AGENTS },
+      projects: PROJECTS,
       selectedKey,
       unread: new Set(),
     },
+    ...(selected ? { sessionKey: sessionOfThread(selected) } : {}),
+    layouts: scenario === 'session' ? { [main]: arranged() } : {},
+    saved: scenario === 'session' ? [main] : [],
+    shown: selectedKey ? [selectedKey] : [],
     transcripts: {},
     queued: scenario === 'running' ? { [threadKey(MAC, 'protocol-spec')]: [{ id: 'q1', text: 'Then regenerate the fixtures.' }] } : {},
     repositories: repositories(),
@@ -269,6 +328,20 @@ const initialState = (scenario: MockScenario, now: number): MockState => {
 };
 
 /** The fixture repository `path` is in on a Host, by its primary worktree. */
+/**
+ * What a Session shows: as someone arranged it, or its open threads in one pane, the one in front
+ * first and then the most recently active.
+ */
+const layoutOf = (state: MockState, key: string): SessionLayout => {
+  const known = state.layouts[key];
+  if (known) return known;
+  const members = state.model.threads
+    .filter((thread) => thread.state !== 'closed' && sessionOfThread(thread) === key)
+    .sort((left, right) => Number(right.key === state.model.selectedKey) - Number(left.key === state.model.selectedKey)
+      || (right.lastActivityAt ?? 0) - (left.lastActivityAt ?? 0));
+  return firstLayout(members.map(({ threadId }) => threadBlock(threadId, `b-${threadId}`)), { id: 'tab-1' });
+};
+
 const repositoryOf = (repositories: MockRepositories, hostId: string, path: string) =>
   Object.entries(repositories[hostId] ?? {}).find(([, { worktrees }]) =>
     worktrees.some((worktree) => path === worktree.path || path.startsWith(`${worktree.path}/`)));
@@ -371,34 +444,147 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
   }, []);
 
   const { model } = state.current;
-  const selected = model.threads.find(({ key }) => key === model.selectedKey);
-  const thread = selected
+  const openThread = (key: string): OpenThread | undefined => {
+    const summary = model.threads.find((item) => item.key === key);
+    return summary && {
+      key,
+      transcript: transcript(key),
+      canSteer: steers(summary.agentId),
+      queued: state.current.queued[key] ?? [],
+      canAttachImages: true,
+      mcpServers: MCP_SERVERS,
+    };
+  };
+  const open: Record<string, OpenThread> = {};
+  for (const key of new Set([...state.current.shown, ...(model.selectedKey ? [model.selectedKey] : [])])) {
+    const thread = openThread(key);
+    if (thread) open[key] = thread;
+  }
+  const thread = model.selectedKey ? open[model.selectedKey] : undefined;
+  const shownSession = state.current.sessionKey ? sessionOfKey(state.current.sessionKey) : undefined;
+  const session = state.current.sessionKey && shownSession
     ? {
-        key: selected.key,
-        transcript: transcript(selected.key),
-        canSteer: steers(selected.agentId),
-        queued: state.current.queued[selected.key] ?? [],
-        canAttachImages: true,
-        mcpServers: MCP_SERVERS,
-        ...(model.hosts.find(({ id }) => id === selected.hostId)?.canTerminals
-          ? { terminals: (state.current.terminals[selected.hostId] ?? []).filter(({ scope }) => scope === (selected.git?.worktree ?? selected.cwd)) }
-          : {}),
+        key: state.current.sessionKey,
+        ...shownSession,
+        layout: layoutOf(state.current, state.current.sessionKey),
+        saved: state.current.saved.includes(state.current.sessionKey),
+        terminals: (state.current.terminals[shownSession.hostId] ?? []).filter(({ scope }) => scope === shownSession.directory),
       }
     : undefined;
 
   const actions = useMemo<AppController['actions']>(() => {
     const selectedKey = () => state.current.model.selectedKey;
-    const selectedThread = () => state.current.model.threads.find(({ key }) => key === selectedKey());
+    const shownHost = () => state.current.sessionKey ? sessionOfKey(state.current.sessionKey) : undefined;
     const setTerminals = (hostId: string, change: (terminals: TerminalSummary[]) => TerminalSummary[]) => update((current) => ({
       ...current,
       terminals: { ...current.terminals, [hostId]: change(current.terminals[hostId] ?? []) },
     }));
     const selectThread = (key?: string) => {
       readState.current.focus(key);
-      update((current) => ({ ...current, model: { ...current.model, selectedKey: key } }));
+      update((current) => ({ ...current, shown: key ? [key] : [], model: { ...current.model, selectedKey: key } }));
     };
+    /** What's done in one thread: in the one `pick` gives when it's done. */
+    const threadActions = (pick: () => string | undefined): ThreadActions => ({
+    send(text, images) {
+      const key = pick();
+      if (!key) return;
+      const current = state.current.model.threads.find((item) => item.key === key);
+      if (transcript(key).turn.status !== 'running') {
+        startTurn(key, text, images);
+      } else if (current && steers(current.agentId)) {
+        reduce(key, userMessage(text, images, true));
+      } else {
+        update((latest) => ({
+          ...latest,
+          queued: { ...latest.queued, [key]: [...(latest.queued[key] ?? []), { id: localId('queued'), text, ...(images?.length ? { images } : {}) }] },
+        }));
+      }
+    },
+    reopenThread() {
+      const key = pick();
+      if (!key) return;
+      reduce(key, { type: 'agent/reopened', text: 'Reopened this thread in a new agent process', failed: false });
+    },
+    updateAgent() {
+      const key = pick();
+      if (!key) return;
+      reduce(key, { type: 'agent/reopened', text: 'Reopened this thread in a new agent process', failed: false });
+    },
+    removeQueued(id) {
+      const key = pick();
+      if (!key) return;
+      update((current) => ({
+        ...current,
+        queued: { ...current.queued, [key]: (current.queued[key] ?? []).filter((item) => item.id !== id) },
+      }));
+    },
+    // The mock's queue never pauses.
+    resumeQueue() {},
+    cancelTurn() {
+      const key = pick();
+      if (!key) return;
+      reduce(key, { type: 'turn/stopped', stopReason: 'cancelled' });
+      setThread(key, { activity: 'idle', waitingOn: undefined });
+    },
+    respondToPermission(requestId, optionId) {
+      const key = pick();
+      if (!key) return;
+      reduce(key, { type: 'permission/resolved', requestId, optionId });
+      setThread(key, { activity: transcript(key).turn.status === 'running' ? 'running' : 'idle', waitingOn: undefined });
+    },
+    respondToElicitation(requestId, response) {
+      const key = pick();
+      if (!key) return;
+      reduce(key, { type: 'elicitation/resolved', requestId, response });
+      setThread(key, { activity: transcript(key).turn.status === 'running' ? 'running' : 'idle', waitingOn: undefined });
+    },
+    setMode(modeId) {
+      const key = pick();
+      if (!key) return;
+      reduce(key, { type: 'session/update', update: { sessionUpdate: 'current_mode_update', currentModeId: modeId } });
+    },
+    setConfigOption(optionId, value) {
+      const key = pick();
+      if (!key) return;
+      const configOptions = transcript(key).configOptions.map((option) =>
+        option.id !== optionId
+          ? option
+          : option.type === 'boolean'
+            ? { ...option, currentValue: Boolean(value) }
+            : { ...option, currentValue: String(value) });
+      reduce(key, { type: 'session/update', update: { sessionUpdate: 'config_option_update', configOptions } });
+    },
+    });
+    /** A Session's layout stays as it first showed from then on, as a Host's would once kept. */
+    const keep = (current: MockState, key: string): MockState =>
+      current.layouts[key] ? current : { ...current, layouts: { ...current.layouts, [key]: layoutOf(current, key) } };
+    const perThread = new Map<string, ThreadActions>();
     return {
       selectThread,
+      selectSession(key) {
+        update((current) => key ? { ...keep(current, key), sessionKey: key } : { ...current, sessionKey: undefined });
+      },
+      showThreads(keys, front) {
+        const shown = [...new Set([...keys, ...(front ? [front] : [])])];
+        const current = state.current;
+        if (current.model.selectedKey === front && shown.length === current.shown.length && shown.every((key) => current.shown.includes(key))) return;
+        readState.current.focus(front);
+        update((latest) => ({ ...latest, shown, model: { ...latest.model, selectedKey: front } }));
+      },
+      forThread(key) {
+        let actions = perThread.get(key);
+        if (!actions) {
+          actions = threadActions(() => key);
+          perThread.set(key, actions);
+        }
+        return actions;
+      },
+      updateLayout(key, change) {
+        update((current) => {
+          const kept = keep(current, key);
+          return { ...kept, layouts: { ...kept.layouts, [key]: tidy(change(kept.layouts[key])) }, saved: [...new Set([...kept.saved, key])] };
+        });
+      },
       createThread({ hostId, cwd, agentId }) {
         const threadId = localId('thread');
         const git = gitOf(state.current.repositories, hostId, cwd);
@@ -406,8 +592,10 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         update((current) => ({
           ...current,
           transcripts: { ...current.transcripts, [created.key]: createTranscript(threadId) },
+          shown: [...current.shown, created.key],
           model: { ...current.model, threads: [created, ...current.model.threads], selectedKey: created.key },
         }));
+        return { key: created.key, sessionKey: sessionOfThread(created) };
       },
       async listDirectory({ hostId, path, hidden }) {
         const home = HOMES[hostId] ?? '/';
@@ -521,6 +709,8 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
       forgetDispatcher() {
         update((current) => ({
           ...current,
+          sessionKey: undefined,
+          shown: [],
           model: { ...current.model, dispatcher: undefined, hosts: [], threads: [], agents: {}, selectedKey: undefined },
         }));
       },
@@ -543,84 +733,15 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           },
         }));
       },
-      send(text, images) {
-        const key = selectedKey();
-        if (!key) return;
-        const current = state.current.model.threads.find((item) => item.key === key);
-        if (transcript(key).turn.status !== 'running') {
-          startTurn(key, text, images);
-        } else if (current && steers(current.agentId)) {
-          reduce(key, userMessage(text, images, true));
-        } else {
-          update((latest) => ({
-            ...latest,
-            queued: { ...latest.queued, [key]: [...(latest.queued[key] ?? []), { id: localId('queued'), text, ...(images?.length ? { images } : {}) }] },
-          }));
-        }
-      },
-      reopenThread() {
-        const key = selectedKey();
-        if (!key) return;
-        reduce(key, { type: 'agent/reopened', text: 'Reopened this thread in a new agent process', failed: false });
-      },
-      updateAgent() {
-        const key = selectedKey();
-        if (!key) return;
-        reduce(key, { type: 'agent/reopened', text: 'Reopened this thread in a new agent process', failed: false });
-      },
-      removeQueued(id) {
-        const key = selectedKey();
-        if (!key) return;
-        update((current) => ({
-          ...current,
-          queued: { ...current.queued, [key]: (current.queued[key] ?? []).filter((item) => item.id !== id) },
-        }));
-      },
-      // The mock's queue never pauses.
-      resumeQueue() {},
-      cancelTurn() {
-        const key = selectedKey();
-        if (!key) return;
-        reduce(key, { type: 'turn/stopped', stopReason: 'cancelled' });
-        setThread(key, { activity: 'idle', waitingOn: undefined });
-      },
-      respondToPermission(requestId, optionId) {
-        const key = selectedKey();
-        if (!key) return;
-        reduce(key, { type: 'permission/resolved', requestId, optionId });
-        setThread(key, { activity: transcript(key).turn.status === 'running' ? 'running' : 'idle', waitingOn: undefined });
-      },
-      respondToElicitation(requestId, response) {
-        const key = selectedKey();
-        if (!key) return;
-        reduce(key, { type: 'elicitation/resolved', requestId, response });
-        setThread(key, { activity: transcript(key).turn.status === 'running' ? 'running' : 'idle', waitingOn: undefined });
-      },
-      setMode(modeId) {
-        const key = selectedKey();
-        if (!key) return;
-        reduce(key, { type: 'session/update', update: { sessionUpdate: 'current_mode_update', currentModeId: modeId } });
-      },
-      setConfigOption(optionId, value) {
-        const key = selectedKey();
-        if (!key) return;
-        const configOptions = transcript(key).configOptions.map((option) =>
-          option.id !== optionId
-            ? option
-            : option.type === 'boolean'
-              ? { ...option, currentValue: Boolean(value) }
-              : { ...option, currentValue: String(value) });
-        reduce(key, { type: 'session/update', update: { sessionUpdate: 'config_option_update', configOptions } });
-      },
+      ...threadActions(selectedKey),
       async newTerminal() {
-        const thread = selectedThread();
-        if (!thread) throw new Error('No thread is open.');
+        const shown = shownHost();
+        if (!shown) throw new Error('No Session is open.');
         const id = localId('terminal');
-        setTerminals(thread.hostId, (list) => [...list, {
+        setTerminals(shown.hostId, (list) => [...list, {
           id,
-          scope: thread.git?.worktree ?? thread.cwd,
-          pwd: thread.cwd,
-          openedFrom: thread.threadId,
+          scope: shown.directory,
+          pwd: shown.directory,
           process: 'zsh',
           size: { cols: 80, rows: 24 },
           command: { running: false },
@@ -629,13 +750,13 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         return id;
       },
       async closeTerminal(id) {
-        const thread = selectedThread();
-        if (thread) setTerminals(thread.hostId, (list) => list.filter((terminal) => terminal.id !== id));
+        const shown = shownHost();
+        if (shown) setTerminals(shown.hostId, (list) => list.filter((terminal) => terminal.id !== id));
       },
       async renameTerminal(id, label) {
-        const thread = selectedThread();
-        if (!thread) return;
-        setTerminals(thread.hostId, (list) => list.map((terminal) => {
+        const shown = shownHost();
+        if (!shown) return;
+        setTerminals(shown.hostId, (list) => list.map((terminal) => {
           if (terminal.id !== id) return terminal;
           const { label: _previous, ...rest } = terminal;
           return label?.trim() ? { ...rest, label: label.trim() } : rest;
@@ -648,5 +769,5 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
     // The actions read the latest state through refs, so they never change.
   }, []);
 
-  return { model: { ...model, thread }, actions };
+  return { model: { ...model, thread, open, ...(session ? { session } : {}) }, actions };
 }

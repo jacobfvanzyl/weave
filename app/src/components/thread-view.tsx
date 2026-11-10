@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type TouchEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { ArrowLeft01Icon, Cancel01Icon, ComputerTerminal01Icon, Delete02Icon, Edit02Icon, InformationCircleIcon, MoreHorizontalIcon, SparklesIcon, StopIcon, Tv01Icon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
+import { ArrowLeft01Icon, Cancel01Icon, Delete02Icon, Edit02Icon, InformationCircleIcon, MoreHorizontalIcon, SparklesIcon, StopIcon, Tv01Icon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
 import type { AgentUpdateNotice, AppController, DispatcherSummary, HostSummary, OpenThread, ThreadSummary } from '@/app/app-controller';
+import { subdirectory } from '@/app/thread-list';
 import { usePhoneLayout } from '@/app/use-phone-layout';
 import { useUpdateNotice } from '@/app/use-update-notice';
 import { allSubagents, findSubagent, threadLabel, waitsForAnswer } from '@/chat/acp-transcript';
@@ -9,8 +10,6 @@ import { ChatPane, SurfacedThread } from '@/chat/chat-pane';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { DeleteThreadDialog } from '@/components/delete-thread-dialog';
 import { PathLabel } from '@/components/path-label';
-import { ResizeHandle } from '@/components/resize-handle';
-import { TerminalPanel } from '@/components/terminal-panel';
 import { ThreadStatusSheet } from '@/components/thread-status-sheet';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -18,11 +17,8 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
-import { cn } from '@/lib/utils';
 import { SurfaceScrubber } from '@/surface/surface-scrubber';
 import type { DeviceSurface } from '@/surface/use-surface';
-import { clampPaneWidth, PANE_WIDTH, selectTab } from '@/terminal/terminal-layout';
-import { useThreadTerminals } from '@/terminal/use-thread-terminals';
 
 /** The bar above a thread, and above the empty state when none is open. */
 export function ThreadHeader({ leading, children }: { leading?: ReactNode; children?: ReactNode }) {
@@ -82,10 +78,12 @@ function RenameDialog({ thread, actions, open, onOpenChange }: {
   );
 }
 
-function ThreadMenu({ thread, actions, canRename, onStatus, surface }: {
+function ThreadMenu({ thread, actions, canRename, onStatus, surface, compact }: {
   thread: ThreadSummary;
   actions: AppController['actions'];
   canRename?: boolean;
+  /** In a Block's thin row. */
+  compact?: boolean;
   /** Show the thread's status sheet. */
   onStatus(): void;
   /** A connected display the thread can be shown on (WVE-183). */
@@ -96,7 +94,7 @@ function ThreadMenu({ thread, actions, canRename, onStatus, surface }: {
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger render={<Button size='icon' variant='ghost' aria-label='Thread actions' />}>
+        <DropdownMenuTrigger render={<Button size={compact ? 'icon-xs' : 'icon'} variant='ghost' aria-label='Thread actions' />}>
           <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} />
         </DropdownMenuTrigger>
         <DropdownMenuContent align='end'>
@@ -203,18 +201,6 @@ function UpdateNotice({ update, updating, reopening, onUpdate, onMove, onDismiss
   );
 }
 
-/** Shows and hides the thread's terminals, with how many tabs it has while they're hidden. */
-function TerminalsButton({ shown, count, onToggle }: { shown: boolean; count: number; onToggle(): void }) {
-  const counted = !shown && count > 0;
-  return (
-    <Button size={counted ? 'sm' : 'icon'} variant='ghost' aria-pressed={shown} onClick={onToggle}
-      aria-label={shown ? 'Hide terminals' : counted ? `Show terminals, ${count} open` : 'Show terminals'}>
-      <HugeiconsIcon icon={ComputerTerminal01Icon} strokeWidth={2} />
-      {counted && count}
-    </Button>
-  );
-}
-
 /**
  * The thread's Host isn't connected, or the Dispatcher every Host is reached through can't be
  * reached: the transcript catches up once it is.
@@ -234,8 +220,12 @@ function ConnectionNotice({ host, dispatcher }: { host: HostSummary; dispatcher?
   );
 }
 
-/** The thread on screen: its header, transcript and composer. */
-export function ThreadView({ controller, thread, leading, onSwipeBack, surface }: {
+/**
+ * A thread: its header, transcript and composer. On its own it has the whole header, with its
+ * title; in a Block (`chrome='block'`, WVE-203) the pane names it, and it keeps a thin row of what
+ * is the thread's own: its agent, what it's doing, who else is attached, and its menu.
+ */
+export function ThreadView({ controller, thread, leading, onSwipeBack, surface, chrome = 'full', onOpenThread }: {
   controller: AppController;
   thread: OpenThread;
   leading?: ReactNode;
@@ -245,97 +235,40 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface }
    * iPhone keeps the requests waiting on the person and the composer.
    */
   surface?: DeviceSurface;
+  chrome?: 'full' | 'block';
+  /** Shows another thread, as the one this one continues in; `selectThread` without it. */
+  onOpenThread?(key: string): void;
 }) {
   const { model, actions } = controller;
   const summary = model.threads.find(({ key }) => key === thread.key);
   const host = model.hosts.find(({ id }) => id === summary?.hostId);
   const others = Math.max(0, (summary?.clients ?? 0) - 1);
   const phone = usePhoneLayout();
-  const threadId = summary?.threadId ?? thread.key.slice(thread.key.indexOf('/') + 1);
-  const terminals = useThreadTerminals(thread.key, threadId, thread.terminals);
   const surfaced = phone && Boolean(surface?.status.connected);
-  // On the iPhone, a thread on the Surface leaves its terminals for later (WVE-184).
-  const canTerminals = Boolean(host?.canTerminals && thread.terminals) && !surfaced;
-  const terminalsShown = canTerminals && terminals.thread.shown;
-  // On the iPad the terminals sit beside the thread, or over its width, their tabs in its top
-  // rail; on the iPhone they take the chat's place under its header.
-  const wide = !phone && terminalsShown && terminals.thread.wide;
-  const paned = phone && terminalsShown;
   // A subagent whose own transcript shows instead of the thread's.
   const [watching, setWatching] = useState<string>();
   useEffect(() => setWatching(undefined), [thread.key]);
   const subagent = watching ? findSubagent(thread.transcript, watching) : undefined;
   const openSubagent = useCallback((threadId: string) => setWatching(threadId), []);
-  // A terminal starting here, until the list has it; why the last one didn't start; and the one
-  // just started, which takes the keyboard.
-  const [starting, setStarting] = useState<{ id?: string }>();
-  const [startError, setStartError] = useState<string>();
-  const [started, setStarted] = useState<string>();
-  const shownKey = useRef(thread.key);
-  shownKey.current = thread.key;
-  useEffect(() => {
-    setStarting(undefined);
-    setStartError(undefined);
-    setStarted(undefined);
-  }, [thread.key]);
-  const startTerminal = async () => {
-    const key = thread.key;
-    setStarting({});
-    setStartError(undefined);
-    try {
-      const id = await actions.newTerminal();
-      terminals.change((thread) => selectTab(thread, id));
-      // The terminal is the worktree's either way; the thread on screen may be another by now.
-      if (shownKey.current !== key) return;
-      setStarted(id);
-      setStarting({ id });
-    } catch (cause) {
-      if (shownKey.current !== key) return;
-      setStartError(cause instanceof Error ? cause.message : String(cause));
-      setStarting(undefined);
-    }
-  };
-  const listed = Boolean(starting?.id && terminals.tabs.some(({ id }) => id === starting.id));
-  useEffect(() => {
-    if (!starting?.id) return;
-    if (listed) {
-      setStarting(undefined);
-      return;
-    }
-    // One that ended before it was listed.
-    const timer = setTimeout(() => setStarting(undefined), 5000);
-    return () => clearTimeout(timer);
-  }, [starting, listed]);
-  // The pane's edge, as the sidebar's: the pane keeps its width, and the thread fits the rest.
-  const view = useRef<HTMLElement>(null);
-  const [resizing, setResizing] = useState(false);
-  const available = () => view.current?.getBoundingClientRect().width ?? window.innerWidth;
-  const resizePane = (width: number, keep = true) => terminals.setWidth(clampPaneWidth(width, available()), keep);
-  const hideTerminals = () => {
-    setStartError(undefined);
-    terminals.change((thread) => ({ ...thread, shown: false }));
-  };
-  // The pane shows only with a terminal: opening it on none starts one, and it closes with the
-  // last, wherever that ended, unless one is starting or didn't.
-  const toggleTerminals = () => {
-    if (terminalsShown) {
-      hideTerminals();
-      return;
-    }
-    terminals.change((thread) => ({ ...thread, shown: true }));
-    if (terminals.tabs.length === 0) void startTerminal();
-  };
-  const empty = terminalsShown && terminals.tabs.length === 0 && starting === undefined && !startError;
-  useEffect(() => {
-    if (empty) terminals.change((thread) => ({ ...thread, shown: false }));
-  }, [empty]);
-  const swipe = useEdgeSwipe(paned ? hideTerminals : subagent ? () => setWatching(undefined) : onSwipeBack);
-  const terminalsButton = canTerminals && (
-    <TerminalsButton shown={terminalsShown} count={terminals.tabs.length} onToggle={toggleTerminals} />
-  );
+  const swipe = useEdgeSwipe(subagent ? () => setWatching(undefined) : onSwipeBack);
   const [update, dismissUpdate] = useUpdateNotice(thread.key, thread.update);
   const [statusShown, setStatusShown] = useState(false);
   useEffect(() => setStatusShown(false), [thread.key]);
+  const details = (
+    <>
+      <ActivityIndicator activity={summary?.activity} />
+      {others > 0 && (
+        <Badge variant='outline' aria-label={`${others} other ${others === 1 ? 'client' : 'clients'} attached`} title='Other clients attached'>
+          <HugeiconsIcon icon={UserMultiple02Icon} strokeWidth={2} />
+          {others}
+        </Badge>
+      )}
+      {summary && (
+        <ThreadMenu thread={summary} actions={actions} canRename={host?.canRename} onStatus={() => setStatusShown(true)} compact={chrome === 'block'}
+          surface={phone && surface?.status.available ? { enabled: surface.status.enabled, setEnabled: surface.setEnabled } : undefined} />
+      )}
+    </>
+  );
   // Requests waiting in a transcript not on screen: Main's while a subagent's shows, or a subagent's.
   const asking = surfaced ? [] : [
     ...(subagent && waitsForAnswer(thread.transcript) ? [undefined] : []),
@@ -344,35 +277,42 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface }
       .map(({ threadId }) => threadId),
   ];
   return (
-    <section ref={view} aria-label={summary?.title || 'New thread'} data-slot='thread-view' className='flex min-h-0 min-w-0 flex-1' {...swipe}>
-      <div className={cn('flex min-h-0 min-w-0 flex-1 flex-col', wide && 'hidden')}>
-        {!wide && (
-          <ThreadHeader leading={leading}>
-            <div className='min-w-0 flex-1 py-1.5'>
-              <h2 className='truncate text-sm font-semibold'>{summary?.title || 'New thread'}</h2>
+    <section aria-label={summary?.title || 'New thread'} data-slot='thread-view' className='flex min-h-0 min-w-0 flex-1' {...swipe}>
+      <div className='flex min-h-0 min-w-0 flex-1 flex-col'>
+        {chrome === 'full'
+          ? (
+            <ThreadHeader leading={leading}>
+              <div className='min-w-0 flex-1 py-1.5'>
+                <h2 className='truncate text-sm font-semibold'>{summary?.title || 'New thread'}</h2>
+                {summary && (
+                  <p className='flex min-w-0 items-center gap-1 text-[0.6875rem] text-muted-foreground'>
+                    <span className='shrink-0'>{summary.agentName}</span>
+                    <span aria-hidden='true'>·</span>
+                    <PathLabel path={summary.cwd} />
+                    {model.hosts.length > 1 && host && <span className='shrink-0'>· {host.name}</span>}
+                  </p>
+                )}
+              </div>
+              {details}
+            </ThreadHeader>
+          )
+          : (
+            <div data-slot='thread-bar' className='flex h-8 shrink-0 items-center gap-1.5 border-b border-border px-2 text-[0.6875rem] text-muted-foreground'>
               {summary && (
-                <p className='flex min-w-0 items-center gap-1 text-[0.6875rem] text-muted-foreground'>
+                <p className='flex min-w-0 flex-1 items-center gap-1'>
                   <span className='shrink-0'>{summary.agentName}</span>
-                  <span aria-hidden='true'>·</span>
-                  <PathLabel path={summary.cwd} />
-                  {model.hosts.length > 1 && host && <span className='shrink-0'>· {host.name}</span>}
+                  {subdirectory(summary) && (
+                    <>
+                      <span aria-hidden='true'>·</span>
+                      <span className='truncate'>{subdirectory(summary)}</span>
+                    </>
+                  )}
                 </p>
               )}
+              {!summary && <span className='flex-1' />}
+              {details}
             </div>
-            <ActivityIndicator activity={summary?.activity} />
-            {others > 0 && (
-              <Badge variant='outline' aria-label={`${others} other ${others === 1 ? 'client' : 'clients'} attached`} title='Other clients attached'>
-                <HugeiconsIcon icon={UserMultiple02Icon} strokeWidth={2} />
-                {others}
-              </Badge>
-            )}
-            {terminalsButton}
-            {summary && (
-              <ThreadMenu thread={summary} actions={actions} canRename={host?.canRename} onStatus={() => setStatusShown(true)}
-                surface={phone && surface?.status.available ? { enabled: surface.status.enabled, setEnabled: surface.setEnabled } : undefined} />
-            )}
-          </ThreadHeader>
-        )}
+          )}
         <ThreadStatusSheet
           open={statusShown}
           onOpenChange={setStatusShown}
@@ -390,7 +330,10 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface }
           <Alert className='m-2 w-auto' data-slot='successor-notice'>
             <AlertTitle>This thread continues in {summary.continuedIn.label}</AlertTitle>
             <AlertAction>
-              <Button size='sm' variant='outline' onClick={() => actions.selectThread(summary.continuedIn?.key)}>Open</Button>
+              <Button size='sm' variant='outline' onClick={() => {
+                const key = summary.continuedIn?.key;
+                if (key) (onOpenThread ?? actions.selectThread)(key);
+              }}>Open</Button>
             </AlertAction>
           </Alert>
         )}
@@ -415,7 +358,7 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface }
             </Alert>
           );
         })}
-        <div className={cn('flex min-h-0 min-w-0 flex-1 flex-col', paned && 'hidden')}>
+        <div className='flex min-h-0 min-w-0 flex-1 flex-col'>
           {surfaced && surface
             ? (
               <SurfacedThread
@@ -467,55 +410,7 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface }
               />
             )}
         </div>
-        {paned && terminalPanel('pane')}
       </div>
-      {terminalsShown && !phone && (
-        <div data-slot='terminal-side' className={cn('relative flex min-h-0 min-w-0 flex-col', wide ? 'flex-1' : 'shrink-0 border-l border-border')}
-          // A window narrowed since keeps the thread its least, as `clampPaneWidth` does.
-          style={wide ? undefined : {
-            '--terminal-pane-width': `${terminals.width}px`,
-            width: `max(${PANE_WIDTH.min}px, min(var(--terminal-pane-width), calc(100% - ${PANE_WIDTH.thread}px)))`,
-          } as CSSProperties}>
-          {!wide && (
-            <ResizeHandle label='Resize terminals' edge='left' width={terminals.width} min={PANE_WIDTH.min}
-              max={Math.max(PANE_WIDTH.min, Math.round(available() - PANE_WIDTH.thread))} initial={PANE_WIDTH.initial}
-              resizing={resizing}
-              onResizing={(next) => {
-                setResizing(next);
-                if (!next) terminals.setWidth(terminals.width);
-              }}
-              // The pane ends at the thread's right edge, so its width is from the pointer to there.
-              onPointer={(x) => resizePane((view.current?.getBoundingClientRect().right ?? window.innerWidth) - x, false)}
-              onResize={resizePane} />
-          )}
-          {terminalPanel(wide ? 'wide' : 'beside')}
-        </div>
-      )}
     </section>
   );
-
-  function terminalPanel(placement: 'beside' | 'wide' | 'pane') {
-    return (
-      <TerminalPanel
-        tabs={terminals.tabs}
-        active={terminals.active}
-        fontSize={terminals.fontSize}
-        placement={placement}
-        // Over the thread's width, the rail is the thread's too.
-        {...(placement === 'wide' ? { leading, trailing: terminalsButton } : {})}
-        onSelect={(id) => terminals.change((thread) => selectTab(thread, id))}
-        onNew={() => void startTerminal()}
-        starting={starting !== undefined}
-        startError={startError}
-        focus={started}
-        onFocused={() => setStarted(undefined)}
-        onClose={(id) => actions.closeTerminal(id)}
-        onRename={(id, label) => actions.renameTerminal(id, label)}
-        onWide={(next) => terminals.change((thread) => ({ ...thread, wide: next }))}
-        onFontSize={terminals.setFontSize}
-        onDone={hideTerminals}
-        attach={actions.attachTerminal}
-      />
-    );
-  }
 }

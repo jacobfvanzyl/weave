@@ -1,14 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { Clipboard } from '@capacitor/clipboard';
-import { Capacitor } from '@capacitor/core';
-import { clipboardWrite } from '@/host/client-tools';
-import { websocketConnector } from '@/host/connection';
-import { type DeviceKey, nativeDeviceKey, webCryptoDeviceKey } from '@/host/device-key';
 import { HostStore } from '@/host/host-store';
-import { HOST_PROTOCOL } from '@/host/protocol';
-import { preferencesStorage } from '@/host/storage';
-import { MAC_KEY, macKey, macRoutes, macStorage, onMac } from '@/mac/routes';
 import type { AppController, AppModel } from './app-controller';
+import { platform } from './platform';
 import { useAppResume } from './use-app-resume';
 import { useNetworkChange } from './use-network-change';
 
@@ -16,52 +9,8 @@ const client = { name: 'weave-app', version: '0.1.0' };
 
 const emptyModel: AppModel = { starting: true, hosts: [], threads: [], agents: {}, unread: new Set() };
 
-// A browser, during development, keeps its keys in memory: after a reload it pairs again.
-const browserKeys = new Map<string, DeviceKey>();
-const lostKey = (): DeviceKey => ({
-  publicKey: () => Promise.reject(new Error('This browser no longer has its key for the Dispatcher. Pair it again.')),
-  sign: () => Promise.reject(new Error('This browser no longer has its key for the Dispatcher. Pair it again.')),
-  forget: async () => {},
-});
-
-/**
- * The Mac's store (ADR 0032): its core reaches this Mac's Host and the Dispatcher, with the
- * pairing and key the computer's CLI shares; it draws no terminals until WVE-205.
- */
-function macStore() {
-  return new HostStore({
-    storage: macStorage(),
-    keyFor: () => macKey,
-    newKey: async () => ({ keyId: MAC_KEY, key: macKey }),
-    routes: macRoutes(),
-    terminals: false,
-    clientTools: { [HOST_PROTOCOL.clientTools.clipboardWrite]: clipboardWrite((text) => navigator.clipboard.writeText(text)) },
-    client,
-    deviceName: 'Mac',
-  });
-}
-
-function newStore() {
-  if (onMac()) return macStore();
-  const native = Capacitor.isNativePlatform();
-  const idiom = document.documentElement.dataset.deviceIdiom;
-  return new HostStore({
-    storage: preferencesStorage,
-    keyFor: (keyId) => native ? nativeDeviceKey(keyId) : browserKeys.get(keyId) ?? lostKey(),
-    async newKey() {
-      const keyId = crypto.randomUUID();
-      if (native) return { keyId, key: nativeDeviceKey(keyId) };
-      const key = await webCryptoDeviceKey();
-      browserKeys.set(keyId, key);
-      return { keyId, key };
-    },
-    socket: (url, subprotocol) => websocketConnector(url, subprotocol),
-    // The native plugin writes without a tap first, as an agent's call needs.
-    clientTools: { [HOST_PROTOCOL.clientTools.clipboardWrite]: clipboardWrite((text) => Clipboard.write({ string: text })) },
-    client,
-    deviceName: idiom === 'phone' ? 'iPhone' : idiom === 'pad' ? 'iPad' : 'Browser',
-  });
-}
+/** The store, with the device's side of it from the shell the page runs in (`platform.ts`). */
+const newStore = () => new HostStore({ ...platform().store(), client });
 
 const noSubscription = () => () => {};
 

@@ -62,25 +62,27 @@ describe.skipIf(!devHostHasTerminals())('terminals through the Host store with a
     await dispatcher?.stop();
   }, 30_000);
 
-  it("lists the open thread's terminals, live, and starts, renames, streams and ends them", async () => {
+  it("lists the Session on screen's terminals, live, and starts, renames, streams and ends them", async () => {
     const [paired] = store.snapshot().hosts;
     expect(paired).toMatchObject({ status: 'connected', canTerminals: true });
-    await store.actions.createThread({ hostId: paired.id, cwd: host.cwd, agentId: 'fake' });
+    const created = await store.actions.createThread({ hostId: paired.id, cwd: host.cwd, agentId: 'fake' });
+    // Terminals are their Session's: the thread's directory's.
+    store.actions.selectSession?.(created ? created.sessionKey : undefined);
     const thread = await waitFor(() => store.snapshot().thread, 'the thread');
     const threadId = thread.key.slice(thread.key.indexOf('/') + 1);
     expect(thread.key).toBe(threadKey(paired.id, threadId));
-    expect(await waitFor(() => store.snapshot().thread?.terminals, "the thread's terminals")).toEqual([]);
+    expect(await waitFor(() => store.snapshot().session?.terminals, "the thread's terminals")).toEqual([]);
 
     const id = await store.actions.newTerminal();
-    const made = await waitFor(() => store.snapshot().thread?.terminals?.find((terminal) => terminal.id === id), 'the new terminal');
+    const made = await waitFor(() => store.snapshot().session?.terminals?.find((terminal) => terminal.id === id), 'the new terminal');
     expect(made).toMatchObject({ scope: realpathSync(host.cwd), openedFrom: threadId });
 
     // One another client starts in the worktree shows too.
     const { terminal: other } = await local.request('terminals/new', { directory: host.cwd, label: 'other' });
-    await waitFor(() => store.snapshot().thread?.terminals?.some((terminal) => terminal.id === other.id), "the other client's terminal");
+    await waitFor(() => store.snapshot().session?.terminals?.some((terminal) => terminal.id === other.id), "the other client's terminal");
 
     await store.actions.renameTerminal(id, 'tests');
-    await waitFor(() => store.snapshot().thread?.terminals?.find((terminal) => terminal.id === id)?.label === 'tests', 'the name');
+    await waitFor(() => store.snapshot().session?.terminals?.find((terminal) => terminal.id === id)?.label === 'tests', 'the name');
 
     // The stream, as the native plugin opens it: through the Dispatcher, which this device proves
     // itself to and asks for the Host's terminal stream, then from a codec that isn't the holder's,
@@ -128,11 +130,11 @@ describe.skipIf(!devHostHasTerminals())('terminals through the Host store with a
     // Typing made this device the one whose size the terminal takes.
     socket.send(JSON.stringify({ resize: { cols: 90, rows: 25 } }));
     await waitFor(() => texts.some((text) => JSON.stringify(text) === JSON.stringify({ resized: { cols: 90, rows: 25 } })), 'the new size, in order');
-    await waitFor(() => store.snapshot().thread?.terminals?.find((terminal) => terminal.id === id)?.size.cols === 90, 'the listed size');
+    await waitFor(() => store.snapshot().session?.terminals?.find((terminal) => terminal.id === id)?.size.cols === 90, 'the listed size');
     socket.close();
 
     await store.actions.closeTerminal(id);
-    await waitFor(() => !store.snapshot().thread?.terminals?.some((terminal) => terminal.id === id), 'the terminal to end');
-    expect(store.snapshot().thread?.terminals?.map((terminal) => terminal.id)).toEqual([other.id]);
+    await waitFor(() => !store.snapshot().session?.terminals?.some((terminal) => terminal.id === id), 'the terminal to end');
+    expect(store.snapshot().session?.terminals?.map((terminal) => terminal.id)).toEqual([other.id]);
   }, 60_000);
 });

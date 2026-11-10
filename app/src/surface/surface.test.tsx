@@ -1,9 +1,11 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppActions, AppController, OpenThread } from '@/app/app-controller';
+import { type AppActions, type AppController, type OpenThread, sessionKey } from '@/app/app-controller';
 import { type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
 import { AppShell } from '@/components/app-shell';
+import { threadBlock } from '@/session/blocks';
+import { firstLayout } from '@/session/layout';
 import { SurfaceApp } from './surface-app';
 import type { SurfaceEnd, SurfaceLink, SurfaceStatus } from './surface-link';
 import type { FromSurface, ToSurface } from './surface-messages';
@@ -38,6 +40,10 @@ const actions = (): AppActions => ({
   attachTerminal: vi.fn(),
 });
 
+/** The Session the threads are in, with the first of them in its one pane. */
+const SESSION = sessionKey('h', '/work/project');
+const LAYOUT = firstLayout([threadBlock('main', 'b-main')], { id: 'tab-1' });
+
 const controller = (thread: OpenThread | undefined, handlers: AppActions): AppController => ({
   model: {
     dispatcher: { id: 'd', name: 'homelab', url: 'wss://homelab', status: 'connected' },
@@ -55,6 +61,7 @@ const controller = (thread: OpenThread | undefined, handlers: AppActions): AppCo
     agents: {},
     selectedKey: thread?.key,
     thread,
+    ...(thread ? { session: { key: SESSION, hostId: 'h', directory: '/work/project', layout: LAYOUT, saved: true, terminals: [] }, open: { [thread.key]: thread } } : {}),
     unread: new Set(),
   },
   actions: handlers,
@@ -139,6 +146,7 @@ describe('a Surface', () => {
     await waitFor(() => expect(onSurface.getByText('Counting the files now. 42 so far.')).toBeInTheDocument());
 
     // Back to the list: the thread stays on the Surface, dimmed, and the iPhone stands up again.
+    await userEvent.setup().click(onPhone.getByRole('button', { name: 'Sessions' }));
     phone.rerender(<AppShell controller={controller(undefined, handlers)} surfaceLink={link} />);
     await waitFor(() => expect(surface.container.querySelector('[data-slot="surface"]')).toHaveAttribute('data-dimmed', 'true'));
     expect(onSurface.getByText('Counting the files now. 42 so far.')).toBeInTheDocument();

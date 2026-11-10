@@ -1,7 +1,9 @@
 // The Host store against a scripted Dispatcher and Host, for what a dev Host can't produce on
 // demand, such as a newer version of an agent being out, or what the Dispatcher says of a Host.
 import { describe, expect, it } from 'vitest';
-import { threadKey } from '@/app/app-controller';
+import { sessionKey, threadKey } from '@/app/app-controller';
+import { threadBlock, threadOf } from '@/session/blocks';
+import { layoutBlocks, placeBlock } from '@/session/layout';
 import { blocksText } from '@/chat/acp-transcript';
 import type { TransportEvents } from './connection';
 import { APP_PROTOCOL } from './connection';
@@ -766,7 +768,7 @@ describe('HostStore terminals', () => {
   });
   const terminal = (id: string, extra: Record<string, unknown> = {}) => ({ id, scope: '/work', size: { cols: 80, rows: 24 }, startedAt: 1, ...extra });
 
-  it("lists the open thread's terminals and keeps them up to date, until it's left", async () => {
+  it("lists the Session on screen's terminals and keeps them up to date, until it's left", async () => {
     const host = scriptedHost(() => [], {
       'host/hello': hello([HOST_PROTOCOL.features.terminals]),
       'terminals/watch': () => ({ result: { scope: '/work', terminals: [terminal('t-1', { openedFrom: THREAD, command: { running: true, command: 'cargo test' } })] } }),
@@ -776,11 +778,12 @@ describe('HostStore terminals', () => {
     });
     const store = storeFor(host.socket);
     await store.start();
+    store.actions.selectSession?.(sessionKey(HOST, '/work'));
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
     expect(store.snapshot().hosts[0].canTerminals).toBe(true);
     expect(host.params['terminals/watch']).toEqual([{ directory: '/work' }]);
-    expect(store.snapshot().thread?.terminals).toEqual([
+    expect(store.snapshot().session?.terminals).toEqual([
       { id: 't-1', scope: '/work', openedFrom: THREAD, size: { cols: 80, rows: 24 }, command: { running: true, command: 'cargo test' }, startedAt: 1 },
     ]);
 
@@ -789,28 +792,33 @@ describe('HostStore terminals', () => {
     host.notify('terminals/updated', { terminal: terminal('t-1', { command: { running: false, exitCode: 1 } }) });
     host.notify('terminals/updated', { terminal: { ...terminal('t-9'), scope: '/elsewhere' } });
     await settle();
-    expect(store.snapshot().thread?.terminals?.map(({ id, title, command }) => ({ id, title, command }))).toEqual([
+    expect(store.snapshot().session?.terminals?.map(({ id, title, command }) => ({ id, title, command }))).toEqual([
       { id: 't-1', title: undefined, command: { running: false, exitCode: 1 } },
       { id: 't-2', title: 'nvim', command: undefined },
     ]);
     host.notify('terminals/removed', { id: 't-1', scope: '/work', exitCode: 0 });
     await settle();
-    expect(store.snapshot().thread?.terminals?.map(({ id }) => id)).toEqual(['t-2']);
+    expect(store.snapshot().session?.terminals?.map(({ id }) => id)).toEqual(['t-2']);
 
-    // A new one is the open thread's, in its directory.
+    // A new one is the Session's, in its directory, opened from the thread in front.
     expect(await store.actions.newTerminal()).toBe('t-3');
     expect(host.params['terminals/new']).toEqual([{ directory: '/work', openedFrom: THREAD }]);
-    expect(store.snapshot().thread?.terminals?.map(({ id }) => id)).toEqual(['t-2', 't-3']);
+    expect(store.snapshot().session?.terminals?.map(({ id }) => id)).toEqual(['t-2', 't-3']);
     // Its stream is on the Host's own listener.
     expect(await store.actions.attachTerminal('t-3')).toEqual({ url: 'wss://homelab', ticket: 'k2Vx', carry: { dispatcherId: DISPATCHER_ID, deviceId: 'd-1', keyId: 'k', host: HOST } });
     await store.actions.renameTerminal('t-3', '  tests ');
-    expect(store.snapshot().thread?.terminals?.find(({ id }) => id === 't-3')?.label).toBe('tests');
+    expect(store.snapshot().session?.terminals?.find(({ id }) => id === 't-3')?.label).toBe('tests');
     await store.actions.renameTerminal('t-3', '');
     expect(host.params['terminals/setLabel']).toEqual([{ id: 't-3', label: 'tests' }, { id: 't-3' }]);
 
+    // Leaving the thread keeps them; leaving the Session lets them go.
     store.actions.selectThread(undefined);
     await settle();
+    expect(host.asked).not.toContain('terminals/unwatch');
+    store.actions.selectSession?.(undefined);
+    await settle();
     expect(host.params['terminals/unwatch']).toEqual([{ scope: '/work' }]);
+    expect(store.snapshot().session).toBeUndefined();
     store.stop();
   });
 
@@ -818,11 +826,11 @@ describe('HostStore terminals', () => {
     const host = scriptedHost(() => []);
     const store = storeFor(host.socket);
     await store.start();
-    store.actions.selectThread(threadKey(HOST, THREAD));
+    store.actions.selectSession?.(sessionKey(HOST, '/work'));
     await settle();
     expect(host.asked).not.toContain('terminals/watch');
     expect(store.snapshot().hosts[0].canTerminals).toBeUndefined();
-    expect(store.snapshot().thread).not.toHaveProperty('terminals');
+    expect(store.snapshot().session).not.toHaveProperty('terminals');
     store.stop();
   });
 
@@ -844,5 +852,167 @@ describe('HostStore terminals', () => {
       .toBe('A terminal in it is running a command. Let it finish, or stop it, first.');
     expect(await removal({ threads: [THREAD], terminals: ['t-1'] }))
       .toBe('A thread in it is running a turn or waiting on you, and a terminal in it is running a command. Let them finish, or stop them, first.');
+  });
+});
+
+describe('HostStore Sessions', () => {
+  const hello = (features: string[]) => () => ({
+    result: { protocol: 3, clientId: 'c1', host: { id: HOST, version: '0', pid: 1, startedAt: 0 }, features, acp: { protocolVersion: 1 }, device: { id: 'd-1', name: 'iPad' } },
+  });
+  const KEY = sessionKey(HOST, '/work');
+  const blocks = (store: HostStore) => layoutBlocks(store.snapshot().session!.layout).map((block) => threadOf(block) ?? block.type);
+
+  /** A Host that keeps Sessions: it saves what's set under the next revision, unless told to conflict. */
+  const sessionsHost = (kept: { revision: number; layout?: unknown } = { revision: 0 }) => {
+    const conflicts = { next: 0 };
+    const host = scriptedHost(() => [], {
+      'host/hello': hello([HOST_PROTOCOL.features.sessions]),
+      'sessions/watch': () => ({ result: { sessions: kept.revision > 0 || kept.layout ? [{ directory: '/work', revision: kept.revision, layout: kept.layout ?? null, createdAt: 1, threads: [THREAD], terminals: [] }] : [] } }),
+      'sessions/get': () => ({ result: { session: { directory: '/work', revision: kept.revision, layout: kept.layout ?? null, createdAt: 1 } } }),
+      'sessions/set': (params) => {
+        const { layout, ifRevision } = params as { layout: unknown; ifRevision?: number };
+        if (conflicts.next > 0 || (ifRevision !== undefined && ifRevision !== kept.revision)) {
+          conflicts.next = Math.max(0, conflicts.next - 1);
+          return { error: { code: HOST_PROTOCOL.errors.revisionConflict, message: 'another client saved first', data: { revision: kept.revision } } };
+        }
+        kept.revision += 1;
+        kept.layout = layout;
+        return { result: { session: { directory: '/work', revision: kept.revision, layout, createdAt: 1, updatedAt: 2 } } };
+      },
+    });
+    return { host, kept, conflicts };
+  };
+
+  it('shows a Session its Host keeps no layout for as its open threads in one pane, and saves it once changed', async () => {
+    const { host, kept } = sessionsHost();
+    const store = storeFor(host.socket);
+    await store.start();
+    store.actions.selectSession?.(KEY);
+    await settle();
+    expect(host.asked).toContain('sessions/watch');
+    expect(store.snapshot().session).toMatchObject({ key: KEY, hostId: HOST, directory: '/work', saved: false });
+    expect(blocks(store)).toEqual([THREAD]);
+    expect(host.asked).not.toContain('sessions/set');
+
+    // The same Blocks, however often it's read: a Block's id is its own from the first.
+    const first = store.snapshot().session!.layout;
+    store.actions.selectThread(threadKey(HOST, THREAD));
+    await settle();
+    expect(store.snapshot().session!.layout).toEqual(first);
+
+    store.actions.updateLayout?.(KEY, (layout) => placeBlock(layout, threadBlock('s-2', 'b-2'), { beside: layoutBlocks(layout)[0].id, side: 'right' }));
+    // Here at once, and on the Host under the revision it was made on.
+    expect(blocks(store)).toEqual([THREAD, 's-2']);
+    await settle();
+    expect(host.params['sessions/set']).toEqual([{ directory: '/work', layout: kept.layout, ifRevision: 0 }]);
+    expect(store.snapshot().session).toMatchObject({ saved: true });
+    expect(store.snapshot().known).toEqual([{ hostId: HOST, directory: '/work', threads: [], updatedAt: 2 }]);
+    store.stop();
+  });
+
+  it("takes another device's layout, and makes its own change again on top of one saved first", async () => {
+    const { host, kept, conflicts } = sessionsHost();
+    const store = storeFor(host.socket);
+    await store.start();
+    store.actions.selectSession?.(KEY);
+    await settle();
+    const own = layoutBlocks(store.snapshot().session!.layout)[0];
+
+    // Another device arranged it: this one shows that.
+    const theirs = { version: 1, tabs: [{ id: 't', root: { kind: 'stack', children: [own, threadBlock('s-9', 'b-9')] } }] };
+    kept.revision = 4;
+    kept.layout = theirs;
+    host.notify('sessions/updated', { session: { directory: '/work', revision: 4, layout: theirs, createdAt: 1 } });
+    await settle();
+    expect(blocks(store)).toEqual([THREAD, 's-9']);
+
+    // It saves again before this device's change arrives: the change is made on what it saved.
+    const newer = { version: 1, tabs: [{ id: 't', root: { kind: 'stack', children: [own, threadBlock('s-9', 'b-9'), threadBlock('s-10', 'b-10')] } }] };
+    kept.revision = 5;
+    kept.layout = newer;
+    store.actions.updateLayout?.(KEY, (layout) => placeBlock(layout, threadBlock('s-2', 'b-2'), { into: own.id }));
+    expect(blocks(store)).toEqual([THREAD, 's-2', 's-9']);
+    await settle();
+    expect(host.params['sessions/set'].map((params) => (params as { ifRevision: number }).ifRevision)).toEqual([4, 5]);
+    expect(host.asked.filter((method) => method === 'sessions/get')).toHaveLength(1);
+    expect(blocks(store)).toEqual([THREAD, 's-2', 's-9', 's-10']);
+    expect(conflicts.next).toBe(0);
+
+    // The Session ends, as with its worktree: it shows as its threads place it again.
+    host.notify('sessions/ended', { directory: '/work' });
+    await settle();
+    expect(store.snapshot().known).toEqual([]);
+    expect(blocks(store)).toEqual([THREAD]);
+    store.stop();
+  });
+
+  it('keeps a layout to itself on a Host from before Sessions', async () => {
+    const host = scriptedHost(() => []);
+    const store = storeFor(host.socket);
+    await store.start();
+    store.actions.selectSession?.(KEY);
+    await settle();
+    expect(host.asked).not.toContain('sessions/watch');
+    store.actions.updateLayout?.(KEY, (layout) => placeBlock(layout, threadBlock('s-2', 'b-2'), { tab: layout.tabs[0].id }));
+    await settle();
+    expect(blocks(store)).toEqual([THREAD, 's-2']);
+    expect(host.asked).not.toContain('sessions/set');
+    expect(store.snapshot().session?.saved).toBe(false);
+    store.stop();
+  });
+
+  it('follows every thread on screen, acts in the one named, and leaves those no longer there', async () => {
+    const other = 's-2';
+    const host = scriptedHost(() => [], {
+      'threads/list': () => ({ result: { threads: [THREAD, other].map((id) => ({ info: { sessionId: id, cwd: '/work' }, agentId: 'claude', state: 'open', activity: 'idle', clients: 1, headless: false })) } }),
+      'thread/attach': (params) => ({ result: { threadId: (params as { threadId: string }).threadId, agent: { id: 'claude', name: 'Claude', initialize: { protocolVersion: 1 } }, cwd: '/work', state: 'open', activity: 'idle', clients: 1, blank: false, policy: {}, journal: { id: 'j', head: 0 }, replay: { from: 1, reset: true } } }),
+    });
+    const store = storeFor(host.socket);
+    await store.start();
+    const [first, second] = [threadKey(HOST, THREAD), threadKey(HOST, other)];
+    store.actions.showThreads?.([first, second], first);
+    await settle();
+    expect(host.params['thread/attach'].map((params) => (params as { threadId: string }).threadId)).toEqual([THREAD, other]);
+    expect(Object.keys(store.snapshot().open ?? {})).toEqual([first, second]);
+    expect(store.snapshot().selectedKey).toBe(first);
+    expect(store.snapshot().thread?.key).toBe(first);
+
+    // In the thread named, not the one in front.
+    await store.actions.forThread?.(second).cancelTurn();
+    await store.actions.cancelTurn();
+    expect(host.params['turn/cancel']).toEqual([{ threadId: other }, { threadId: THREAD }]);
+
+    // The same threads again attaches nothing; one fewer leaves it.
+    store.actions.showThreads?.([first, second], second);
+    await settle();
+    expect(host.params['thread/attach']).toHaveLength(2);
+    expect(store.snapshot().selectedKey).toBe(second);
+    store.actions.showThreads?.([second], second);
+    await settle();
+    expect(host.params['thread/detach']).toEqual([{ threadId: THREAD, close: 'never' }]);
+    expect(Object.keys(store.snapshot().open ?? {})).toEqual([second]);
+    store.stop();
+  });
+
+  it("lists the person's Projects from a Dispatcher that keeps them", async () => {
+    const host = scriptedHost(() => [], {
+      'dispatcher/hello': () => ({ result: { protocol: DISPATCHER.protocol, version: '0', id: DISPATCHER_ID, device: { id: 'd-1', name: 'iPad' }, features: [DISPATCHER.features.projects] } }),
+      'projects/list': () => ({ result: { projects: [{ id: 'p-1', name: 'weave', kind: 'git', locations: [{ hostId: HOST, path: '/work' }], createdAt: 1, updatedAt: 1 }] } }),
+    });
+    const store = storeFor(host.socket);
+    await store.start();
+    await settle();
+    expect(host.askedDispatcher).toContain('projects/list');
+    expect(store.snapshot().projects).toEqual([{ id: 'p-1', name: 'weave', locations: [{ hostId: HOST, path: '/work' }] }]);
+    store.stop();
+
+    // One that doesn't isn't asked.
+    const plain = scriptedHost(() => []);
+    const without = storeFor(plain.socket);
+    await without.start();
+    await settle();
+    expect(plain.askedDispatcher).not.toContain('projects/list');
+    expect(without.snapshot()).not.toHaveProperty('projects');
+    without.stop();
   });
 });

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Folder01Icon, GitBranchIcon, UnfoldMoreIcon } from '@hugeicons/core-free-icons';
-import type { AppController, RepositoryListing, WorktreeSummary } from '@/app/app-controller';
+import type { AppController, CreatedThread, RepositoryListing, WorktreeSummary } from '@/app/app-controller';
 import { knownDirectories } from '@/app/thread-list';
 import { DirectoryPicker } from '@/components/directory-picker';
 import { WorktreePicker } from '@/components/worktree-picker';
@@ -72,10 +72,12 @@ function PickerField({ id, icon, title, onOpen, children }: {
  * agent. In a git repository, on a Host that manages worktrees, it can start in another of its
  * worktrees, or in one it creates on a branch of its own.
  */
-export function NewThreadDialog({ controller, target, onClose }: {
+export function NewThreadDialog({ controller, target, onClose, onCreated }: {
   controller: AppController;
   target?: NewThreadTarget;
   onClose(): void;
+  /** The thread it started, and the Session it's in, before it closes. */
+  onCreated?(created: CreatedThread): void;
 }) {
   const { model, actions } = controller;
   const connected = model.hosts.filter(({ status }) => status === 'connected');
@@ -152,7 +154,8 @@ export function NewThreadDialog({ controller, target, onClose }: {
     setError(undefined);
     setStarting(true);
     try {
-      await actions.createThread({ hostId, cwd: repository && place !== HERE ? place : cwd, agentId });
+      const created = await actions.createThread({ hostId, cwd: repository && place !== HERE ? place : cwd, agentId });
+      if (created) onCreated?.(created);
       onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

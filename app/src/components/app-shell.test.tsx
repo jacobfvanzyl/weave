@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { requestOpenThread } from '@/app/open-thread';
 import { type MockScenario, useMockController } from '@/app/use-mock-controller';
 import { AppShell } from './app-shell';
 
@@ -13,64 +14,41 @@ const setIdiom = (idiom?: 'phone' | 'pad') => {
   else delete document.documentElement.dataset.deviceIdiom;
 };
 
+// Each test starts with no Session this device last showed.
+beforeEach(() => localStorage.clear());
 afterEach(() => setIdiom());
 
-describe('the thread list', () => {
-  it('groups threads by Host, then directory or repository, naming each one\u2019s agent and branch', () => {
+/** A Session's tile in the list: its name, then where it is. */
+const tile = (name: RegExp) => screen.getByRole('button', { name });
+
+describe('the list of Sessions', () => {
+  it('puts a Project’s Sessions together with their Host and branch, and the rest under their Hosts', () => {
     setIdiom('phone');
     render(<MockApp />);
-    const mac = screen.getByRole('group', { name: 'mac' });
-    const weave = within(mac).getByRole('group', { name: 'weave' });
-    // A repository's threads list together, across its worktrees, with the branch after the agent.
-    expect(within(weave).getByRole('button', { name: /Fix the flaky reconnect test.*Claude\s*· fix-reconnect/ })).toBeInTheDocument();
-    expect(within(weave).getByRole('button', { name: /^Steer handling in the TUI.*Claude\s*· main \/ tui/ })).toBeInTheDocument();
-    const build = screen.getByRole('group', { name: 'build' });
-    expect(within(build).getByRole('group', { name: 'odin' })).toBeInTheDocument();
-    // Waiting threads stay in place, marked on their tile.
-    expect(within(weave).getByRole('img', { name: 'Waiting for you' })).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: 'Needs you' })).not.toBeInTheDocument();
-  });
-
-  it('closes or deletes a thread from its row, without opening it', async () => {
-    setIdiom('pad');
-    const user = userEvent.setup();
-    render(<MockApp />);
-    const row = () => screen.queryByRole('button', { name: /^Steer handling in the TUI/ });
-    await user.pointer({ keys: '[MouseRight]', target: row()! });
-    const menu = await screen.findByRole('menu');
-    await user.click(within(menu).getByRole('menuitem', { name: 'Close thread' }));
-    expect(row()).not.toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'Steer handling in the TUI' })).not.toBeInTheDocument();
-
-    // Closed, it offers only Delete, confirmed.
-    await user.click(screen.getByRole('button', { name: 'Show closed' }));
-    await user.pointer({ keys: '[MouseRight]', target: row()! });
-    const closedMenu = await screen.findByRole('menu');
-    expect(within(closedMenu).queryByRole('menuitem', { name: 'Close thread' })).not.toBeInTheDocument();
-    await user.click(within(closedMenu).getByRole('menuitem', { name: 'Delete thread…' }));
-    const confirm = await screen.findByRole('alertdialog', { name: 'Delete Steer handling in the TUI?' });
-    await user.click(within(confirm).getByRole('button', { name: 'Delete' }));
-    await waitFor(() => expect(row()).not.toBeInTheDocument());
-  });
-
-  it('hides closed threads until asked', async () => {
-    setIdiom('phone');
-    const user = userEvent.setup();
-    render(<MockApp />);
-    expect(screen.queryByText('Pencil hover')).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Show closed' }));
-    expect(screen.getByText('Pencil hover')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Hide closed' }));
-    expect(screen.queryByText('Pencil hover')).not.toBeInTheDocument();
-  });
-
-  it('filters threads', async () => {
-    setIdiom('phone');
-    const user = userEvent.setup();
-    render(<MockApp />);
-    await user.type(screen.getByRole('searchbox', { name: 'Filter threads' }), 'odin');
-    expect(screen.getByText('Diagnose upload failures')).toBeInTheDocument();
+    const weave = screen.getByRole('group', { name: 'weave' });
+    // The repository's worktrees are a Session each, whichever directory in them a thread runs in.
+    expect(within(weave).getByRole('button', { name: /weave.*mac · main/ })).toBeInTheDocument();
+    const reconnect = within(weave).getByRole('button', { name: /weave.*mac · fix-reconnect/ });
+    // A thread waiting on the person marks its Session's tile.
+    expect(within(reconnect).getByRole('img', { name: 'Waiting for you' })).toBeInTheDocument();
+    expect(reconnect).toHaveTextContent('1 waiting on you');
+    // Nothing of the Mac's is outside the Project; the other Host's directory is in none.
+    expect(within(screen.getByRole('group', { name: 'mac' })).getByText('Nothing outside your Projects')).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'build' })).getByRole('button', { name: /^odin.*\/srv\/odin/ })).toBeInTheDocument();
+    // Threads aren't listed: a Session's are inside it.
     expect(screen.queryByText('Bring Alpha back')).not.toBeInTheDocument();
+  });
+
+  it('filters Sessions', async () => {
+    setIdiom('phone');
+    const user = userEvent.setup();
+    render(<MockApp />);
+    await user.type(screen.getByRole('searchbox', { name: 'Filter Sessions' }), 'odin');
+    expect(tile(/^odin/)).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'weave' })).not.toBeInTheDocument();
+    await user.clear(screen.getByRole('searchbox', { name: 'Filter Sessions' }));
+    await user.type(screen.getByRole('searchbox', { name: 'Filter Sessions' }), 'reconnect');
+    expect(within(screen.getByRole('group', { name: 'weave' })).getAllByRole('button')).toHaveLength(1);
   });
 
   it('shows the pairing screen until the app is paired with the Dispatcher, then the list', async () => {
@@ -78,7 +56,7 @@ describe('the thread list', () => {
     const user = userEvent.setup();
     render(<MockApp scenario='unpaired' />);
     expect(screen.getByRole('heading', { name: 'Pair with your Dispatcher' })).toBeInTheDocument();
-    expect(screen.queryByRole('searchbox', { name: 'Filter threads' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('searchbox', { name: 'Filter Sessions' })).not.toBeInTheDocument();
     await user.type(screen.getByLabelText('URL'), 'wss://homelab.example.ts.net:7342');
     await user.type(screen.getByLabelText('Code'), 'ABCD');
     await user.click(screen.getByRole('button', { name: 'Pair' }));
@@ -98,100 +76,275 @@ describe('the thread list', () => {
     render(<MockApp scenario='offline' />);
     const banner = screen.getByRole('alert');
     expect(banner).toHaveTextContent("Can't reach the Dispatcher on homelab");
-    expect(screen.getByRole('group', { name: 'mac' })).toHaveAttribute('data-away', 'true');
-    expect(screen.getByText('Diagnose upload failures')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'build' })).toHaveAttribute('data-away', 'true');
+    expect(tile(/^odin/)).toBeInTheDocument();
     await user.click(within(banner).getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
-    expect(screen.getByRole('group', { name: 'mac' })).not.toHaveAttribute('data-away');
+    expect(screen.getByRole('group', { name: 'build' })).not.toHaveAttribute('data-away');
   });
 
-  it("says why the Dispatcher can't reach a Host, on its row", () => {
+  it("says why the Dispatcher can't reach a Host, under its name", () => {
     setIdiom('pad');
     render(<MockApp scenario='unreachable' />);
     expect(within(screen.getByRole('group', { name: 'build' })).getByText(/hasn't connected to the Dispatcher/)).toBeInTheDocument();
   });
 
-  it('starts a thread in a directory from its heading', async () => {
-    setIdiom('phone');
+  it('starts a thread on a Host from its heading, which opens the directory’s Session with the thread in it', async () => {
+    setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
-    await user.click(screen.getByRole('button', { name: 'New thread in odin' }));
+    await user.click(screen.getByRole('button', { name: 'New thread on build' }));
     const form = screen.getByRole('form', { name: 'New thread' });
-    expect(within(form).getByRole('button', { name: 'Directory' })).toHaveAttribute('title', '/srv/odin');
     await user.selectOptions(within(form).getByLabelText('Agent'), 'Codex');
     await user.click(within(form).getByRole('button', { name: 'Start' }));
     const thread = await screen.findByRole('region', { name: 'New thread' });
     expect(within(thread).getByText('Codex')).toBeInTheDocument();
+    // In its directory's Session, in a pane of its own.
+    const session = screen.getByRole('region', { name: 'Session odin' });
+    expect(within(within(session).getByRole('tablist', { name: 'Blocks in this pane' })).getByRole('tab', { name: 'New thread' })).toHaveAttribute('aria-selected', 'true');
+    expect(tile(/^odin/)).toHaveAttribute('aria-current', 'page');
   });
 });
 
-describe('worktrees', () => {
-  it('starts a thread in a new worktree from a repository\u2019s heading, and removes the worktree from its thread', async () => {
+describe('a Session nobody arranged', () => {
+  it('shows its open threads in one pane, the most recent in front, and its closed ones and terminals as not shown', async () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
-    await user.click(screen.getByRole('button', { name: 'New thread in weave' }));
-    const form = screen.getByRole('form', { name: 'New thread' });
-    await user.click(await within(form).findByRole('button', { name: 'Worktree' }));
-    const listed = within(screen.getByRole('list', { name: 'Worktrees' })).getAllByRole('button');
-    expect(listed.map(({ textContent }) => textContent)).toEqual([
-      'mainweave · 6 threads',
-      'fix-reconnectweave.fix-reconnect · changed · 1 thread',
+    expect(screen.getByText('No Session open')).toBeInTheDocument();
+    await user.click(tile(/weave.*mac · main/));
+    const session = screen.getByRole('region', { name: 'Session weave' });
+    const pane = within(session).getByRole('group', { name: 'Pane, Bring Alpha back' });
+    const strip = within(pane).getByRole('tablist', { name: 'Blocks in this pane' });
+    expect(within(strip).getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Bring Alpha back', 'Update the Host protocol spec', 'Steer handling in the TUI', 'Nightly dependency check', 'USB transport latency',
     ]);
-    await user.type(screen.getByRole('textbox', { name: 'Branch' }), 'feature/auth');
-    await user.click(screen.getByRole('button', { name: 'Create worktree' }));
-    expect(await within(form).findByRole('button', { name: 'Worktree' })).toHaveTextContent('feature/authweave.feature-auth');
-    await user.click(within(form).getByRole('button', { name: 'Start' }));
-    await screen.findByRole('region', { name: 'New thread' });
-    const weave = within(screen.getByRole('group', { name: 'mac' })).getByRole('group', { name: 'weave' });
-    const row = within(weave).getByRole('button', { name: /^New thread.*· feature\/auth/ });
+    expect(within(pane).getByRole('region', { name: 'Bring Alpha back' })).toBeInTheDocument();
+    expect(within(pane).getByRole('textbox', { name: 'Message agent' })).toBeInTheDocument();
+    // The list stays beside it.
+    expect(screen.getByRole('group', { name: 'build' })).toBeInTheDocument();
 
-    await user.pointer({ keys: '[MouseRight]', target: row });
-    const menu = await screen.findByRole('menu');
-    await user.click(within(menu).getByRole('menuitem', { name: 'Remove worktree…' }));
-    const confirm = await screen.findByRole('alertdialog', { name: 'Remove weave.feature-auth?' });
-    expect(confirm).toHaveTextContent('feature/auth is deleted too if it\u2019s merged');
-    await user.click(within(confirm).getByRole('button', { name: 'Remove' }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: /· feature\/auth/ })).not.toBeInTheDocument());
+    // Another Block of the pane comes to the front.
+    await user.click(within(strip).getByRole('tab', { name: 'Steer handling in the TUI' }));
+    expect(within(session).getByRole('region', { name: 'Steer handling in the TUI' })).toBeInTheDocument();
+    expect(within(session).queryByRole('region', { name: 'Bring Alpha back' })).not.toBeInTheDocument();
+
+    // Its terminals have no Block yet, and its closed thread opens again from the same place.
+    await user.click(within(session).getByRole('button', { name: 'Show a thread or terminal, 3 not shown' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Show a thread or terminal' });
+    const hidden = within(dialog).getByRole('group', { name: 'Not shown' });
+    expect(within(hidden).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      expect.stringContaining('tests'), expect.stringContaining('nvim protocol/src/terminals.rs'), expect.stringContaining('app'),
+    ]);
+    expect(within(within(dialog).getByRole('group', { name: 'Closed threads' })).getByRole('button', { name: /Pencil hover/ })).toBeInTheDocument();
   });
 
-  it('keeps a worktree while one of its threads waits on the person, and the primary one always', async () => {
-    setIdiom('pad');
+  it('shows one Block at a time on an iPhone, its tab’s Blocks as a row to pick from, with Back to the list', async () => {
+    setIdiom('phone');
     const user = userEvent.setup();
     render(<MockApp />);
-    await user.pointer({ keys: '[MouseRight]', target: screen.getByRole('button', { name: /Fix the flaky reconnect test/ }) });
-    await user.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Remove worktree…' }));
-    const confirm = await screen.findByRole('alertdialog', { name: 'Remove weave.fix-reconnect?' });
-    await user.click(within(confirm).getByRole('button', { name: 'Remove' }));
-    expect(await within(confirm).findByRole('alert')).toHaveTextContent('waiting on you');
-    await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
-
-    // A thread in the repository's own checkout offers no removal.
-    await user.pointer({ keys: '[MouseRight]', target: screen.getByRole('button', { name: /^Steer handling in the TUI/ }) });
-    expect(await screen.findByRole('menuitem', { name: 'Close thread' })).toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: 'Remove worktree…' })).not.toBeInTheDocument();
+    await user.click(tile(/weave.*mac · main/));
+    expect(screen.queryByRole('group', { name: 'build' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Bring Alpha back' })).toBeInTheDocument();
+    expect(screen.getByLabelText('1 other client attached')).toBeInTheDocument();
+    const row = screen.getByRole('tablist', { name: 'Blocks in this tab' });
+    expect(within(row).getAllByRole('tab')).toHaveLength(5);
+    await user.click(within(row).getByRole('tab', { name: 'USB transport latency' }));
+    expect(screen.getByRole('region', { name: 'USB transport latency' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Bring Alpha back' })).not.toBeInTheDocument();
+    // Back counts the other Sessions with something waiting.
+    await user.click(screen.getByRole('button', { name: 'Sessions, 1 waiting' }));
+    expect(screen.getByRole('group', { name: 'build' })).toBeInTheDocument();
   });
 });
 
-describe('on an iPhone', () => {
-  it('stacks the thread over the list, with Back counting the other waiting threads', async () => {
-    setIdiom('phone');
+describe('a Session someone arranged', () => {
+  const open = () => {
+    setIdiom('pad');
+    render(<MockApp scenario='session' />);
+    return screen.getByRole('region', { name: 'Session weave' });
+  };
+
+  it('lays its tabs out as panes: split, stacked and floating, with a terminal as text where none draw', async () => {
     const user = userEvent.setup();
-    render(<MockApp />);
-    await user.click(screen.getByText('Bring Alpha back'));
-    expect(screen.queryByRole('group', { name: 'mac' })).not.toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Bring Alpha back' })).toBeInTheDocument();
-    expect(screen.getByRole('textbox', { name: 'Message agent' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Threads, 1 waiting' }));
-    expect(screen.getByRole('group', { name: 'mac' })).toBeInTheDocument();
+    const session = open();
+    const tabs = within(session).getByRole('tablist', { name: 'Tabs' });
+    expect(within(tabs).getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Update the Host protocol spec', 'Notes']);
+    // A row of a stacked pane and a column of two, and a terminal floating over them.
+    expect(within(session).getByRole('group', { name: 'Pane, Update the Host protocol spec' })).toBeInTheDocument();
+    const tests = within(session).getByRole('group', { name: 'Pane, tests' });
+    expect(within(tests).getByText('cargo: Testing (60%).')).toBeInTheDocument();
+    expect(within(tests).getByText(/doesn't draw terminals yet/)).toBeInTheDocument();
+    expect(within(session).getByRole('group', { name: 'Pane, Bring Alpha back' })).toBeInTheDocument();
+    expect(within(session).getByRole('group', { name: 'Floating, app' })).toBeInTheDocument();
+    expect(within(session).getAllByRole('separator', { name: 'Resize panes' })).toHaveLength(2);
+    // Both threads on screen are followed at once, each with its own composer.
+    expect(within(session).getAllByRole('textbox', { name: 'Message agent' })).toHaveLength(2);
+
+    // A Block of a type the app doesn't have shows as its type and props.
+    await user.click(within(tabs).getByRole('tab', { name: 'Notes' }));
+    const unknown = within(session).getByRole('group', { name: 'Pane, weave.browser' });
+    expect(within(unknown).getByText(/"url": "https:\/\/example.com\/docs"/)).toBeInTheDocument();
   });
 
-  it('says how many other clients are attached', async () => {
-    setIdiom('phone');
+  it('acts in the thread a Block shows, not the one in front', async () => {
     const user = userEvent.setup();
-    render(<MockApp />);
-    await user.click(screen.getByText('Bring Alpha back'));
-    expect(screen.getByLabelText('1 other client attached')).toBeInTheDocument();
+    const session = open();
+    const alpha = within(session).getByRole('group', { name: 'Pane, Bring Alpha back' });
+    await user.type(within(alpha).getByRole('textbox', { name: 'Message agent' }), 'Keep going');
+    await user.keyboard('{Enter}');
+    expect(await within(alpha).findByText('Keep going')).toBeInTheDocument();
+    expect(within(within(session).getByRole('group', { name: 'Pane, Update the Host protocol spec' })).queryByText('Keep going')).not.toBeInTheDocument();
+  });
+
+  it('splits a pane with a thread that wasn’t shown, zooms a Block, and moves one to a tab of its own', async () => {
+    const user = userEvent.setup();
+    const session = open();
+    await user.click(within(session).getByRole('button', { name: 'Bring Alpha back Block actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Split right…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Show a thread or terminal' });
+    await user.click(within(dialog).getByRole('button', { name: /Nightly dependency check/ }));
+    const nightly = await within(session).findByRole('group', { name: 'Pane, Nightly dependency check' });
+    expect(within(session).getAllByRole('separator', { name: 'Resize panes' })).toHaveLength(3);
+    expect(nightly).toHaveAttribute('data-focused', 'true');
+
+    // Zoomed, it fills the tab alone; again, and the others are back.
+    await user.click(within(session).getByRole('button', { name: 'Nightly dependency check Block actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Zoom' }));
+    expect(within(session).getAllByRole('group', { name: /^Pane, / })).toHaveLength(1);
+    await user.click(within(session).getByRole('button', { name: 'Nightly dependency check Block actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Unzoom' }));
+    expect(within(session).getAllByRole('group', { name: /^Pane, / })).toHaveLength(4);
+
+    await user.click(within(session).getByRole('button', { name: 'Nightly dependency check Block actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Move to a new tab' }));
+    const tabs = within(session).getByRole('tablist', { name: 'Tabs' });
+    await waitFor(() => expect(within(tabs).getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Update the Host protocol spec', 'Nightly dependency check', 'Notes']));
+    expect(within(tabs).getByRole('tab', { name: 'Nightly dependency check' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('closes the thread with its Block, asking first when a turn runs, and ends a terminal with its', async () => {
+    const user = userEvent.setup();
+    const session = open();
+    // A thread that isn't running closes at once, and goes to the closed threads.
+    await user.click(within(within(session).getByRole('group', { name: 'Pane, Update the Host protocol spec' })).getByRole('tab', { name: 'Steer handling in the TUI' }));
+    await user.click(within(session).getByRole('button', { name: 'Close Steer handling in the TUI' }));
+    expect(within(session).queryByRole('tab', { name: 'Steer handling in the TUI' })).not.toBeInTheDocument();
+    await user.click(within(session).getByRole('button', { name: /^Show a thread or terminal/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Show a thread or terminal' });
+    expect(within(within(dialog).getByRole('group', { name: 'Closed threads' })).getByRole('button', { name: /Steer handling in the TUI/ })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    // One whose turn runs asks first.
+    await user.click(within(session).getByRole('button', { name: 'Close Bring Alpha back' }));
+    const confirm = await screen.findByRole('alertdialog', { name: 'Close Bring Alpha back?' });
+    expect(confirm).toHaveTextContent('Its turn is still running');
+    await user.click(within(confirm).getByRole('button', { name: 'Keep it open' }));
+    expect(within(session).getByRole('group', { name: 'Pane, Bring Alpha back' })).toBeInTheDocument();
+
+    // A terminal with a command running asks too; one that ends is gone, not hidden.
+    await user.click(within(session).getByRole('button', { name: 'Close tests' }));
+    const ending = await screen.findByRole('alertdialog', { name: 'End tests?' });
+    await user.click(within(ending).getByRole('button', { name: 'End terminal' }));
+    await waitFor(() => expect(within(session).queryByRole('group', { name: 'Pane, tests' })).not.toBeInTheDocument());
+    await user.click(within(session).getByRole('button', { name: /^Show a thread or terminal/ }));
+    expect(within(await screen.findByRole('dialog', { name: 'Show a thread or terminal' })).queryByRole('button', { name: /^tests/ })).not.toBeInTheDocument();
+  });
+
+  it('renames a terminal from its Block’s own menu, for every device', async () => {
+    const user = userEvent.setup();
+    const session = open();
+    await user.click(within(session).getByRole('button', { name: 'tests Block actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Rename terminal…' }));
+    const name = await screen.findByRole('textbox', { name: 'Name' });
+    expect(name).toHaveValue('tests');
+    await user.clear(name);
+    await user.type(name, 'suite');
+    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    expect(await within(session).findByRole('group', { name: 'Pane, suite' })).toBeInTheDocument();
+  });
+
+  it('drags the edge between two panes to share their space out again', () => {
+    const session = open();
+    const [edge] = within(session).getAllByRole('separator', { name: 'Resize panes' });
+    const split = edge.parentElement as HTMLElement;
+    split.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 600, right: 1000, bottom: 600, x: 0, y: 0, toJSON: () => ({}) });
+    const shares = () => [...split.children].filter((child) => !child.hasAttribute('role')).map((child) => (child as HTMLElement).style.flex.split(' ')[0]);
+    expect(shares()).toEqual(['0.55', '0.45']);
+    edge.setPointerCapture = () => {};
+    fireEvent.pointerDown(edge, { clientX: 550, pointerId: 1 });
+    fireEvent.pointerMove(edge, { clientX: 300, pointerId: 1 });
+    fireEvent.pointerUp(edge, { clientX: 300, pointerId: 1 });
+    expect(shares()).toEqual(['0.3', '0.7']);
+    // No narrower than a pane can be used at.
+    fireEvent.pointerDown(edge, { clientX: 300, pointerId: 1 });
+    fireEvent.pointerMove(edge, { clientX: 10, pointerId: 1 });
+    fireEvent.pointerUp(edge, { clientX: 10, pointerId: 1 });
+    expect(shares()).toEqual(['0.1', '0.9']);
+  });
+
+  it('names, adds and closes tabs', async () => {
+    const user = userEvent.setup();
+    const session = open();
+    const tabs = within(session).getByRole('tablist', { name: 'Tabs' });
+    await user.click(within(session).getByRole('button', { name: 'Tab actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Rename tab…' }));
+    const name = await screen.findByRole('textbox', { name: 'Name' });
+    await user.type(name, 'Work');
+    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    expect(await within(tabs).findByRole('tab', { name: 'Work' })).toBeInTheDocument();
+
+    await user.click(within(session).getByRole('button', { name: 'Tab actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'New tab' }));
+    expect(await within(tabs).findByRole('tab', { name: 'Empty tab' })).toHaveAttribute('aria-selected', 'true');
+    expect(within(session).getByText('Nothing in this tab')).toBeInTheDocument();
+    // An empty tab closes without asking.
+    await user.click(within(session).getByRole('button', { name: 'Tab actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Close tab' }));
+    await waitFor(() => expect(within(tabs).getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Work', 'Notes']));
+  });
+});
+
+describe('a thread asked for from outside the shell', () => {
+  it('shows in its Session, in front, in a Block of its own if it had none', async () => {
+    setIdiom('pad');
+    render(<MockApp scenario='session' />);
+    const session = () => screen.getByRole('region', { name: /^Session / });
+    // One with a Block, behind another in its pane: brought to the front.
+    act(() => requestOpenThread('host-mac/steer-tui'));
+    expect(await within(session()).findByRole('region', { name: 'Steer handling in the TUI' })).toBeInTheDocument();
+    // One with none: placed in the pane with the keyboard.
+    act(() => requestOpenThread('host-mac/nightly'));
+    expect(await within(session()).findByRole('region', { name: 'Nightly dependency check' })).toBeInTheDocument();
+    expect(within(within(session()).getByRole('group', { name: 'Pane, Nightly dependency check' })).getAllByRole('tab')).toHaveLength(3);
+    // One in another Session: that Session, with the thread.
+    act(() => requestOpenThread('host-server/upload-failures'));
+    expect(await screen.findByRole('region', { name: 'Session odin' })).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'Diagnose upload failures' })).toBeInTheDocument();
+  });
+});
+
+describe('commands', () => {
+  it('run from the palette, and from their keys', async () => {
+    setIdiom('pad');
+    const user = userEvent.setup();
+    render(<MockApp scenario='session' />);
+    const session = screen.getByRole('region', { name: 'Session weave' });
+    const tabs = within(session).getByRole('tablist', { name: 'Tabs' });
+    // The page hears a hardware keyboard's command keys: Ctrl here, ⌘ on Apple's devices.
+    fireEvent.keyDown(window, { code: 'KeyK', ctrlKey: true });
+    const palette = await screen.findByRole('dialog', { name: 'Commands' });
+    await user.type(within(palette).getByRole('combobox', { name: 'Find a command' }), 'new tab');
+    // A menu's own commands first, in the table's order; Return runs the one picked.
+    expect(within(palette).getAllByRole('option').map((option) => option.textContent)).toEqual(['TabNew TabCtrl+T', 'BlockMove to a New Tab']);
+    await user.keyboard('{Enter}');
+    expect(await within(tabs).findByRole('tab', { name: 'Empty tab' })).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.keyDown(window, { code: 'BracketLeft', ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(within(tabs).getByRole('tab', { name: 'Update the Host protocol spec' })).toHaveAttribute('aria-selected', 'true'));
+    // Typing isn't a command.
+    fireEvent.keyDown(window, { code: 'KeyT' });
+    expect(within(tabs).getAllByRole('tab')).toHaveLength(3);
   });
 });
 
@@ -211,22 +364,23 @@ describe('Hosts', () => {
 });
 
 describe('on an iPad', () => {
-  it('shows the list beside one thread', async () => {
+  it('opens on the Session this device last showed', async () => {
     setIdiom('pad');
     const user = userEvent.setup();
+    const { unmount } = render(<MockApp />);
+    await user.click(tile(/^odin/));
+    expect(screen.getByRole('region', { name: 'Session odin' })).toBeInTheDocument();
+    unmount();
     render(<MockApp />);
-    expect(screen.getByText('No thread open')).toBeInTheDocument();
-    await user.click(screen.getByText('Diagnose upload failures'));
-    expect(screen.getByRole('region', { name: 'Diagnose upload failures' })).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'mac' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Session odin' })).toBeInTheDocument();
+    expect(tile(/^odin/)).toHaveAttribute('aria-current', 'page');
   });
 
   it('drags the list\'s edge, or moves it with the arrow keys, and keeps the width', async () => {
     setIdiom('pad');
-    localStorage.clear();
     const user = userEvent.setup();
     const { unmount } = render(<MockApp />);
-    const edge = () => screen.getByRole('separator', { name: 'Resize threads' });
+    const edge = () => screen.getByRole('separator', { name: 'Resize Sessions' });
     expect(edge()).toHaveAttribute('aria-valuenow', '256');
 
     // The list ends where the pointer is.
@@ -257,7 +411,7 @@ describe('on an iPad', () => {
 });
 
 describe('a thread that starts waiting off screen', () => {
-  it('raises a banner that opens it', async () => {
+  it('raises a banner that shows it, in its Session', async () => {
     setIdiom('phone');
     const user = userEvent.setup();
     render(<MockApp scenario='banner' bannerMs={20} />);
@@ -265,7 +419,8 @@ describe('a thread that starts waiting off screen', () => {
     expect(within(banner).getByText('Bring Alpha back needs you')).toBeInTheDocument();
     expect(within(banner).getByText('Permission to edit app/src/App.tsx')).toBeInTheDocument();
     await user.click(within(banner).getByText('Bring Alpha back needs you'));
-    expect(screen.getByRole('region', { name: 'Bring Alpha back' })).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'Session weave' })).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'Bring Alpha back' })).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('Bring Alpha back needs you')).not.toBeInTheDocument());
   });
 
@@ -282,7 +437,7 @@ describe('the composer in a running thread', () => {
     setIdiom('phone');
     const user = userEvent.setup();
     render(<MockApp scenario='running' turnMs={50} />);
-    const queued = screen.getByRole('list', { name: 'Queued messages' });
+    const queued = await screen.findByRole('list', { name: 'Queued messages' });
     expect(within(queued).getByText('Then regenerate the fixtures.')).toBeInTheDocument();
     await user.type(screen.getByRole('textbox', { name: 'Message agent' }), 'And the docs');
     await user.click(screen.getByRole('button', { name: 'Queue message' }));

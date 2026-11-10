@@ -1,4 +1,4 @@
-import type { CreateElicitationResponse, McpServerStatus, ProgramStatus } from '@/host/protocol';
+import type { CreateElicitationResponse, McpServerStatus, ProgramStatus, SessionLayout } from '@/host/protocol';
 import type { AcpTranscript } from '@/chat/acp-transcript';
 
 /**
@@ -216,16 +216,69 @@ export type OpenThread = {
   /** Its history is still replaying as it opens; the transcript shows once it's in. */
   loading?: boolean;
   /**
-   * The terminals of its worktree, or of its directory outside one, kept up to date: a tab each,
-   * in every thread of the worktree. None until its Host lists them, or on a Host without them.
-   */
-  terminals?: TerminalSummary[];
-  /**
    * The MCP servers its agent was given, as the Host reports them (`mcpServers`): weave's own
    * first, then the Host's config's. None from a Host that doesn't report them.
    */
   mcpServers?: McpServerStatus[];
 };
+
+/** One directory on one Host, and what's in it (ADR 0031): what the sidebar lists. */
+export type SessionSummary = {
+  key: string;
+  hostId: string;
+  /** Its directory: a repository's worktree, or a directory outside one. */
+  directory: string;
+  /** Its repository's name, or its directory's. */
+  name: string;
+  /** Where in a repository it is, when it's a worktree of one. */
+  git?: { repo: string; branch?: string };
+  /** Its threads, by key, the most recently active first. */
+  threads: string[];
+  /** How many of its threads wait on the person, and how many run a turn. */
+  waiting: number;
+  running: number;
+  /** A thread in it changed since the person last saw it. */
+  unread: boolean;
+  lastActivityAt?: number;
+};
+
+/** One of the person's Projects, as the Dispatcher keeps it (WVE-189): where it is on each Host. */
+export type ProjectSummary = {
+  id: string;
+  name: string;
+  locations: { hostId: string; path: string }[];
+};
+
+/** A Session's directory on its Host, as the Host lists it, with or without a layout it keeps. */
+export type KnownSession = {
+  hostId: string;
+  directory: string;
+  git?: { repo: string; branch?: string };
+  /** The threads the Host places in it, by id, as of when it last said. */
+  threads: string[];
+  updatedAt?: number;
+};
+
+/** The Session on screen: its layout as every device sees it, and its directory's terminals. */
+export type OpenSession = {
+  key: string;
+  hostId: string;
+  directory: string;
+  /** Its tabs of Blocks: as its Host keeps it, or as it first shows before anyone arranged it. */
+  layout: SessionLayout;
+  /** Whether its Host keeps this layout yet. */
+  saved: boolean;
+  /**
+   * The key it was asked for by, when its Host names its directory otherwise, as for one reached
+   * through a symbolic link: it's the same Session, under the Host's name for it from now on.
+   */
+  movedFrom?: string;
+  /** Its directory's terminals, kept up to date; none until its Host lists them, or on a Host without them. */
+  terminals?: TerminalSummary[];
+};
+
+/** A change to a Session's layout, which may be made again on a newer one another device saved. */
+export type LayoutChange = (layout: SessionLayout) => SessionLayout;
 
 export type AppModel = {
   /** Loading the pairing, before anything is known. */
@@ -237,6 +290,15 @@ export type AppModel = {
   threads: ThreadSummary[];
   /** The agents each Host offers, by Host id. */
   agents: Record<string, AgentChoice[]>;
+  /** The person's Projects; none without the Dispatcher, or from one that keeps none. */
+  projects?: ProjectSummary[];
+  /** The Sessions the Hosts list: directories something was started in, or a layout was kept for. */
+  known?: KnownSession[];
+  /** The Session on screen. */
+  session?: OpenSession;
+  /** The threads on screen, by key: those `showThreads` named, as far as they've opened. */
+  open?: Record<string, OpenThread>;
+  /** The thread in front: the one with the keyboard. */
   selectedKey?: string;
   thread?: OpenThread;
   /** Threads whose turn ended since the person last looked at them, on this device. */
@@ -244,10 +306,43 @@ export type AppModel = {
   error?: string;
 };
 
-export type AppActions = {
-  /** Opens a thread, or with no key goes back to the list. */
+/** What's done in one thread: `AppActions` does them in the thread in front, `forThread` in another. */
+export type ThreadActions = {
+  /** Starts a turn, steers the running one, or queues the message, as `OpenThread` allows. */
+  send(text: string, images?: PromptImage[]): Promise<void> | void;
+  removeQueued(id: string): void;
+  /** Starts the thread's paused queue again (`queue/resume`). */
+  resumeQueue(): Promise<void> | void;
+  cancelTurn(): Promise<void> | void;
+  /** Moves the thread to the version its agent's new threads launch (`thread/reopen`). */
+  reopenThread(): Promise<void> | void;
+  /**
+   * Updates the thread's agent on its Host to the newest version (`agents/update`), then moves
+   * the thread there, as the TUI's `/update` does.
+   */
+  updateAgent(): Promise<void> | void;
+  /** Answers a pending request of the thread, or one of its subagents'. */
+  respondToPermission(requestId: string, optionId: string): Promise<void> | void;
+  respondToElicitation(requestId: string, response: CreateElicitationResponse): Promise<void> | void;
+  setMode(modeId: string): Promise<void> | void;
+  setConfigOption(optionId: string, value: string | boolean): Promise<void> | void;
+};
+
+/** A thread this device started, and the Session it's in. */
+export type CreatedThread = { key: string; sessionKey: string };
+
+export type AppActions = ThreadActions & {
+  /** Shows one thread alone, in front; with no key, none. */
   selectThread(key?: string): void;
-  createThread(input: { hostId: string; cwd: string; agentId: string }): Promise<void> | void;
+  /** Shows a Session: its layout, and its directory's terminals. With no key, none. */
+  selectSession?(key?: string): void;
+  /** The threads on screen now, and the one in front; the others stop being followed. */
+  showThreads?(keys: string[], front?: string): void;
+  /** What's done in the thread `key`, which needn't be in front. */
+  forThread?(key: string): ThreadActions;
+  /** Changes a Session's layout, for every device. */
+  updateLayout?(sessionKey: string, change: LayoutChange): void;
+  createThread(input: { hostId: string; cwd: string; agentId: string }): Promise<CreatedThread | void> | CreatedThread | void;
   /**
    * The directories in `path` on a Host's computer, or in its user's home without one; rejects
    * saying why the Host couldn't list it.
@@ -285,34 +380,36 @@ export type AppActions = {
   /** Lists the Hosts and their threads again, and reconnects at once to what dropped, as pulling the list down asks. */
   refresh?(): Promise<void> | void;
   reconnectHost(hostId: string): Promise<void> | void;
-  /** Starts a turn, steers the running one, or queues the message, as `OpenThread` allows. */
-  send(text: string, images?: PromptImage[]): Promise<void> | void;
-  removeQueued(id: string): void;
-  /** Starts the open thread's paused queue again (`queue/resume`). */
-  resumeQueue(): Promise<void> | void;
-  cancelTurn(): Promise<void> | void;
-  /** Moves the open thread to the version its agent's new threads launch (`thread/reopen`). */
-  reopenThread(): Promise<void> | void;
-  /**
-   * Updates the open thread's agent on its Host to the newest version (`agents/update`), then
-   * moves the thread there, as the TUI's `/update` does.
-   */
-  updateAgent(): Promise<void> | void;
-  /** Answers a pending request of the open thread, or one of its subagents'. */
-  respondToPermission(requestId: string, optionId: string): Promise<void> | void;
-  respondToElicitation(requestId: string, response: CreateElicitationResponse): Promise<void> | void;
-  setMode(modeId: string): Promise<void> | void;
-  setConfigOption(optionId: string, value: string | boolean): Promise<void> | void;
-  /** Starts a terminal in the open thread's directory, opened from it; resolves to its id. */
+  /** Starts a terminal in the Session on screen's directory; resolves to its id. */
   newTerminal(): Promise<string>;
   /** Hangs a terminal's program up, which ends it on every device. */
   closeTerminal(id: string): Promise<void>;
   /** Names a terminal on every device, or without a label clears its name. */
   renameTerminal(id: string, label?: string): Promise<void>;
-  /** A ticket for a terminal of the open thread's Host, and where its stream is. */
+  /** A ticket for a terminal of the Session on screen's Host, and where its stream is. */
   attachTerminal(id: string): Promise<TerminalTicket>;
 };
 
 export type AppController = { model: AppModel; actions: AppActions };
 
 export const threadKey = (hostId: string, threadId: string) => `${hostId}/${threadId}`;
+
+/** A Session's key: its Host and its directory there. Host ids have no colon. */
+export const sessionKey = (hostId: string, directory: string) => `${hostId}:${directory}`;
+
+export const sessionOfKey = (key: string) => {
+  const at = key.indexOf(':');
+  return { hostId: key.slice(0, at), directory: key.slice(at + 1) };
+};
+
+/**
+ * A controller for one of the threads on screen: its model's open thread is that one, and its
+ * actions act in it. The chat pane and its header read one thread, whichever Block they're in.
+ */
+export function threadController(controller: AppController, key: string): AppController {
+  const { model, actions } = controller;
+  return {
+    model: { ...model, selectedKey: key, thread: model.open?.[key] ?? (model.selectedKey === key ? model.thread : undefined) },
+    actions: { ...actions, ...(actions.forThread?.(key) ?? {}) },
+  };
+}

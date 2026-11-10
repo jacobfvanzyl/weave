@@ -52,7 +52,7 @@ export function SidebarResizeHandle() {
   if (!context || isMobile) return null;
   const { width, resizing, resize, setResizing } = context;
   return (
-    <ResizeHandle label='Resize threads' edge='right' width={width} min={SIDEBAR_WIDTH.min}
+    <ResizeHandle label='Resize Sessions' edge='right' width={width} min={SIDEBAR_WIDTH.min}
       max={widestSidebar(window.innerWidth)} initial={SIDEBAR_WIDTH.initial} resizing={resizing}
       onResizing={setResizing}
       // The sidebar starts at the window's left edge, so its width is where the pointer is.

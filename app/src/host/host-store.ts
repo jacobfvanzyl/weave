@@ -10,8 +10,14 @@ import type {
   AgentChoice,
   AgentUpdateNotice,
   AppActions,
+  CreatedThread,
   DirectoryListing,
   AppModel,
+  LayoutChange,
+  OpenSession,
+  OpenThread,
+  ProjectSummary,
+  ThreadActions,
   DispatcherStatus,
   HostStatus,
   HostSummary,
@@ -24,7 +30,9 @@ import type {
   ThreadSummary,
   WorktreeRemoval,
 } from '@/app/app-controller';
-import { threadKey } from '@/app/app-controller';
+import { sessionKey, sessionOfKey, threadKey } from '@/app/app-controller';
+import { threadBlock } from '@/session/blocks';
+import { threadDirectories } from '@/session/sessions';
 import { ThreadReadState } from '@/app/thread-read-state';
 import { type ClientTool, toolError } from './client-tools';
 import { CONNECTION_CLOSED, ConnectError, HostConnection, HostError, type HostEvent, type OpenedThread } from './connection';
@@ -32,6 +40,7 @@ import type { DeviceKey } from './device-key';
 import type { DispatcherConnection, SocketOpener } from './dispatcher';
 import { JournalFollower, originLabel, transcriptEvents } from './journal';
 import { type Routes, hostCredentials, webRoutes } from './routes';
+import { HostSessions } from './sessions';
 import {
   HOST_PROTOCOL,
   type AgentSummary,
@@ -65,8 +74,6 @@ export type HostStoreOptions = {
    * Mac's core (ADR 0032), which also reaches this Mac's own Host over its socket.
    */
   routes?: Routes;
-  /** Whether this device draws the Hosts' terminals: not on the Mac until WVE-205. Defaults to true. */
-  terminals?: boolean;
   client: ClientInfo;
   /** What a new pairing calls this device when the person names it nothing else. */
   deviceName: string;
@@ -124,6 +131,8 @@ type HostEntry = {
   connecting?: AbortController;
   /** Whether it connected before, so a try is reconnecting, as is any after the first. */
   connected: boolean;
+  /** Whether it has listed its threads, so what a Session first shows is known. */
+  listedThreads?: boolean;
   threads: ThreadListing[];
   agents: AgentSummary[];
   /** An attach was cut off by the connection ending before its answer, as a replay that fell behind would be. */
@@ -173,14 +182,21 @@ type Followed = {
   loading: boolean;
   /** Clients that prompted it, by client id, for naming who runs a client tool. */
   clients: Map<string, string>;
-  /** Its worktree's terminals while it's on screen (`terminals/watch`), and the scope they're of. */
+};
+
+/** The Session on screen, and its directory's terminals while it is (`terminals/watch`). */
+type ShownSession = {
+  hostId: string;
+  directory: string;
+  /** The key it was asked for by, when its Host names its directory otherwise. */
+  movedFrom?: string;
   terminals?: { scope: string; list: HostTerminal[] };
 };
 
 type PendingKind<K extends PendingRequest['kind']> = Extract<PendingRequest, { kind: K }>;
 
 /** A `thread/create` waiting for its answer. */
-type Creating = { hostId: string; agentId: string; resolve(): void; reject(error: Error): void };
+type Creating = { hostId: string; agentId: string; resolve(created: CreatedThread): void; reject(error: Error): void };
 
 /** ACP's error for an agent that needs signing in, passed through by the Host. */
 const AUTH_REQUIRED = -32000;
@@ -273,6 +289,14 @@ export class HostStore {
   /** In the Dispatcher's order. */
   #hosts = new Map<string, HostEntry>();
   readonly #followed = new Map<string, Followed>();
+  /** The threads on screen, which this client is attached to; `#selectedKey` is the one in front. */
+  #shown = new Set<string>();
+  /** Threads this device started that no layout has shown yet: they stay until one does. */
+  readonly #fresh = new Set<string>();
+  readonly #sessions: HostSessions;
+  #session?: ShownSession;
+  #projects: ProjectSummary[] = [];
+  readonly #perThread = new Map<string, ThreadActions>();
   readonly #creating = new Map<number, Creating>();
   /** Client tool calls running on this device, by pending id. */
   readonly #running = new Set<string>();
@@ -292,6 +316,36 @@ export class HostStore {
     if (options.routes) this.#routes = options.routes;
     else if (options.socket) this.#routes = webRoutes(options.socket);
     else throw new Error('The store needs a way to reach the Dispatcher: `socket` or `routes`.');
+    this.#sessions = new HostSessions({
+      connection: (hostId) => this.#hosts.get(hostId)?.connection,
+      first: (hostId, directory) => {
+        const entry = this.#hosts.get(hostId);
+        if (!entry?.listedThreads) return undefined;
+        // Placed as the list of Sessions places them, so a Session first shows the threads listed in it.
+        const located = entry.threads.map((listing) => ({
+          key: threadKey(hostId, listing.info.sessionId),
+          hostId,
+          cwd: listing.info.cwd,
+          ...(listing.git ? { git: threadGit(listing.git) } : {}),
+        }));
+        const directories = threadDirectories(located, this.#sessions.known());
+        return entry.threads
+          .filter((listing) => listing.state !== 'closed' && directories.get(threadKey(hostId, listing.info.sessionId)) === directory)
+          .sort((left, right) => (right.lastActivityAt ?? 0) - (left.lastActivityAt ?? 0))
+          .map((listing) => threadBlock(listing.info.sessionId));
+      },
+      changed: () => this.#changed(),
+      failed: (message) => {
+        this.#error = message;
+        this.#changed();
+      },
+      moved: (from, to) => {
+        const shown = this.#session;
+        if (!shown || sessionKey(shown.hostId, shown.directory) !== from) return;
+        shown.directory = sessionOfKey(to).directory;
+        shown.movedFrom = from;
+      },
+    });
   }
 
   subscribe = (listener: () => void) => {
@@ -372,6 +426,7 @@ export class HostStore {
       return;
     }
     dispatcher.relists = 0;
+    void this.#listProjects(dispatcher);
     await Promise.all([this.#wakeDispatcher(dispatcher), ...[...this.#hosts.values()].map((entry) => this.#wake(entry))]);
   }
 
@@ -429,6 +484,17 @@ export class HostStore {
 
   readonly actions: AppActions = {
     selectThread: (key) => this.#select(key),
+    selectSession: (key) => this.#selectSession(key),
+    showThreads: (keys, front) => this.#show(keys, front, false),
+    forThread: (key) => {
+      let actions = this.#perThread.get(key);
+      if (!actions) {
+        actions = this.#threadActions(() => this.#followed.get(key));
+        this.#perThread.set(key, actions);
+      }
+      return actions;
+    },
+    updateLayout: (key, change) => this.#updateLayout(key, change),
     refresh: () => this.refresh(),
     pairDispatcher: (input) => this.#pair(input),
     forgetDispatcher: () => this.#forget(),
@@ -454,75 +520,84 @@ export class HostStore {
     closeThread: (key) => this.#report(() => this.#close(key)),
     renameThread: (key, title) => this.#rename(key, title),
     deleteThread: (key) => this.#report(() => this.#delete(key)),
-    send: (text, images) => this.#send(text, images),
-    removeQueued: (id) => {
-      const followed = this.#selected();
-      if (!followed) return;
-      if (followed.held.some((prompt) => prompt.id === id)) {
-        // It leaves when the Host's `unqueued` event says so.
-        void this.#report(async () => {
-          await this.#connection(followed).request('queue/remove', { threadId: followed.threadId, queuedId: id });
-        });
-        return;
-      }
-      followed.queued = followed.queued.filter((prompt) => prompt.id !== id);
-      this.#changed();
-    },
-    resumeQueue: () => this.#report(async () => {
-      const followed = this.#selected();
-      if (!followed) return;
-      await this.#connection(followed).request('queue/resume', { threadId: followed.threadId });
-    }),
-    cancelTurn: () => this.#report(async () => {
-      const followed = this.#selected();
-      if (!followed) return;
-      await this.#connection(followed).request('turn/cancel', { threadId: followed.threadId });
-    }),
-    reopenThread: () => this.#report(() => this.#reopen()),
-    updateAgent: () => this.#report(() => this.#updateAgent()),
-    respondToPermission: (requestId, optionId) => this.#answer(
-      requestId,
-      { permission: { outcome: { outcome: 'selected', optionId } } },
-      { type: 'permission/resolved', requestId, optionId },
-    ),
-    respondToElicitation: (requestId, response) => this.#answer(
-      requestId,
-      { elicitation: response },
-      { type: 'elicitation/resolved', requestId, response },
-    ),
-    setMode: (modeId) => this.#report(async () => {
-      const followed = this.#selected();
-      if (!followed) return;
-      await this.#connection(followed).request('thread/setMode', { threadId: followed.threadId, modeId });
-    }),
-    setConfigOption: (configId, value) => this.#report(async () => {
-      const followed = this.#selected();
-      if (!followed) return;
-      // The change reaches every client, this one too, through the journal.
-      await this.#connection(followed).request('thread/setConfigOption', typeof value === 'boolean'
-        ? { threadId: followed.threadId, configId, type: 'boolean', value }
-        : { threadId: followed.threadId, configId, value });
-    }),
+    ...this.#threadActions(() => this.#selected()),
     newTerminal: () => this.#newTerminal(),
     closeTerminal: async (id) => {
-      const followed = this.#terminalsOf();
+      const { connection } = this.#sessionHost();
       try {
-        await this.#connection(followed).request('terminals/close', { id });
+        await connection.request('terminals/close', { id });
       } catch (error) {
         throw failed("Couldn't close the terminal", error);
       }
     },
     renameTerminal: async (id, label) => {
-      const followed = this.#terminalsOf();
+      const { shown, connection } = this.#sessionHost();
       try {
-        const { terminal } = await this.#connection(followed).request('terminals/setLabel', { id, ...(label?.trim() ? { label: label.trim() } : {}) });
-        this.#terminalUpdated(followed.hostId, terminal);
+        const { terminal } = await connection.request('terminals/setLabel', { id, ...(label?.trim() ? { label: label.trim() } : {}) });
+        this.#terminalUpdated(shown.hostId, terminal);
       } catch (error) {
         throw failed("Couldn't rename the terminal", error);
       }
     },
     attachTerminal: (id) => this.#attachTerminal(id),
   };
+
+  /** What's done in one thread, in the one `pick` gives when it's done. */
+  #threadActions(pick: () => Followed | undefined): ThreadActions {
+    return {
+      send: (text, images) => this.#send(text, images, pick()),
+      removeQueued: (id) => {
+        const followed = pick();
+        if (!followed) return;
+        if (followed.held.some((prompt) => prompt.id === id)) {
+          // It leaves when the Host's `unqueued` event says so.
+          void this.#report(async () => {
+            await this.#connection(followed).request('queue/remove', { threadId: followed.threadId, queuedId: id });
+          });
+          return;
+        }
+        followed.queued = followed.queued.filter((prompt) => prompt.id !== id);
+        this.#changed();
+      },
+      resumeQueue: () => this.#report(async () => {
+        const followed = pick();
+        if (!followed) return;
+        await this.#connection(followed).request('queue/resume', { threadId: followed.threadId });
+      }),
+      cancelTurn: () => this.#report(async () => {
+        const followed = pick();
+        if (!followed) return;
+        await this.#connection(followed).request('turn/cancel', { threadId: followed.threadId });
+      }),
+      reopenThread: () => this.#report(() => this.#reopen(pick())),
+      updateAgent: () => this.#report(() => this.#updateAgent(pick())),
+      respondToPermission: (requestId, optionId) => this.#answer(
+        requestId,
+        { permission: { outcome: { outcome: 'selected', optionId } } },
+        { type: 'permission/resolved', requestId, optionId },
+        pick(),
+      ),
+      respondToElicitation: (requestId, response) => this.#answer(
+        requestId,
+        { elicitation: response },
+        { type: 'elicitation/resolved', requestId, response },
+        pick(),
+      ),
+      setMode: (modeId) => this.#report(async () => {
+        const followed = pick();
+        if (!followed) return;
+        await this.#connection(followed).request('thread/setMode', { threadId: followed.threadId, modeId });
+      }),
+      setConfigOption: (configId, value) => this.#report(async () => {
+        const followed = pick();
+        if (!followed) return;
+        // The change reaches every client, this one too, through the journal.
+        await this.#connection(followed).request('thread/setConfigOption', typeof value === 'boolean'
+          ? { threadId: followed.threadId, configId, type: 'boolean', value }
+          : { threadId: followed.threadId, configId, value });
+      }),
+    };
+  }
 
   /** Runs an action whose failure the person reads in the model's error, not from a caller. */
   async #report(action: () => Promise<void>) {
@@ -635,7 +710,26 @@ export class HostStore {
     dispatcher.attempt = 0;
     dispatcher.relists = 0;
     this.#changed();
+    void this.#listProjects(dispatcher);
     await this.#listHosts();
+  }
+
+  /** The person's Projects, from a Dispatcher that keeps them (WVE-189): they group the Sessions. */
+  async #listProjects(dispatcher: DispatcherEntry) {
+    const connection = dispatcher.connection;
+    if (!connection || connection.closed || !connection.hello.features?.includes(HOST_PROTOCOL.dispatcher.features.projects)) return;
+    try {
+      const { projects } = await connection.request('projects/list', {});
+      if (this.#dispatcher !== dispatcher) return;
+      this.#projects = projects.map(({ id, name, locations }) => ({
+        id,
+        name,
+        locations: (locations ?? []).map(({ hostId, path }) => ({ hostId, path })),
+      }));
+      this.#changed();
+    } catch {
+      // The Sessions show under their Hosts, as without Projects.
+    }
   }
 
   #dispatcherFailed(dispatcher: DispatcherEntry, error: unknown) {
@@ -717,8 +811,7 @@ export class HostStore {
     this.#haltDispatcher(dispatcher, 'revoked', 'The Dispatcher revoked this device, which has forgotten the pairing. Pair it again to reach your Hosts.');
     for (const entry of this.#hosts.values()) this.#closeHost(entry);
     this.#hosts = new Map();
-    this.#followed.clear();
-    this.#selectedKey = undefined;
+    this.#forgetShown();
     this.#changed();
     await dispatcher.key.forget().catch(() => {});
     if (this.#dispatcher === dispatcher) await this.#options.storage.save(undefined);
@@ -869,9 +962,14 @@ export class HostStore {
     this.#changed();
     await this.#loadAgents(entry);
     await this.#list(entry);
-    // Catch up on the thread on screen, after the last event this client handled.
-    const selected = this.#selected();
-    if (selected && selected.hostId === entry.hostId && entry.connection === connection) this.#attach(selected);
+    if (entry.connection !== connection) return;
+    void this.#sessions.watch(entry.hostId, connection);
+    if (this.#session?.hostId === entry.hostId) void this.#watchTerminals(this.#session);
+    // Catch up on the threads on screen, after the last event this client handled.
+    for (const key of this.#shown) {
+      const followed = this.#followed.get(key);
+      if (followed?.hostId === entry.hostId) this.#attach(followed);
+    }
   }
 
   #connectFailed(entry: HostEntry, error: unknown) {
@@ -961,6 +1059,9 @@ export class HostStore {
       if (followed.hostId === hostId) this.#followed.delete(key);
     }
     if (this.#selectedKey?.startsWith(`${hostId}/`)) this.#selectedKey = undefined;
+    this.#shown = new Set([...this.#shown].filter((key) => !key.startsWith(`${hostId}/`)));
+    this.#sessions.forget(hostId);
+    if (this.#session?.hostId === hostId) this.#session = undefined;
   }
 
   /** The Host's agents, and the version each one's new threads launch. */
@@ -989,6 +1090,7 @@ export class HostStore {
       for (const listing of entry.threads) {
         this.#read.observe(threadKey(entry.hostId, listing.info.sessionId), listing.activity ?? undefined);
       }
+      entry.listedThreads = true;
       this.#changed();
     } catch (error) {
       // A connection that ended shows in the Host's status.
@@ -1109,13 +1211,19 @@ export class HostStore {
             return;
           case 'terminals/removed': {
             const { id, scope } = event.params;
-            for (const followed of this.#followed.values()) {
-              if (followed.hostId !== entry.hostId || followed.terminals?.scope !== scope) continue;
-              followed.terminals = { scope, list: followed.terminals.list.filter((terminal) => terminal.id !== id) };
+            const shown = this.#session;
+            if (shown?.hostId === entry.hostId && shown.terminals?.scope === scope) {
+              shown.terminals = { scope, list: shown.terminals.list.filter((terminal) => terminal.id !== id) };
+              this.#changed();
             }
-            this.#changed();
             return;
           }
+          case 'sessions/updated':
+            this.#sessions.updated(entry.hostId, event.params.session);
+            return;
+          case 'sessions/ended':
+            this.#sessions.ended(entry.hostId, event.params.directory);
+            return;
           case 'agents/updateAvailable': {
             const { threadId, agentId, name, running, latest } = event.params;
             const followed = this.#followed.get(threadKey(entry.hostId, threadId));
@@ -1205,18 +1313,41 @@ export class HostStore {
     return connection;
   }
 
+  /** Shows one thread alone, in front, attaching to it again if it was. */
   #select(key?: string) {
-    const previous = this.#selected();
-    if (previous && previous !== (key ? this.#followed.get(key) : undefined)) this.#leave(previous);
-    this.#selectedKey = key;
-    this.#read.focus(key);
+    this.#show(key ? [key] : [], key, true);
+  }
+
+  /**
+   * The threads on screen from now on, and the one in front. Those no longer on screen are left,
+   * and the new ones attached. `exactly`: these and no other, the one in front attached again;
+   * otherwise a thread this device just started stays until a layout has shown it once.
+   */
+  #show(keys: string[], front: string | undefined, exactly: boolean) {
+    const wanted = new Set(keys);
+    if (front) wanted.add(front);
+    for (const key of this.#fresh) {
+      if (exactly || wanted.has(key)) this.#fresh.delete(key);
+      else wanted.add(key);
+    }
+    const before = this.#shown;
+    const same = wanted.size === before.size && [...wanted].every((key) => before.has(key));
+    if (same && front === this.#selectedKey && !exactly) return;
+    this.#shown = wanted;
+    for (const key of before) {
+      const followed = wanted.has(key) ? undefined : this.#followed.get(key);
+      if (followed) this.#leave(followed);
+    }
+    this.#selectedKey = front;
+    this.#read.focus(front);
     this.#error = undefined;
-    if (key) {
+    for (const key of wanted) {
+      const again = exactly && key === front;
+      if (before.has(key) && !again) continue;
       const [hostId, ...rest] = key.split('/');
-      const threadId = rest.join('/');
       let followed = this.#followed.get(key);
       if (!followed) {
-        followed = this.#follow(hostId, threadId);
+        followed = this.#follow(hostId, rest.join('/'));
         this.#followed.set(key, followed);
       }
       this.#attach(followed);
@@ -1246,10 +1377,6 @@ export class HostStore {
   /** Stops receiving a thread. One nobody has prompted closes, as the TUI leaves it. */
   #leave(followed: Followed) {
     const connection = this.#hosts.get(followed.hostId)?.connection;
-    if (followed.terminals) {
-      void connection?.request('terminals/unwatch', { scope: followed.terminals.scope }).catch(() => {});
-      followed.terminals = undefined;
-    }
     const blank = followed.state?.blank ?? false;
     void connection?.request('thread/detach', { threadId: followed.threadId, close: blank ? 'ifUnused' : 'never' }).catch(() => {});
     if (blank) this.#followed.delete(threadKey(followed.hostId, followed.threadId));
@@ -1279,8 +1406,7 @@ export class HostStore {
         creating.reject(this.#explain(event.error, entry, creating.agentId));
         return;
       }
-      this.#created(entry, event.thread);
-      creating.resolve();
+      creating.resolve(this.#created(entry, event.thread));
       return;
     }
     const followed = [...this.#followed.values()].find(({ hostId, tag }) => hostId === entry.hostId && tag === event.tag);
@@ -1333,53 +1459,79 @@ export class HostStore {
     }
     this.#changed();
     if (!running) void this.#sendQueued(followed);
-    void this.#watchTerminals(followed);
   }
 
-  /** Lists the open thread's terminals, and keeps the list up to date while it's on screen. */
-  async #watchTerminals(followed: Followed) {
-    const connection = this.#hosts.get(followed.hostId)?.connection;
-    const cwd = followed.state?.cwd;
-    if (!connection || !cwd || !connection.supports(HOST_PROTOCOL.features.terminals)) return;
+  /** Shows a Session: its directory's terminals are listed and kept up to date while it's on screen. */
+  #selectSession(key?: string) {
+    const previous = this.#session;
+    const next = key ? sessionOfKey(key) : undefined;
+    if (previous && next && previous.hostId === next.hostId && previous.directory === next.directory) return;
+    if (previous?.terminals) {
+      void this.#hosts.get(previous.hostId)?.connection?.request('terminals/unwatch', { scope: previous.terminals.scope }).catch(() => {});
+    }
+    this.#session = next ? { ...next } : undefined;
+    if (this.#session) void this.#watchTerminals(this.#session);
+    this.#changed();
+  }
+
+  #updateLayout(key: string, change: LayoutChange) {
+    const { hostId, directory } = sessionOfKey(key);
+    this.#sessions.update(hostId, directory, change);
+  }
+
+  /** Lists the Session on screen's terminals, and keeps the list up to date while it's there. */
+  async #watchTerminals(shown: ShownSession) {
+    const connection = this.#hosts.get(shown.hostId)?.connection;
+    if (!connection || !connection.supports(HOST_PROTOCOL.features.terminals)) return;
     try {
-      const { scope, terminals } = await connection.request('terminals/watch', { directory: cwd });
-      if (this.#selected() !== followed || this.#hosts.get(followed.hostId)?.connection !== connection) {
-        void connection.request('terminals/unwatch', { scope }).catch(() => {});
+      const { scope, terminals } = await connection.request('terminals/watch', { directory: shown.directory });
+      if (this.#session !== shown || this.#hosts.get(shown.hostId)?.connection !== connection) {
+        // Unless the Session on screen now is of the same scope, and watches it too.
+        if (this.#session?.hostId !== shown.hostId || this.#session.terminals?.scope !== scope) {
+          void connection.request('terminals/unwatch', { scope }).catch(() => {});
+        }
         return;
       }
-      followed.terminals = { scope, list: terminals };
+      shown.terminals = { scope, list: terminals };
       this.#changed();
     } catch {
-      // The thread shows without its terminals.
+      // The Session shows without its terminals.
     }
   }
 
   #terminalUpdated(hostId: string, terminal: HostTerminal) {
-    for (const followed of this.#followed.values()) {
-      if (followed.hostId !== hostId || followed.terminals?.scope !== terminal.scope) continue;
-      const { list } = followed.terminals;
-      const index = list.findIndex(({ id }) => id === terminal.id);
-      followed.terminals = {
-        scope: terminal.scope,
-        list: index === -1 ? [...list, terminal] : list.map((current, at) => at === index ? terminal : current),
-      };
-    }
+    const shown = this.#session;
+    if (!shown || shown.hostId !== hostId) return;
+    // One this device just started, before the list answered, starts the list.
+    if (shown.terminals && shown.terminals.scope !== terminal.scope) return;
+    const list = shown.terminals?.list ?? [];
+    const index = list.findIndex(({ id }) => id === terminal.id);
+    shown.terminals = {
+      scope: terminal.scope,
+      list: index === -1 ? [...list, terminal] : list.map((current, at) => at === index ? terminal : current),
+    };
     this.#changed();
   }
 
-  /** The open thread, for a request about its terminals, or why there's none. */
-  #terminalsOf(): Followed {
-    const followed = this.#selected();
-    if (!followed?.state) throw new Error('No thread is open.');
-    return followed;
+  /** The Session on screen and its Host's connection, for a request about its terminals, or why there's none. */
+  #sessionHost(): { shown: ShownSession; connection: HostConnection } {
+    const shown = this.#session;
+    if (!shown) throw new Error('No Session is open.');
+    const entry = this.#hosts.get(shown.hostId);
+    const connection = entry?.connection;
+    if (!connection || connection.closed) throw new Error(`${entry?.name ?? 'The Host'} isn't connected.`);
+    return { shown, connection };
   }
 
   async #newTerminal(): Promise<string> {
-    const followed = this.#terminalsOf();
-    const connection = this.#connection(followed);
+    const { shown, connection } = this.#sessionHost();
+    const front = this.#selected();
     try {
-      const { terminal } = await connection.request('terminals/new', { directory: followed.state!.cwd, openedFrom: followed.threadId });
-      this.#terminalUpdated(followed.hostId, terminal);
+      const { terminal } = await connection.request('terminals/new', {
+        directory: shown.directory,
+        ...(front?.hostId === shown.hostId ? { openedFrom: front.threadId } : {}),
+      });
+      this.#terminalUpdated(shown.hostId, terminal);
       return terminal.id;
     } catch (error) {
       throw failed("Couldn't start a terminal", error);
@@ -1387,8 +1539,7 @@ export class HostStore {
   }
 
   async #attachTerminal(id: string): Promise<TerminalTicket> {
-    const followed = this.#terminalsOf();
-    const connection = this.#connection(followed);
+    const { shown, connection } = this.#sessionHost();
     const { ticket } = await connection.request('terminals/attach', { id });
     const record = this.#dispatcher?.record;
     if (!record) throw new Error('This device isn\'t paired with the Dispatcher.');
@@ -1396,7 +1547,7 @@ export class HostStore {
     return {
       url: record.url,
       ticket,
-      carry: { dispatcherId: record.dispatcherId, deviceId: record.deviceId, keyId: record.keyId, host: followed.hostId },
+      carry: { dispatcherId: record.dispatcherId, deviceId: record.deviceId, keyId: record.keyId, host: shown.hostId },
     };
   }
 
@@ -1444,8 +1595,7 @@ export class HostStore {
    * client's answer, the turn ending or the agent withdrawing it may have come first: the Host
    * says so with `pending/resolved`, which the card shows, and the answer isn't tried again.
    */
-  async #answer(requestId: string, answer: Pick<AnswerPendingRequest, 'permission' | 'elicitation'>, shown: AcpTranscriptEvent) {
-    const followed = this.#selected();
+  async #answer(requestId: string, answer: Pick<AnswerPendingRequest, 'permission' | 'elicitation'>, shown: AcpTranscriptEvent, followed: Followed | undefined) {
     const pending = followed?.pending.find(({ id }) => id === requestId);
     // One no longer waiting says why already.
     if (!followed || !pending) return;
@@ -1578,7 +1728,7 @@ export class HostStore {
   }
 
   /** Starts a thread and opens it; it rejects saying why the Host couldn't. */
-  #create(input: { hostId: string; cwd: string; agentId: string }): Promise<void> {
+  #create(input: { hostId: string; cwd: string; agentId: string }): Promise<CreatedThread> {
     const entry = this.#hosts.get(input.hostId);
     const connection = entry?.connection;
     if (!entry || !connection || connection.closed) {
@@ -1591,21 +1741,23 @@ export class HostStore {
     });
   }
 
-  #created(entry: HostEntry, thread: OpenedThread) {
+  #created(entry: HostEntry, thread: OpenedThread): CreatedThread {
     const key = threadKey(entry.hostId, thread.state.threadId);
-    const previous = this.#selected();
-    if (previous) this.#leave(previous);
     const followed = this.#follow(entry.hostId, thread.state.threadId);
     this.#followed.set(key, followed);
+    // On screen from now, beside the others: the layout it's placed in says which stay.
+    this.#shown.add(key);
+    this.#fresh.add(key);
     this.#selectedKey = key;
     this.#read.focus(key);
     this.#error = undefined;
     this.#opened(followed, thread);
+    const { cwd, git } = thread.state;
+    return { key, sessionKey: sessionKey(entry.hostId, git?.worktree ?? cwd) };
   }
 
-  async #send(text: string, images: PromptImage[] = []) {
+  async #send(text: string, images: PromptImage[] = [], followed: Followed | undefined) {
     this.#error = undefined;
-    const followed = this.#selected();
     if (!followed) return;
     const prompt: QueuedPrompt = { id: `prompt-${this.#nextLocal++}`, text, ...(images.length > 0 ? { images } : {}) };
     try {
@@ -1705,7 +1857,7 @@ export class HostStore {
     return meta(followed.state?.agent.initialize, '_meta', 'steering', 'supported') === true;
   }
 
-  async #reopen(followed = this.#selected()) {
+  async #reopen(followed: Followed | undefined) {
     if (!followed) return;
     const connection = this.#connection(followed);
     followed.reopening = true;
@@ -1722,8 +1874,7 @@ export class HostStore {
    * The Host takes the thread's agent to its newest version, then the thread moves there, unless
    * it runs that version already. The thread moves even if the person has gone to another.
    */
-  async #updateAgent() {
-    const followed = this.#selected();
+  async #updateAgent(followed: Followed | undefined) {
     const agentId = followed?.update?.agentId;
     if (!followed || !agentId) return;
     const connection = this.#connection(followed);
@@ -1769,6 +1920,8 @@ export class HostStore {
       throw failed("Couldn't close the thread", error);
     });
     if (followed) this.#followed.delete(key);
+    this.#shown.delete(key);
+    this.#fresh.delete(key);
     if (this.#selectedKey === key) this.#selectedKey = undefined;
     await this.#list(entry);
   }
@@ -1784,6 +1937,8 @@ export class HostStore {
       throw failed("Couldn't delete the thread", error);
     });
     this.#followed.delete(key);
+    this.#shown.delete(key);
+    this.#fresh.delete(key);
     this.#read.forget(key);
     if (this.#selectedKey === key) this.#selectedKey = undefined;
     entry.threads = entry.threads.filter(({ info }) => info.sessionId !== threadId);
@@ -1855,12 +2010,22 @@ export class HostStore {
     if (!dispatcher) return;
     this.#letGo(dispatcher);
     for (const entry of this.#hosts.values()) this.#closeHost(entry);
+    for (const hostId of this.#hosts.keys()) this.#sessions.forget(hostId);
     this.#hosts = new Map();
-    this.#followed.clear();
-    this.#selectedKey = undefined;
+    this.#forgetShown();
     this.#dispatcher = undefined;
     // A revoked device's key went already.
     if (dispatcher.status !== 'revoked') await dispatcher.key.forget().catch(() => {});
+  }
+
+  /** Lets go of every thread and Session on screen, and the Projects, as the pairing goes. */
+  #forgetShown() {
+    this.#followed.clear();
+    this.#shown = new Set();
+    this.#fresh.clear();
+    this.#selectedKey = undefined;
+    this.#session = undefined;
+    this.#projects = [];
   }
 
   /** Forgets the pairing: the Dispatcher lists this device until it's revoked there. */
@@ -1868,6 +2033,47 @@ export class HostStore {
     await this.#unpair();
     await this.#options.storage.save(undefined);
     this.#changed();
+  }
+
+  #openThread(key: string, followed: Followed): OpenThread {
+    return {
+      key,
+      transcript: followed.transcript,
+      canSteer: this.#canSteer(followed),
+      queued: [...followed.steering, ...followed.held, ...followed.queued],
+      ...(followed.queuePaused && followed.held.length > 0 ? { queuePaused: true } : {}),
+      canAttachImages: followed.state?.agent.initialize.agentCapabilities?.promptCapabilities?.image === true,
+      ...(followed.update ? { update: this.#updateNotice(followed.update, this.#hosts.get(followed.hostId)) } : {}),
+      ...(followed.updating ? { updating: true } : {}),
+      ...(followed.reopening ? { reopening: true } : {}),
+      ...(followed.loading ? { loading: true } : {}),
+      ...(this.#hosts.get(followed.hostId)?.connection?.supports(HOST_PROTOCOL.features.mcpServers)
+        ? { mcpServers: followed.state?.mcpServers ?? [] }
+        : {}),
+    };
+  }
+
+  /**
+   * The Session on screen, once its Host has listed its threads: before anyone arranged it, it
+   * shows its open threads in one pane, the most recently active in front.
+   */
+  #openSession(): { session?: OpenSession } {
+    const shown = this.#session;
+    const entry = shown ? this.#hosts.get(shown.hostId) : undefined;
+    if (!shown || !entry?.listedThreads) return {};
+    const { hostId, directory } = shown;
+    const { layout, saved } = this.#sessions.open(hostId, directory);
+    return {
+      session: {
+        key: sessionKey(hostId, directory),
+        hostId,
+        directory,
+        layout,
+        saved,
+        ...(shown.movedFrom ? { movedFrom: shown.movedFrom } : {}),
+        ...(shown.terminals ? { terminals: shown.terminals.list.map(terminalSummary) } : {}),
+      },
+    };
   }
 
   #model(): AppModel {
@@ -1886,7 +2092,7 @@ export class HostStore {
         ...(entry.connection?.supports(HOST_PROTOCOL.features.listFiles) ? { canBrowse: true } : {}),
         ...(entry.connection?.supports(HOST_PROTOCOL.features.rename) ? { canRename: true } : {}),
         ...(entry.connection?.supports(HOST_PROTOCOL.features.worktrees) ? { canWorktree: true } : {}),
-        ...(this.#options.terminals !== false && entry.connection?.supports(HOST_PROTOCOL.features.terminals) ? { canTerminals: true } : {}),
+        ...(entry.connection?.supports(HOST_PROTOCOL.features.terminals) ? { canTerminals: true } : {}),
       });
       agents[hostId] = entry.agents.map(({ id, name }) => ({ id, name }));
       const agentName = (agentId: string) => entry.agents.find(({ id }) => id === agentId)?.name ?? agentId;
@@ -1909,9 +2115,10 @@ export class HostStore {
           ...(listing.continuedIn ? { continuedIn: { key: threadKey(hostId, listing.continuedIn), label: '' } } : {}),
         });
       }
-      // A thread on screen the list doesn't have yet, such as a new one nobody has prompted.
-      const state = selected?.hostId === hostId ? selected.state : undefined;
-      if (state && !entry.threads.some(({ info }) => info.sessionId === state.threadId)) {
+      // Threads on screen the list doesn't have yet, such as a new one nobody has prompted.
+      for (const key of this.#shown) {
+        const state = key.startsWith(`${hostId}/`) ? this.#followed.get(key)?.state : undefined;
+        if (!state || entry.threads.some(({ info }) => info.sessionId === state.threadId)) continue;
         threads.push({
           key: threadKey(hostId, state.threadId),
           hostId: hostId,
@@ -1930,6 +2137,11 @@ export class HostStore {
       }
     }
     labelStarters(threads, hosts);
+    const open: Record<string, OpenThread> = {};
+    for (const key of this.#shown) {
+      const followed = this.#followed.get(key);
+      if (followed) open[key] = this.#openThread(key, followed);
+    }
     return {
       ...(this.#starting ? { starting: true } : {}),
       ...(dispatcher
@@ -1946,25 +2158,12 @@ export class HostStore {
       hosts,
       threads,
       agents,
+      ...(this.#projects.length > 0 ? { projects: this.#projects } : {}),
+      known: this.#sessions.known(),
+      ...this.#openSession(),
+      open,
       selectedKey: this.#selectedKey,
-      thread: selected && this.#selectedKey
-        ? {
-            key: this.#selectedKey,
-            transcript: selected.transcript,
-            canSteer: this.#canSteer(selected),
-            queued: [...selected.steering, ...selected.held, ...selected.queued],
-            ...(selected.queuePaused && selected.held.length > 0 ? { queuePaused: true } : {}),
-            canAttachImages: selected.state?.agent.initialize.agentCapabilities?.promptCapabilities?.image === true,
-            ...(selected.update ? { update: this.#updateNotice(selected.update, this.#hosts.get(selected.hostId)) } : {}),
-            ...(selected.updating ? { updating: true } : {}),
-            ...(selected.reopening ? { reopening: true } : {}),
-            ...(selected.loading ? { loading: true } : {}),
-            ...(selected.terminals ? { terminals: selected.terminals.list.map(terminalSummary) } : {}),
-            ...(this.#hosts.get(selected.hostId)?.connection?.supports(HOST_PROTOCOL.features.mcpServers)
-              ? { mcpServers: selected.state?.mcpServers ?? [] }
-              : {}),
-          }
-        : undefined,
+      thread: selected && this.#selectedKey ? open[this.#selectedKey] ?? this.#openThread(this.#selectedKey, selected) : undefined,
       unread: this.#read.unread(),
       ...(this.#error ? { error: this.#error } : {}),
     };
