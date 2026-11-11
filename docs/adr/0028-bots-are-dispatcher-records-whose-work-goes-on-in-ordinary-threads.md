@@ -1,5 +1,5 @@
 ---
-status: accepted; amended by ADR 0030: a Bot's thread is reached through the Dispatcher, and a Bot moves to another Host by starting a new thread
+status: accepted; amended by ADR 0030: a Bot's thread is reached through the Dispatcher, and a Bot moves to another Host by starting a new thread; settled for a first version in WVE-118, below: one named Host per Bot, the person prompting its thread as any thread, schedules that name it, and the Dispatcher's compacting and relayed triggers deferred
 date: 2026-11-02
 ---
 
@@ -34,3 +34,26 @@ The Host gains what any client could use, not a notion of Bots:
 - ACP lets no client ask for compaction or warns before an agent's own; prompting `/compact` is the adapters' convention, found among the commands a thread lists rather than by knowing the agent. Codex's adapter reports compaction only as text, so a Codex Bot's rotation can't rely on it.
 - Every message into a Bot's thread is a turn: no ACP client can add context without one.
 - A Bot's home lives on its Host, so a Bot moves to another Host by cloning its home there, which is what lets the Dispatcher choose Hosts later.
+
+## Settled in WVE-118 (2026-11-10)
+
+Planned again with the person in light of ADR 0030, WVE-203 and what the Hosts do today, this narrows the decisions above to a first version.
+
+- **What stays.** A Bot is a Dispatcher record whose work goes on in ordinary threads, and its Host learns nothing of Bots. It has one current thread at a time, its memory is files in a git home, and its threads carry its label, `bot:<id>`, beside the Dispatcher's `dispatcher`. Bots belong to no Project, and work in Projects by name through the Host tools (WVE-208).
+- **The person prompts the Bot's thread as any thread,** over the Host protocol: through the Dispatcher from a device, or over the Host's socket on its own computer. This replaces "the person's messages, sent through the Dispatcher", above: since ADR 0030 every device reaches every thread through the Dispatcher, so a Bot's thread needs no way in of its own. The Host's queue orders their prompts and the Bot's schedules', as it does any thread's.
+  - `bots/send` stays, as a delivery, for senders that aren't attached: the CLI and scripts, and a Bot with no thread yet, whose first prompt starts one.
+- **One Host per Bot, named as a schedule names one.** This replaces "a rule later, when the Dispatcher chooses Hosts", above, and ADR 0030's Dispatcher choosing the Host each time it starts a Bot's thread.
+  - The Dispatcher choosing a Host, and a Bot moving by cloning its home, wait for WVE-217 and a successor on another Host. `thread/setSuccessor` names only a thread on the same Host.
+- **The home is a Host and a path.** Recording it as a Project's locations are, and matching its remote, wait for moving. `weave bots add` makes the directory, `git init`s it and writes its first `AGENTS.md` and `CLAUDE.md` when it runs on the Bot's Host's computer, the only one that can, and leaves what was there as it was. Elsewhere it takes a directory there and says what to run on that computer.
+- **A Bot's schedule is an ordinary schedule that names the Bot** in place of a Host and thread, queued into its current thread, with `overlap: skip`. This replaces the separate rule for heartbeats: the Host's queue waits for the thread, and a schedule's catch-up folds missed times into one.
+  - A schedule may be a one-off, at one time. A Bot asks for its own, its wake-ups, with the Dispatcher's first service tools (`wake_me`, `list_wakeups`, `cancel_wakeup`), which answer only a Bot's own threads.
+- **The policy's default is to ask** (`otherwise: ask`), so what it doesn't approve waits for the person, and the Bot shows as needing them. A request left waiting longer than the Bot allows, 12 hours unless it says otherwise, pauses the Bot: its schedules' occurrences are skipped until the request is answered.
+- **A new thread when the person asks, or daily at an hour if the Bot is set so,** once the old thread is idle: a turn there that saves to the memory files, leaves a dated note in the home's `threads/` and commits, then a new thread in the home, which the old one names as its successor. This replaces the new thread "when compaction stops freeing enough". The Dispatcher writes each step down with what it sends, so a restart repeats nothing.
+
+Deferred:
+
+- **The Dispatcher saving memory and prompting `/compact` below the agent's own threshold, and a new thread when compacting stops freeing enough.** The agent compacts itself, and the home's `AGENTS.md` tells it to write memory as it goes. `thread/run` takes no `env` to lower the threshold through, and none of the products surveyed rotates on that signal. The Host's context usage in listings (WVE-174) stays, for when this comes.
+- **A trigger running in a fresh thread whose result the Dispatcher relays.** The Bot starts a delegated thread itself, and the Host's report comes back to it (ADR 0023).
+- **The push when a Bot's requests go unanswered** (WVE-177). The pause stays, and the Bot's state says it needs the person.
+- **"Unread" in a Bot's state** (WVE-178).
+- **Clients other than `weave bots`.** The app's and the TUI's lists of Bots, and Rex's Bots session, come later; meanwhile a Bot's thread opens as any thread does.

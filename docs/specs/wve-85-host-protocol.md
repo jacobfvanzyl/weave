@@ -828,7 +828,7 @@ the thread up again, it ends that turn with `turnEnded` whose `error` has the co
 
 WVE-173, ADR 0027. A label is a short string a client puts on a thread, to find it by: the
 Dispatcher labels the threads it starts `dispatcher` and `schedule:<id>`, and a Bot's threads
-carry its label (ADR 0028). Labels mean nothing to the Host.
+`dispatcher` and `bot:<id>` (ADR 0028, WVE-118). Labels mean nothing to the Host.
 
 - **What one is:** 1 to 64 letters, digits and `-_.:/`, compared as written. A thread carries
   at most 16, in the order they were given.
@@ -839,17 +839,18 @@ carry its label (ADR 0028). Labels mean nothing to the Host.
   journal carries them on, and a closed thread's new journal begins with them.
 - **Listed and filtered:** listings, `ThreadState` and `threads/updated` carry `labels`;
   `threads/list` and `threads/watch` take `labels` and cover only the threads that carry
-  every one. A client that wants to leave labelled threads out, as the apps do with Bots'
-  threads, reads `labels` from the listing.
+  every one. A client that wants to leave labelled threads out, as ADR 0028 has apps do with
+  Bots' threads, reads `labels` from the listing.
 - **Kept:** pruning passes over a labelled thread's journal however long it's been quiet, so a
   Bot's earlier threads stay readable.
 
 ### Context usage
 
 WVE-174, ADR 0028. A thread's listing says how much of its agent's context window it uses and
-when it last compacted, so one `threads/watch` tells a client such as the Dispatcher when a
-Bot's thread needs compacting or a new thread. Only what ACP defines is read, for the thread
-itself, not its subagents:
+when it last compacted, so one `threads/watch` can tell a client such as the Dispatcher when a
+Bot's thread needs compacting or a new thread. The Dispatcher doesn't act on it yet: a Bot's
+agent compacts itself, and its new threads come when asked or daily (WVE-118). Only what ACP
+defines is read, for the thread itself, not its subagents:
 
 - `context` `{used, size}`: the tokens in context and the window, from its latest
   `usage_update`.
@@ -1075,7 +1076,9 @@ other client runs it. The agent cancelling the call withdraws it.
 Feature `serviceTools`, WVE-171, ADR 0027. A service declares tools of its own, which the Host
 offers every thread's agent through `weave` beside the client and Host tools, and answers their
 calls over its own connection. The only service is the Dispatcher the Host joined, over the
-connection the Host keeps open to it, which is how agents reach the Dispatcher.
+connection the Host keeps open to it, which is how agents reach the Dispatcher. Its tools are a
+Bot's wake-ups, which every thread is offered and only a Bot's own threads get answers from
+([Wake-ups](wve-175-dispatcher.md#wake-ups), WVE-118).
 
 **`service/declareTools`** `{tools: Tool[], hosts?}` → `{names: string[]}`
 

@@ -119,7 +119,7 @@ One time a trigger fires, which the Dispatcher records whether it started a turn
 _Avoid_: run, execution, invocation, job
 
 **Schedule**:
-A trigger whose occurrences come at the times a cron expression gives, in a time zone, each starting a turn in a new thread or prompting one named thread.
+A trigger whose occurrences come at the times a cron expression gives, or once, at one time, in a time zone, each starting a turn in a new thread, prompting one named thread, or prompting a Bot.
 _Avoid_: cron job, timer, routine
 
 **Catch-up**:
@@ -127,8 +127,16 @@ An occurrence that starts late, once, for the latest time a schedule missed whil
 _Avoid_: backfill, retry
 
 **Bot**:
-A named assistant the Dispatcher keeps, with an agent, a permission policy, triggers and a home directory of its own memory, whose work goes on in one thread at a time, each on a Host the Dispatcher chooses.
+A named assistant the Dispatcher keeps, with an agent, a permission policy, triggers and a home on the Host it names, whose work goes on there in one thread at a time.
 _Avoid_: resident, persona, dot, always-on agent, profile
+
+**Home**:
+A Bot's own directory on its Host, a git repository whose files are its memory, in which its threads run. It isn't the Host's home directory, though it's usually under it.
+_Avoid_: workspace, memory store, Bot directory
+
+**Wake-up**:
+A one-off schedule a Bot asks for through the Dispatcher's tools, which prompts the Bot's own thread at the time it gave.
+_Avoid_: reminder, timer, alarm, heartbeat
 
 **Edge**:
 The thin service on the internet that holds webhook deliveries for the Dispatcher and sends its pushes, which the Dispatcher dials out to.

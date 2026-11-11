@@ -14,8 +14,9 @@ SSH (`ssh.rs`). A command uses another's module only for what's that command's o
 `--help` (`main.rs`'s `every_command_says_what_it_does`), so a change to the command line shows in
 review: run `INSTA_UPDATE=always cargo test -p weave-cli --bin weave` and read the diff.
 
-A command that manages a kind of thing (`threads`, `agents`, `schedules`, `hosts`, `devices`)
-lists them when given no subcommand, as `list` does; `daemon` and `dispatcher` say how they are,
+A command that manages a kind of thing (`threads`, `agents`, `schedules`, `hosts`, `devices`,
+`projects`, `bots`) lists them when given no subcommand, as `list` does; `daemon` and
+`dispatcher` say how they are,
 as `status` does. Commands keep the names they had before WVE-188 as hidden ones, since some are
 in what other programs say and run: `weave login` and `logout` (`agents login` and `logout`),
 which Hosts' sign-in errors and the app's messages gave; and `weave terminal` (`terminals`),
@@ -74,6 +75,10 @@ journals.
 ./target/debug/weave dispatcher connect homelab   # pair this computer with the Dispatcher there, over SSH, and offer to have its Host join
 ./target/debug/weave hosts add studio     # have studio's Host join the Dispatcher, over SSH
 ./target/debug/weave schedules            # the Dispatcher's schedules; also add, pause, run, occurrences
+./target/debug/weave schedules add later --bot odin --at "2026-11-12 09:00" -- "check the deploy"   # once, prompting a Bot
+./target/debug/weave bots                 # the Dispatcher's Bots; also add, show, update, remove, send, new-thread
+./target/debug/weave bots add odin --agent claude --approve read   # a Bot on this computer's Host, its home made in ~/bots/odin
+./target/debug/weave bots send odin "what's on today?"   # into its thread, or starting its first
 ./target/debug/weave projects             # the Dispatcher's Projects; also add, show, rename, update, remove
 ./target/debug/weave projects add --host homelab ~/code/odin   # register a directory there
 ./target/debug/weave --project odin --host homelab   # the TUI in odin's location on homelab
@@ -94,6 +99,27 @@ computer's (`weave_host::own_id`, from its directory) without it, set with
 `WorkspaceArgs::in_project`, which `cwd` and `cwd_on` give in place of `--cwd`; it never falls
 back to another Host. `weave threads list --project` filters with
 `weave_host_protocol::projects::containing` and the Host's id from its hello.
+
+`weave bots` (`src/commands/bots.rs`, WVE-118, ADR 0028) manages the Bots the Dispatcher keeps,
+each subcommand only with a Dispatcher whose hello offers `bots` (`dispatcher::require`, which
+says an older one needs updating). `add` finds the Bot's Host in `hosts/list`, this computer's
+(`weave_host::own_id`) without `--host`, and refuses a name `bots/list` has before it makes
+anything. On this computer's Host it makes the home first (`bots/home.rs`): the directory, `git
+init` unless it's a repository already (one inside another's is refused), and, unless an `AGENTS.md` or `CLAUDE.md` is there,
+both, written with `create_new` and committed alone (`commit --only`) as the user git's
+configuration names (`user.useConfigOnly`), or left uncommitted, saying why; git runs without
+`GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE`, so it works on the home whatever repository the
+environment names. For another computer's Host, `--home` is a directory there, whole or `~/…`
+(`args::directory_on`), `~/bots/<name>` by default, and it says what to run there. Its policy
+asks about what `--approve` leaves out (`Unapproved::Ask`), the kinds read by `args::tool_kinds`
+and said back by `args::approve_words` in `show`. `send` reads its prompt before it asks the
+Dispatcher, and says where the prompt went (`sent_to`).
+`weave schedules add --bot` names a Bot in place of `--host`, `--agent`, `--cwd`, `--project`,
+`--thread`, `--mode`, `--approve` and `--allow-overlap`, which clap refuses beside it, and `--at`
+a one-off in place of `--cron` (an `ArgGroup` wants one), read by `clock::parse_time` in
+`--zone` or this computer's zone, which it sends as the schedule's; both need `bots` too.
+`tests/dispatcher.rs` runs both against a Dispatcher in the test, with a Bot here and one on
+another computer's Host, and checks a home keeps what was there.
 
 `--host <id or name>` on `weave`, `weave threads` and `weave run` reaches another of the person's
 Hosts through the Dispatcher (WVE-195, ADR 0030): `host::Target::Carried`, a `Carry` through the
@@ -146,10 +172,11 @@ follow the protocol's versioning rather than a shape kept for the CLI: `daemon s
 (`host/status`'s `HostStatus`; nothing on stdout when the Host isn't running, and the service's
 notes on stderr), `threads list` (`ThreadListing`s), `threads read` (`threads/get`), `threads
 prompt` (`queue/add`, whose `queuedId` is the turn's id) and `steer` (`turn/steer`), `devices`
-(the Dispatcher's `Device`s), `projects` (its `Project`s; `remove`, `Empty`), `run --detach`
-(`thread/run`), and `run` and `prompt --wait`, whose
+(the Dispatcher's `Device`s), `projects` (its `Project`s; `remove`, `Empty`), `bots` (its
+`Bot`s; `send`, `SentToBot`; `remove`, `Empty`), `run --detach` (`thread/run`), and `run` and
+`prompt --wait`, whose
 thread's journal events (`thread/event`) stream as JSON lines. CLI tests check each parses as the
-type it claims (`tests/json.rs`; `devices` and `projects` in `tests/dispatcher.rs`).
+type it claims (`tests/json.rs`; `devices`, `projects` and `bots` in `tests/dispatcher.rs`).
 
 The exit status tells a script how a command went (`cli/src/exit.rs`, WVE-108): 0, it worked, or
 the turn ended (`end_turn`); 1, any other error; 2, arguments clap refused; 3, the weave Host
@@ -236,10 +263,10 @@ journals and traces) beside the installed one; its log is `daemon.log` there, an
 to whatever listens on its socket (`weave_host::socket::terminate_listener`). It keeps its work as it
 goes, so stopping drains nothing. `run --listen <loopback address> --url <url>` puts its
 WebSocket elsewhere and leaves Tailscale Serve alone, for a development Dispatcher such as the
-app's tests run (`app/src/host/testing/dev-dispatcher.ts`). `weave hosts` and `weave schedules`
-ask it over its socket (`src/dispatcher.rs`), or, when none runs here, the one this computer is
-paired with, over its WebSocket (WVE-176): `weave dispatcher connect <computer>` runs `weave
-pair --json` there over SSH (`src/ssh.rs`, which `WEAVE_SSH` stands in for in tests),
+app's tests run (`app/src/host/testing/dev-dispatcher.ts`). `weave hosts`, `weave schedules` and
+`weave bots` ask it over its socket (`src/dispatcher.rs`), or, when none runs here, the one this
+computer is paired with, over its WebSocket (WVE-176): `weave dispatcher connect <computer>`
+runs `weave pair --json` there over SSH (`src/ssh.rs`, which `WEAVE_SSH` stands in for in tests),
 or takes the URL and code, pairs with a new device key (`DeviceKey::kept`, in the Secure Enclave on
 a Mac that has one) and keeps the pairing in `$XDG_STATE_HOME/weave/client` (`src/paired.rs`, 0600;
 `disconnect` removes it). Then it offers to have this computer's Host join the Dispatcher

@@ -27,7 +27,7 @@ So the app is organised as Project → Session → Blocks.
   - A client without a Block's type shows the Block's type and props as text. That is the text floor of ADR 0018.
 - **Each device keeps its own view of the layout.** Focus, zoom, the tab in front and scroll positions stay on the device, as does how it presents the layout: a phone shows each tab as a stack, one Block at a time. None of this is written to the document.
 - **Bots stay outside Projects and Sessions.**
-  - A Bot's thread moves between Hosts (ADR 0028, ADR 0030), and a Session is on one Host.
+  - A Bot's thread moves between Hosts (ADR 0028, ADR 0030), and a Session is on one Host. (Not yet: since WVE-118 each Bot stays on the one Host it names until moving is built, WVE-217.)
   - Apps list Bots beside Projects. A Bot opens in a Thread Block of its own, which follows the Bot's thread to each successor.
   - A Bot's agent reaches any thread through the Host tools (ADR 0023, ADR 0029). Nothing ties a Bot to a Project.
 - **"Session" takes this meaning, so the code and the wire stop using it for threads.**

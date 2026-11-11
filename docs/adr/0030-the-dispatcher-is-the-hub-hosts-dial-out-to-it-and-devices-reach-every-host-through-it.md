@@ -30,6 +30,7 @@ So the Dispatcher becomes the hub.
 - **A Bot is a named succession of threads** (ADR 0028): a Dispatcher record that points at its current thread.
   - A Bot moves to another Host by starting a new thread there, after its home is cloned there. The old thread names the new one as its successor.
   - The Dispatcher chooses the Host each time it starts a Bot's thread, and when the Bot's Host is gone.
+  - Not yet: WVE-118 built one named Host per Bot (ADR 0028, settled there 2026-11-10). Moving waits for WVE-217 and a successor on another Host, since `thread/setSuccessor` names only a thread on the same Host.
   - A Bot's threads open through the Bot, not from the Hosts' thread lists, as ADR 0028 has it.
 
 ## Considered options
