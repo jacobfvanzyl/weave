@@ -1193,6 +1193,13 @@ export type OccurrenceState = "skipped" | "waiting" | "started" | "finished" | "
  */
 export type ProjectKind = "git" | "directory";
 /**
+ * What a Bot's current thread is doing, as the Dispatcher last saw it on the Bot's Host.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "BotState".
+ */
+export type BotState = "working" | "needsYou" | "idle";
+/**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "TerminalRestore".
  */
@@ -7549,7 +7556,9 @@ export interface ListSchedulesResponse {
 }
 /**
  * A schedule: a trigger whose occurrences start a headless turn on one of the person's Hosts
- * at the times its cron expression gives, in its time zone.
+ * at the times its cron expression gives, in its time zone, or once at the time it names (a
+ * one-off). A Bot's schedule prompts the Bot (WVE-118): its Host, agent, directory, policy,
+ * mode and thread are the Bot's as it lists now.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "Schedule".
@@ -7558,15 +7567,31 @@ export interface Schedule {
   id: string;
   name: string;
   /**
-   * Five fields, minute to weekday, or a name such as `@daily`.
+   * Five fields, minute to weekday, or a name such as `@daily`; empty for a one-off.
    */
   cron: string;
+  /**
+   * A one-off's time, its one occurrence's (feature `bots`).
+   */
+  at?: number | null;
   /**
    * An IANA time zone, such as `Africa/Johannesburg`.
    */
   zone: string;
   hostId: string;
   hostName: string;
+  /**
+   * The Bot each occurrence prompts, for a Bot's schedule (feature `bots`): `run` gives its
+   * agent, home as `cwd`, policy, mode and current thread.
+   */
+  botId?: string | null;
+  botName?: string | null;
+  /**
+   * The Bot asked for it itself, from one of its threads, with the Dispatcher's `wake_me`
+   * tool (feature `bots`): a one-off, which the Dispatcher forgets a week after its time once
+   * its occurrence is over. Absent for the person's own schedules.
+   */
+  wakeUp?: boolean;
   agentId: string;
   cwd: string;
   prompt: ContentBlock[];
@@ -7591,7 +7616,7 @@ export interface Schedule {
    */
   failures: number;
   /**
-   * When it next runs, unless it's paused.
+   * When it next runs, unless it's paused; absent for a one-off once its time has come.
    */
   nextAt?: number | null;
   /**
@@ -7639,7 +7664,10 @@ export interface Occurrence {
   endedAt?: number | null;
 }
 /**
- * `schedules/add`.
+ * `schedules/add`: a schedule with `cron`, or a one-off with `at` (feature `bots`), that names
+ * either a Host with `agentId`, `cwd` and `policy`, and maybe `mode` or `thread`, or a Bot
+ * (feature `bots`) in place of all of those. Invalid params, saying why, for both or neither of
+ * each pair.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "AddScheduleRequest".
@@ -7649,19 +7677,33 @@ export interface AddScheduleRequest {
    * Unique among the Dispatcher's schedules.
    */
   name: string;
-  cron: string;
+  /**
+   * Absent for a one-off, which gives `at`.
+   */
+  cron?: string | null;
+  /**
+   * A one-off's time, after now, in place of `cron`: it has one occurrence then, or a
+   * catch-up after it as `missed` says, and is kept, done, with that occurrence.
+   */
+  at?: number | null;
   /**
    * The Dispatcher's own time zone when absent.
    */
   zone?: string | null;
   /**
-   * The Host, by id or name.
+   * The Host, by id or name; absent for a Bot's schedule.
    */
-  host: string;
-  agentId: string;
-  cwd: string;
+  host?: string | null;
+  /**
+   * The Bot each occurrence prompts, by id or name, in place of `host`, `agentId`, `cwd`,
+   * `policy`, `mode` and `thread`: the prompt goes into its current thread, or starts its
+   * first. Its `overlap` is `skip`.
+   */
+  bot?: string | null;
+  agentId?: string | null;
+  cwd?: string | null;
   prompt: ContentBlock[];
-  policy: PermissionPolicy;
+  policy?: PermissionPolicy | null;
   /**
    * The mode a new thread starts in; the agent's configured one when absent.
    */
@@ -7911,6 +7953,347 @@ export interface RemoveProjectRequest {
   project: string;
 }
 /**
+ * `bots/list`: the Bots, by name.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListBotsRequest".
+ */
+export interface ListBotsRequest {}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListBotsResponse".
+ */
+export interface ListBotsResponse {
+  bots: Bot[];
+}
+/**
+ * A named assistant the Dispatcher keeps (ADR 0028, WVE-118), whose work goes on in ordinary
+ * threads, one at a time, on the one Host it names, in its home. Its prompts, from the person
+ * through the Dispatcher and from its schedules, go into its current thread; a new thread takes
+ * over when asked or daily, after the one before saves what it learned to the home. Its Host
+ * learns nothing of it: its threads carry the labels `dispatcher` and `bot:<id>`.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Bot".
+ */
+export interface Bot {
+  /**
+   * `b-` and 20 hex digits.
+   */
+  id: string;
+  /**
+   * What it's shown as and named by, with its id: unique among the Dispatcher's Bots,
+   * ignoring case.
+   */
+  name: string;
+  agentId: string;
+  /**
+   * The Host its threads run on, which it never leaves.
+   */
+  hostId: string;
+  /**
+   * What the Dispatcher calls that Host now.
+   */
+  hostName: string;
+  /**
+   * Whether the Dispatcher is connected to its Host now.
+   */
+  connected: boolean;
+  /**
+   * Where its threads run and its memory files are, on its Host: absolute there, or under
+   * the Host's home as `~/…`.
+   */
+  home: string;
+  policy: PermissionPolicy3;
+  /**
+   * The mode its new threads start in; the agent's configured one when absent.
+   */
+  mode?: string | null;
+  /**
+   * A local time, `HH:MM` in `zone`, at which it starts a new thread each day, if its
+   * thread has had a turn since it started.
+   */
+  newThreadAt?: string | null;
+  /**
+   * An IANA time zone, such as `Africa/Johannesburg`.
+   */
+  zone: string;
+  /**
+   * How long, in milliseconds, a pending request in its thread may wait for the person
+   * before its schedules pause.
+   */
+  pauseAfter: number;
+  /**
+   * Its current thread; absent until the first prompt that reaches it starts one.
+   */
+  thread?: SessionId | null;
+  /**
+   * Every thread it has had, oldest first, the current one last.
+   */
+  threads?: BotThread[];
+  state: BotState;
+  /**
+   * Since when a pending request in its current thread has waited for the person, as the
+   * Dispatcher saw it.
+   */
+  waitingSince?: number | null;
+  /**
+   * Why its schedules' occurrences are skipped, while they are: its thread has waited on
+   * the person longer than `pause_after`. It resumes by itself once the thread no longer
+   * waits.
+   */
+  paused?: string | null;
+  /**
+   * A new thread is being started: prompts for it wait, oldest first, to go into that one.
+   */
+  startingThread?: boolean;
+  createdAt: number;
+  /**
+   * When it was last changed with `bots/update`.
+   */
+  updatedAt: number;
+}
+/**
+ * How a thread's permission requests are answered.
+ */
+export interface PermissionPolicy3 {
+  /**
+   * Tool kinds approved without asking anyone.
+   */
+  approve?: ToolKind[];
+  /**
+   * What happens to the rest.
+   */
+  otherwise?: "ask" | "reject";
+}
+/**
+ * One of a Bot's threads.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "BotThread".
+ */
+export interface BotThread {
+  threadId: SessionId;
+  /**
+   * When its Host started it.
+   */
+  startedAt: number;
+  /**
+   * When a new thread took over from it; absent for the current one.
+   */
+  endedAt?: number | null;
+}
+/**
+ * `bots/get`: one Bot, by id or name, ignoring case; invalid params for none.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "GetBotRequest".
+ */
+export interface GetBotRequest {
+  bot: string;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "BotResponse".
+ */
+export interface BotResponse {
+  bot: Bot;
+}
+/**
+ * `bots/add`: a new Bot, with no thread yet: the first prompt that reaches it starts one in
+ * its home, which has to be a directory on its Host by then (the Dispatcher reads no Host's
+ * files). Invalid params, saying why, for an empty name or one of more than one line, a name
+ * another Bot has ignoring case, a Host that hasn't joined, an empty agent, a home that is
+ * neither whole nor under `~`, a time zone that doesn't parse, or a `newThreadAt` that isn't
+ * `HH:MM`.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "AddBotRequest".
+ */
+export interface AddBotRequest {
+  name: string;
+  /**
+   * The Host, by id or name.
+   */
+  host: string;
+  agentId: string;
+  home: string;
+  /**
+   * Approving nothing, so what isn't approved waits for the person, when absent.
+   */
+  policy?: PermissionPolicy | null;
+  mode?: string | null;
+  /**
+   * `HH:MM`: a new thread daily, then, in `zone`.
+   */
+  newThreadAt?: string | null;
+  /**
+   * The Dispatcher's own time zone when absent.
+   */
+  zone?: string | null;
+  /**
+   * [`DEFAULT_PAUSE_AFTER`] when absent.
+   */
+  pauseAfter?: number | null;
+}
+/**
+ * `bots/update`: change what's given, all or none, checked as `bots/add` checks it. A policy
+ * or mode applies to threads started from then on: an open thread keeps its own. `mode` and
+ * `newThreadAt` are cleared with `null`.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "UpdateBotRequest".
+ */
+export interface UpdateBotRequest {
+  /**
+   * By id or name.
+   */
+  bot: string;
+  name?: string | null;
+  policy?: PermissionPolicy | null;
+  mode?: string | null;
+  newThreadAt?: string | null;
+  zone?: string | null;
+  pauseAfter?: number | null;
+}
+/**
+ * `bots/remove`: forget a Bot, by id or name, its schedules and the prompts still waiting for
+ * it. Its threads and its home stay on its Host.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "RemoveBotRequest".
+ */
+export interface RemoveBotRequest {
+  bot: string;
+}
+/**
+ * `bots/send`: a prompt for a Bot, by id or name, from a sender that isn't attached to its
+ * thread, such as the CLI or a script. It's written down, as a delivery, and goes into the
+ * Bot's current thread when first sent (queued there behind whatever runs), or starts its
+ * first thread; while a new thread is being started, it waits for that one. With `key`, the
+ * same key again names the same delivery and sends nothing more.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SendToBotRequest".
+ */
+export interface SendToBotRequest {
+  bot: string;
+  prompt: ContentBlock[];
+  /**
+   * The sender's own name for this prompt, unique for the Bot.
+   */
+  key?: string | null;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SentToBot".
+ */
+export interface SentToBot {
+  /**
+   * The delivery that carries the prompt, which its turn's origin names as its `id`.
+   */
+  deliveryId: string;
+  bot: Bot1;
+}
+/**
+ * A named assistant the Dispatcher keeps (ADR 0028, WVE-118), whose work goes on in ordinary
+ * threads, one at a time, on the one Host it names, in its home. Its prompts, from the person
+ * through the Dispatcher and from its schedules, go into its current thread; a new thread takes
+ * over when asked or daily, after the one before saves what it learned to the home. Its Host
+ * learns nothing of it: its threads carry the labels `dispatcher` and `bot:<id>`.
+ */
+export interface Bot1 {
+  /**
+   * `b-` and 20 hex digits.
+   */
+  id: string;
+  /**
+   * What it's shown as and named by, with its id: unique among the Dispatcher's Bots,
+   * ignoring case.
+   */
+  name: string;
+  agentId: string;
+  /**
+   * The Host its threads run on, which it never leaves.
+   */
+  hostId: string;
+  /**
+   * What the Dispatcher calls that Host now.
+   */
+  hostName: string;
+  /**
+   * Whether the Dispatcher is connected to its Host now.
+   */
+  connected: boolean;
+  /**
+   * Where its threads run and its memory files are, on its Host: absolute there, or under
+   * the Host's home as `~/…`.
+   */
+  home: string;
+  policy: PermissionPolicy3;
+  /**
+   * The mode its new threads start in; the agent's configured one when absent.
+   */
+  mode?: string | null;
+  /**
+   * A local time, `HH:MM` in `zone`, at which it starts a new thread each day, if its
+   * thread has had a turn since it started.
+   */
+  newThreadAt?: string | null;
+  /**
+   * An IANA time zone, such as `Africa/Johannesburg`.
+   */
+  zone: string;
+  /**
+   * How long, in milliseconds, a pending request in its thread may wait for the person
+   * before its schedules pause.
+   */
+  pauseAfter: number;
+  /**
+   * Its current thread; absent until the first prompt that reaches it starts one.
+   */
+  thread?: SessionId | null;
+  /**
+   * Every thread it has had, oldest first, the current one last.
+   */
+  threads?: BotThread[];
+  state: BotState;
+  /**
+   * Since when a pending request in its current thread has waited for the person, as the
+   * Dispatcher saw it.
+   */
+  waitingSince?: number | null;
+  /**
+   * Why its schedules' occurrences are skipped, while they are: its thread has waited on
+   * the person longer than `pause_after`. It resumes by itself once the thread no longer
+   * waits.
+   */
+  paused?: string | null;
+  /**
+   * A new thread is being started: prompts for it wait, oldest first, to go into that one.
+   */
+  startingThread?: boolean;
+  createdAt: number;
+  /**
+   * When it was last changed with `bots/update`.
+   */
+  updatedAt: number;
+}
+/**
+ * `bots/newThread`: start a Bot's new thread, by id or name. Prompts for it wait from now on;
+ * once its current thread is idle, that thread is asked to save what's worth keeping to the
+ * Bot's memory files, note itself in `threads/` in the home and commit; then a new thread
+ * starts in the home, the old one names it as its successor, and the prompts that waited go
+ * into it. Invalid params, saying why, for a Bot with no thread yet or one starting one
+ * already.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "NewBotThreadRequest".
+ */
+export interface NewBotThreadRequest {
+  bot: string;
+}
+/**
  * `devices/paired`: a device took the offer this connection made.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -7994,8 +8377,10 @@ export const HOST_PROTOCOL = {
     "carrySubprotocol": "weave-dispatcher-carry",
     "authMessage": "weave-dispatcher-auth/1 {dispatcherId} {deviceId} {nonce}",
     "features": {
-      "projects": "projects"
-    }
+      "projects": "projects",
+      "bots": "bots"
+    },
+    "defaultPauseAfter": 43200000
   },
   "terminalStream": {
     "subprotocol": "weave-terminal",
@@ -8197,6 +8582,13 @@ export interface DispatcherRequests {
   "projects/add": { params: AddProjectRequest; result: ProjectResponse };
   "projects/update": { params: UpdateProjectRequest; result: ProjectResponse };
   "projects/remove": { params: RemoveProjectRequest; result: Empty };
+  "bots/list": { params: ListBotsRequest; result: ListBotsResponse };
+  "bots/get": { params: GetBotRequest; result: BotResponse };
+  "bots/add": { params: AddBotRequest; result: BotResponse };
+  "bots/update": { params: UpdateBotRequest; result: BotResponse };
+  "bots/remove": { params: RemoveBotRequest; result: Empty };
+  "bots/send": { params: SendToBotRequest; result: SentToBot };
+  "bots/newThread": { params: NewBotThreadRequest; result: BotResponse };
 }
 
 /** What each notification the Dispatcher sends carries. */

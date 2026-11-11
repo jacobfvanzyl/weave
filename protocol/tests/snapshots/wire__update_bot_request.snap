@@ -1,0 +1,20 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&UpdateBotRequest\n{\n    bot: \"odin\".to_owned(), name: Some(\"odin-bot\".to_owned()), policy:\n    Some(PermissionPolicy::headless(vec![ToolKind::Read])), mode: Some(None),\n    new_thread_at: Some(Some(\"05:30\".to_owned())), zone: None, pause_after:\n    Some(3_600_000),\n})"
+---
+{
+  "method": "bots/update",
+  "params": {
+    "bot": "odin",
+    "name": "odin-bot",
+    "policy": {
+      "approve": [
+        "read"
+      ],
+      "otherwise": "reject"
+    },
+    "mode": null,
+    "newThreadAt": "05:30",
+    "pauseAfter": 3600000
+  }
+}

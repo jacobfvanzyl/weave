@@ -1,0 +1,60 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&ListBotsResponse { bots: vec![odin.clone(), new], })"
+---
+{
+  "bots": [
+    {
+      "id": "b-5e1d0c9b8a7f6e5d4c3b",
+      "name": "odin",
+      "agentId": "claude",
+      "hostId": "Lw4nB7cR2tY9uI0oP5aS3d",
+      "hostName": "homelab",
+      "connected": true,
+      "home": "~/bots/odin",
+      "policy": {
+        "approve": [
+          "read"
+        ],
+        "otherwise": "ask"
+      },
+      "newThreadAt": "04:00",
+      "zone": "Africa/Johannesburg",
+      "pauseAfter": 43200000,
+      "thread": "s-9b1c",
+      "threads": [
+        {
+          "threadId": "s-3f9c",
+          "startedAt": 1760180000000,
+          "endedAt": 1760266400000
+        },
+        {
+          "threadId": "s-9b1c",
+          "startedAt": 1760266400000
+        }
+      ],
+      "state": "needsYou",
+      "waitingSince": 1760270000000,
+      "createdAt": 1760180000000,
+      "updatedAt": 1760180000000
+    },
+    {
+      "id": "b-0a1b2c3d4e5f60718293",
+      "name": "scribe",
+      "agentId": "claude",
+      "hostId": "Lw4nB7cR2tY9uI0oP5aS3d",
+      "hostName": "homelab",
+      "connected": false,
+      "home": "/srv/scribe",
+      "policy": {
+        "otherwise": "ask"
+      },
+      "zone": "Africa/Johannesburg",
+      "pauseAfter": 43200000,
+      "threads": [],
+      "state": "idle",
+      "createdAt": 1760180000000,
+      "updatedAt": 1760180000000
+    }
+  ]
+}

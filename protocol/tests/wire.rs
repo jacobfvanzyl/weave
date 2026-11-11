@@ -69,12 +69,20 @@ use weave_host_protocol::devices::NewDevice;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::OfferDeviceResponse;
 use weave_host_protocol::devices::RevokeDeviceRequest;
+use weave_host_protocol::dispatcher::AddBotRequest;
 use weave_host_protocol::dispatcher::AddProjectRequest;
+use weave_host_protocol::dispatcher::AddScheduleRequest;
+use weave_host_protocol::dispatcher::BOTS_FEATURE;
+use weave_host_protocol::dispatcher::Bot;
+use weave_host_protocol::dispatcher::BotResponse;
+use weave_host_protocol::dispatcher::BotState;
+use weave_host_protocol::dispatcher::BotThread;
 use weave_host_protocol::dispatcher::CARRY_FEATURE;
 use weave_host_protocol::dispatcher::CarriedStream;
 use weave_host_protocol::dispatcher::CarryRequest;
 use weave_host_protocol::dispatcher::DispatcherAddress;
 use weave_host_protocol::dispatcher::DispatcherHello;
+use weave_host_protocol::dispatcher::GetBotRequest;
 use weave_host_protocol::dispatcher::GetProjectRequest;
 use weave_host_protocol::dispatcher::HostCarried;
 use weave_host_protocol::dispatcher::HostCarryRequest;
@@ -83,18 +91,31 @@ use weave_host_protocol::dispatcher::JoinDispatcherRequest;
 use weave_host_protocol::dispatcher::JoinDispatcherResponse;
 use weave_host_protocol::dispatcher::JoinedDispatcher;
 use weave_host_protocol::dispatcher::LeaveDispatcherRequest;
+use weave_host_protocol::dispatcher::ListBotsRequest;
+use weave_host_protocol::dispatcher::ListBotsResponse;
 use weave_host_protocol::dispatcher::ListProjectsRequest;
 use weave_host_protocol::dispatcher::ListProjectsResponse;
+use weave_host_protocol::dispatcher::Missed;
+use weave_host_protocol::dispatcher::NewBotThreadRequest;
 use weave_host_protocol::dispatcher::NewLocation;
+use weave_host_protocol::dispatcher::Occurrence;
+use weave_host_protocol::dispatcher::OccurrenceState;
 use weave_host_protocol::dispatcher::OpenHostRequest;
 use weave_host_protocol::dispatcher::OpenedHost;
+use weave_host_protocol::dispatcher::Overlap;
 use weave_host_protocol::dispatcher::PROJECTS_FEATURE;
 use weave_host_protocol::dispatcher::Project;
 use weave_host_protocol::dispatcher::ProjectKind;
 use weave_host_protocol::dispatcher::ProjectLocation;
 use weave_host_protocol::dispatcher::ProjectResponse;
 use weave_host_protocol::dispatcher::Reachability;
+use weave_host_protocol::dispatcher::RemoveBotRequest;
 use weave_host_protocol::dispatcher::RemoveProjectRequest;
+use weave_host_protocol::dispatcher::Schedule;
+use weave_host_protocol::dispatcher::ScheduledRun;
+use weave_host_protocol::dispatcher::SendToBotRequest;
+use weave_host_protocol::dispatcher::SentToBot;
+use weave_host_protocol::dispatcher::UpdateBotRequest;
 use weave_host_protocol::dispatcher::UpdateProjectRequest;
 use weave_host_protocol::dispatcher::carry_message;
 use weave_host_protocol::events::ElicitationCompletedNotification;
@@ -133,6 +154,7 @@ use weave_host_protocol::pending::PendingRequest;
 use weave_host_protocol::pending::PendingResolvedNotification;
 use weave_host_protocol::pending::Resolution;
 use weave_host_protocol::policy::PermissionPolicy;
+use weave_host_protocol::policy::Unapproved;
 use weave_host_protocol::queue::AddQueuedRequest;
 use weave_host_protocol::queue::AddQueuedResponse;
 use weave_host_protocol::queue::QueuePause;
@@ -2252,6 +2274,280 @@ fn projects() {
     }))
     .expect("an older hello parses");
     assert!(!older.offers(PROJECTS_FEATURE));
+}
+
+/// The person's Bots (ADR 0028, WVE-118), in the Dispatcher's API: one on the homelab with a
+/// thread before its current one, what clients ask about them, and the schedules that name one,
+/// a one-off among them. A schedule that names a Host is said as it was before.
+#[test]
+fn bots() {
+    insta::assert_json_snapshot!(
+        "dispatcher_hello_bots",
+        round_trip(&DispatcherHello {
+            protocol: 2,
+            version: "0.1.0".to_owned(),
+            id: "D7qK2mN4pR8sT1vX".to_owned(),
+            device: None,
+            features: vec![PROJECTS_FEATURE.to_owned(), BOTS_FEATURE.to_owned()],
+        })
+    );
+    let odin = Bot {
+        id: "b-5e1d0c9b8a7f6e5d4c3b".to_owned(),
+        name: "odin".to_owned(),
+        agent_id: "claude".to_owned(),
+        host_id: "Lw4nB7cR2tY9uI0oP5aS3d".to_owned(),
+        host_name: "homelab".to_owned(),
+        connected: true,
+        home: "~/bots/odin".into(),
+        policy: PermissionPolicy {
+            approve: vec![ToolKind::Read],
+            otherwise: Unapproved::Ask,
+        },
+        mode: None,
+        new_thread_at: Some("04:00".to_owned()),
+        zone: "Africa/Johannesburg".to_owned(),
+        pause_after: 43_200_000,
+        thread: Some("s-9b1c".into()),
+        threads: vec![
+            BotThread {
+                thread_id: "s-3f9c".into(),
+                started_at: 1_760_180_000_000,
+                ended_at: Some(1_760_266_400_000),
+            },
+            BotThread {
+                thread_id: "s-9b1c".into(),
+                started_at: 1_760_266_400_000,
+                ended_at: None,
+            },
+        ],
+        state: BotState::NeedsYou,
+        waiting_since: Some(1_760_270_000_000),
+        paused: None,
+        starting_thread: false,
+        created_at: 1_760_180_000_000,
+        updated_at: 1_760_180_000_000,
+    };
+    let new = Bot {
+        id: "b-0a1b2c3d4e5f60718293".to_owned(),
+        name: "scribe".to_owned(),
+        home: "/srv/scribe".into(),
+        policy: PermissionPolicy::ask(),
+        new_thread_at: None,
+        thread: None,
+        threads: Vec::new(),
+        state: BotState::Idle,
+        waiting_since: None,
+        connected: false,
+        ..odin.clone()
+    };
+    insta::assert_json_snapshot!("list_bots_request", message(&ListBotsRequest {}));
+    insta::assert_json_snapshot!(
+        "list_bots_response",
+        round_trip(&ListBotsResponse {
+            bots: vec![odin.clone(), new],
+        })
+    );
+    insta::assert_json_snapshot!(
+        "get_bot_request",
+        message(&GetBotRequest {
+            bot: "odin".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "bot_response_starting_a_thread_paused",
+        round_trip(&BotResponse {
+            bot: Bot {
+                paused: Some(
+                    "its thread has waited on the person since Mon 12 Oct 13:53 SAST".to_owned()
+                ),
+                starting_thread: true,
+                ..odin.clone()
+            },
+        })
+    );
+    insta::assert_json_snapshot!(
+        "add_bot_request",
+        message(&AddBotRequest {
+            name: "odin".to_owned(),
+            host: "homelab".to_owned(),
+            agent_id: "claude".to_owned(),
+            home: "~/bots/odin".into(),
+            policy: None,
+            mode: None,
+            new_thread_at: Some("04:00".to_owned()),
+            zone: None,
+            pause_after: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "update_bot_request",
+        message(&UpdateBotRequest {
+            bot: "odin".to_owned(),
+            name: Some("odin-bot".to_owned()),
+            policy: Some(PermissionPolicy::headless(vec![ToolKind::Read])),
+            mode: Some(None),
+            new_thread_at: Some(Some("05:30".to_owned())),
+            zone: None,
+            pause_after: Some(3_600_000),
+        })
+    );
+    // `null` clears; absent leaves it as it is.
+    let cleared: UpdateBotRequest =
+        serde_json::from_value(json!({"bot": "odin", "newThreadAt": null})).expect("parses");
+    assert_eq!((cleared.new_thread_at, cleared.mode), (Some(None), None));
+    insta::assert_json_snapshot!(
+        "remove_bot_request",
+        message(&RemoveBotRequest {
+            bot: "odin".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "send_to_bot_request",
+        message(&SendToBotRequest {
+            bot: "odin".to_owned(),
+            prompt: vec![text("What's on today?")],
+            key: Some("morning-2026-11-10".to_owned()),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "sent_to_bot",
+        round_trip(&SentToBot {
+            delivery_id: "w-1a2b3c4d5e6f7a8b9c0d".to_owned(),
+            bot: odin.clone(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "new_bot_thread_request",
+        message(&NewBotThreadRequest {
+            bot: "odin".to_owned(),
+        })
+    );
+
+    let host_schedule = AddScheduleRequest {
+        name: "daily-review".to_owned(),
+        cron: Some("0 9 * * 1-5".to_owned()),
+        at: None,
+        zone: Some("Africa/Johannesburg".to_owned()),
+        host: Some("studio".to_owned()),
+        bot: None,
+        agent_id: Some("claude".to_owned()),
+        cwd: Some("/Users/jaco/Projects/weave".into()),
+        prompt: vec![text("Review yesterday's commits.")],
+        policy: Some(PermissionPolicy::headless(vec![ToolKind::Read])),
+        mode: None,
+        thread: None,
+        missed: Missed::Latest,
+        overlap: Overlap::Skip,
+    };
+    insta::assert_json_snapshot!("add_schedule_request", message(&host_schedule));
+    insta::assert_json_snapshot!(
+        "add_schedule_bot_one_off_request",
+        message(&AddScheduleRequest {
+            name: "remind-odin".to_owned(),
+            cron: None,
+            at: Some(1_760_270_400_000),
+            zone: None,
+            host: None,
+            bot: Some("odin".to_owned()),
+            agent_id: None,
+            cwd: None,
+            prompt: vec![text("Check whether the deploy finished.")],
+            policy: None,
+            mode: None,
+            thread: None,
+            missed: Missed::Latest,
+            overlap: Overlap::Skip,
+        })
+    );
+    // A Bot's own wake-up, which its thread asked for with `wake_me`, says so.
+    insta::assert_json_snapshot!(
+        "schedule_a_bot_woke_itself_with",
+        round_trip(&Schedule {
+            id: "sch-9e8d7c6b5a4f3e2d1c0b".to_owned(),
+            name: "wake-up-9e8d7c6b5a4f".to_owned(),
+            cron: String::new(),
+            at: Some(1_760_274_000_000),
+            zone: "Africa/Johannesburg".to_owned(),
+            host_id: odin.host_id.clone(),
+            host_name: odin.host_name.clone(),
+            bot_id: Some(odin.id.clone()),
+            bot_name: Some(odin.name.clone()),
+            wake_up: true,
+            run: ScheduledRun {
+                agent_id: odin.agent_id.clone(),
+                cwd: odin.home.clone(),
+                prompt: vec![text(
+                    "See whether the deploy finished, and tell Jaco if it failed."
+                )],
+                policy: odin.policy.clone(),
+                mode: None,
+                thread: odin.thread.clone(),
+            },
+            missed: Missed::Latest,
+            overlap: Overlap::Skip,
+            created_at: 1_760_270_400_000,
+            paused: None,
+            failures: 0,
+            next_at: Some(1_760_274_000_000),
+            next: Some("Sun 12 Oct 15:00 SAST".to_owned()),
+            last: None,
+        })
+    );
+    // A Bot's schedule lists the Bot's Host, agent, home, policy and current thread.
+    insta::assert_json_snapshot!(
+        "schedule_of_a_bot",
+        round_trip(&Schedule {
+            id: "sch-4d5e6f7a8b9c0d1e2f3a".to_owned(),
+            name: "remind-odin".to_owned(),
+            cron: String::new(),
+            at: Some(1_760_270_400_000),
+            zone: "Africa/Johannesburg".to_owned(),
+            host_id: odin.host_id.clone(),
+            host_name: odin.host_name.clone(),
+            bot_id: Some(odin.id.clone()),
+            bot_name: Some(odin.name.clone()),
+            wake_up: false,
+            run: ScheduledRun {
+                agent_id: odin.agent_id.clone(),
+                cwd: odin.home.clone(),
+                prompt: vec![text("Check whether the deploy finished.")],
+                policy: odin.policy.clone(),
+                mode: None,
+                thread: odin.thread.clone(),
+            },
+            missed: Missed::Latest,
+            overlap: Overlap::Skip,
+            created_at: 1_760_266_000_000,
+            paused: None,
+            failures: 0,
+            next_at: None,
+            next: None,
+            last: Some(Occurrence {
+                id: "occ-7a8b9c0d1e2f3a4b5c6d".to_owned(),
+                schedule_id: "sch-4d5e6f7a8b9c0d1e2f3a".to_owned(),
+                scheduled_at: 1_760_270_400_000,
+                late: false,
+                manual: false,
+                state: OccurrenceState::Started,
+                outcome: None,
+                why: None,
+                thread_id: odin.thread,
+                turn_id: Some("q-2c4e".to_owned()),
+                recorded_at: 1_760_270_400_100,
+                ended_at: None,
+            }),
+        })
+    );
+    // An older client's schedule names its Host, and reads the same.
+    let older: AddScheduleRequest = serde_json::from_value(json!({
+        "name": "daily-review", "cron": "0 9 * * 1-5", "zone": "Africa/Johannesburg",
+        "host": "studio", "agentId": "claude", "cwd": "/Users/jaco/Projects/weave",
+        "prompt": [{"type": "text", "text": "Review yesterday's commits."}],
+        "policy": {"approve": ["read"], "otherwise": "reject"},
+        "missed": "latest", "overlap": "skip"
+    }))
+    .expect("an older request parses");
+    assert_eq!(older, host_schedule);
 }
 
 #[test]

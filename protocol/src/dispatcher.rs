@@ -2,8 +2,9 @@
 //! Unix socket on its own computer, or over its WebSocket from the person's other devices,
 //! paired with it (WVE-176). The Dispatcher is a client of the
 //! person's Hosts, which join it and keep a connection open to it (ADR 0030, WVE-194): the
-//! Hosts that joined and how each stands, its schedules (WVE-145) and their occurrences, and
-//! the person's Projects (ADR 0031, WVE-189), which [`crate::projects`] places threads in.
+//! Hosts that joined and how each stands, its schedules (WVE-145) and their occurrences, the
+//! person's Projects (ADR 0031, WVE-189), which [`crate::projects`] places threads in, and their
+//! Bots (ADR 0028, WVE-118), whose work goes on in ordinary threads on one Host.
 //! Its devices are managed with `devices/*`, on its own computer only; Hosts pair with nothing
 //! since WVE-197, and take the Dispatcher's word for the devices it carries to them.
 //!
@@ -87,6 +88,14 @@ pub const CARRY_FEATURE: &str = "carry";
 /// The [`DispatcherHello::features`] entry of a Dispatcher that keeps Projects (ADR 0031,
 /// WVE-189): it answers `projects/*`.
 pub const PROJECTS_FEATURE: &str = "projects";
+
+/// The [`DispatcherHello::features`] entry of a Dispatcher that keeps Bots (ADR 0028, WVE-118):
+/// it answers `bots/*`, and `schedules/add` takes `bot`, and `at` for a one-off.
+pub const BOTS_FEATURE: &str = "bots";
+
+/// How long a pending request in a Bot's thread waits for the person before the Bot's schedules
+/// pause, unless the Bot says otherwise: 12 hours, in milliseconds.
+pub const DEFAULT_PAUSE_AFTER: u64 = 12 * 60 * 60 * 1000;
 
 /// The device the Dispatcher's own computer is, on a connection carried from its socket: it
 /// proves nothing, as the socket's peer is the Dispatcher's own user, and is named after the
@@ -463,19 +472,35 @@ pub enum Overlap {
 }
 
 /// A schedule: a trigger whose occurrences start a headless turn on one of the person's Hosts
-/// at the times its cron expression gives, in its time zone.
+/// at the times its cron expression gives, in its time zone, or once at the time it names (a
+/// one-off). A Bot's schedule prompts the Bot (WVE-118): its Host, agent, directory, policy,
+/// mode and thread are the Bot's as it lists now.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct Schedule {
     pub id: String,
     pub name: String,
-    /// Five fields, minute to weekday, or a name such as `@daily`.
+    /// Five fields, minute to weekday, or a name such as `@daily`; empty for a one-off.
     pub cron: String,
+    /// A one-off's time, its one occurrence's (feature `bots`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<Timestamp>,
     /// An IANA time zone, such as `Africa/Johannesburg`.
     pub zone: String,
     pub host_id: String,
     pub host_name: String,
+    /// The Bot each occurrence prompts, for a Bot's schedule (feature `bots`): `run` gives its
+    /// agent, home as `cwd`, policy, mode and current thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_name: Option<String>,
+    /// The Bot asked for it itself, from one of its threads, with the Dispatcher's `wake_me`
+    /// tool (feature `bots`): a one-off, which the Dispatcher forgets a week after its time once
+    /// its occurrence is over. Absent for the person's own schedules.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wake_up: bool,
     #[serde(flatten)]
     pub run: ScheduledRun,
     pub missed: Missed,
@@ -486,7 +511,7 @@ pub struct Schedule {
     pub paused: Option<String>,
     /// Its occurrences that failed or were interrupted in a row.
     pub failures: u32,
-    /// When it next runs, unless it's paused.
+    /// When it next runs, unless it's paused; absent for a one-off once its time has come.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_at: Option<Timestamp>,
     /// That, in its time zone: "Wed 4 Nov 09:00 SAST".
@@ -574,7 +599,10 @@ pub struct ListSchedulesResponse {
     pub schedules: Vec<Schedule>,
 }
 
-/// `schedules/add`.
+/// `schedules/add`: a schedule with `cron`, or a one-off with `at` (feature `bots`), that names
+/// either a Host with `agentId`, `cwd` and `policy`, and maybe `mode` or `thread`, or a Bot
+/// (feature `bots`) in place of all of those. Invalid params, saying why, for both or neither of
+/// each pair.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "schedules/add", response = ScheduleResponse)]
@@ -582,14 +610,37 @@ pub struct ListSchedulesResponse {
 pub struct AddScheduleRequest {
     /// Unique among the Dispatcher's schedules.
     pub name: String,
-    pub cron: String,
+    /// Absent for a one-off, which gives `at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cron: Option<String>,
+    /// A one-off's time, after now, in place of `cron`: it has one occurrence then, or a
+    /// catch-up after it as `missed` says, and is kept, done, with that occurrence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<Timestamp>,
     /// The Dispatcher's own time zone when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone: Option<String>,
-    /// The Host, by id or name.
-    pub host: String,
-    #[serde(flatten)]
-    pub run: ScheduledRun,
+    /// The Host, by id or name; absent for a Bot's schedule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// The Bot each occurrence prompts, by id or name, in place of `host`, `agentId`, `cwd`,
+    /// `policy`, `mode` and `thread`: the prompt goes into its current thread, or starts its
+    /// first. Its `overlap` is `skip`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+    pub prompt: Vec<ContentBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<PermissionPolicy>,
+    /// The mode a new thread starts in; the agent's configured one when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// The thread each occurrence prompts; each starts a new one when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadId>,
     #[serde(default)]
     pub missed: Missed,
     #[serde(default)]
@@ -814,6 +865,245 @@ pub struct UpdateProjectRequest {
 #[request(method = "projects/remove", response = Empty)]
 pub struct RemoveProjectRequest {
     pub project: String,
+}
+
+/// What a Bot's current thread is doing, as the Dispatcher last saw it on the Bot's Host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum BotState {
+    /// Its thread runs a turn.
+    Working,
+    /// A pending request in its thread waits for the person.
+    NeedsYou,
+    /// Nothing runs: its thread is idle or not open, it has none yet, or the Dispatcher isn't
+    /// connected to its Host.
+    Idle,
+}
+
+/// One of a Bot's threads.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct BotThread {
+    pub thread_id: ThreadId,
+    /// When its Host started it.
+    pub started_at: Timestamp,
+    /// When a new thread took over from it; absent for the current one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<Timestamp>,
+}
+
+/// A named assistant the Dispatcher keeps (ADR 0028, WVE-118), whose work goes on in ordinary
+/// threads, one at a time, on the one Host it names, in its home. Its prompts, from the person
+/// through the Dispatcher and from its schedules, go into its current thread; a new thread takes
+/// over when asked or daily, after the one before saves what it learned to the home. Its Host
+/// learns nothing of it: its threads carry the labels `dispatcher` and `bot:<id>`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct Bot {
+    /// `b-` and 20 hex digits.
+    pub id: String,
+    /// What it's shown as and named by, with its id: unique among the Dispatcher's Bots,
+    /// ignoring case.
+    pub name: String,
+    pub agent_id: AgentId,
+    /// The Host its threads run on, which it never leaves.
+    pub host_id: String,
+    /// What the Dispatcher calls that Host now.
+    pub host_name: String,
+    /// Whether the Dispatcher is connected to its Host now.
+    pub connected: bool,
+    /// Where its threads run and its memory files are, on its Host: absolute there, or under
+    /// the Host's home as `~/…`.
+    pub home: PathBuf,
+    /// What its new threads answer permission requests by.
+    pub policy: PermissionPolicy,
+    /// The mode its new threads start in; the agent's configured one when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// A local time, `HH:MM` in `zone`, at which it starts a new thread each day, if its
+    /// thread has had a turn since it started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_thread_at: Option<String>,
+    /// An IANA time zone, such as `Africa/Johannesburg`.
+    pub zone: String,
+    /// How long, in milliseconds, a pending request in its thread may wait for the person
+    /// before its schedules pause.
+    pub pause_after: u64,
+    /// Its current thread; absent until the first prompt that reaches it starts one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadId>,
+    /// Every thread it has had, oldest first, the current one last.
+    #[serde(default)]
+    pub threads: Vec<BotThread>,
+    pub state: BotState,
+    /// Since when a pending request in its current thread has waited for the person, as the
+    /// Dispatcher saw it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_since: Option<Timestamp>,
+    /// Why its schedules' occurrences are skipped, while they are: its thread has waited on
+    /// the person longer than `pause_after`. It resumes by itself once the thread no longer
+    /// waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<String>,
+    /// A new thread is being started: prompts for it wait, oldest first, to go into that one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub starting_thread: bool,
+    pub created_at: Timestamp,
+    /// When it was last changed with `bots/update`.
+    pub updated_at: Timestamp,
+}
+
+/// `bots/list`: the Bots, by name.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "bots/list", response = ListBotsResponse)]
+pub struct ListBotsRequest {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ListBotsResponse {
+    pub bots: Vec<Bot>,
+}
+
+/// `bots/get`: one Bot, by id or name, ignoring case; invalid params for none.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "bots/get", response = BotResponse)]
+pub struct GetBotRequest {
+    pub bot: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct BotResponse {
+    pub bot: Bot,
+}
+
+/// `bots/add`: a new Bot, with no thread yet: the first prompt that reaches it starts one in
+/// its home, which has to be a directory on its Host by then (the Dispatcher reads no Host's
+/// files). Invalid params, saying why, for an empty name or one of more than one line, a name
+/// another Bot has ignoring case, a Host that hasn't joined, an empty agent, a home that is
+/// neither whole nor under `~`, a time zone that doesn't parse, or a `newThreadAt` that isn't
+/// `HH:MM`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "bots/add", response = BotResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct AddBotRequest {
+    pub name: String,
+    /// The Host, by id or name.
+    pub host: String,
+    pub agent_id: AgentId,
+    pub home: PathBuf,
+    /// Approving nothing, so what isn't approved waits for the person, when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<PermissionPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// `HH:MM`: a new thread daily, then, in `zone`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_thread_at: Option<String>,
+    /// The Dispatcher's own time zone when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
+    /// [`DEFAULT_PAUSE_AFTER`] when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_after: Option<u64>,
+}
+
+/// `bots/update`: change what's given, all or none, checked as `bots/add` checks it. A policy
+/// or mode applies to threads started from then on: an open thread keeps its own. `mode` and
+/// `newThreadAt` are cleared with `null`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "bots/update", response = BotResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateBotRequest {
+    /// By id or name.
+    pub bot: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<PermissionPolicy>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub mode: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub new_thread_at: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_after: Option<u64>,
+}
+
+/// A field an update leaves as it is when absent, clears when `null`, and sets otherwise.
+fn nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+/// `bots/remove`: forget a Bot, by id or name, its schedules and the prompts still waiting for
+/// it. Its threads and its home stay on its Host.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "bots/remove", response = Empty)]
+pub struct RemoveBotRequest {
+    pub bot: String,
+}
+
+/// `bots/send`: a prompt for a Bot, by id or name, from a sender that isn't attached to its
+/// thread, such as the CLI or a script. It's written down, as a delivery, and goes into the
+/// Bot's current thread when first sent (queued there behind whatever runs), or starts its
+/// first thread; while a new thread is being started, it waits for that one. With `key`, the
+/// same key again names the same delivery and sends nothing more.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "bots/send", response = SentToBot)]
+pub struct SendToBotRequest {
+    pub bot: String,
+    pub prompt: Vec<ContentBlock>,
+    /// The sender's own name for this prompt, unique for the Bot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SentToBot {
+    /// The delivery that carries the prompt, which its turn's origin names as its `id`.
+    pub delivery_id: String,
+    /// The Bot as it stands now: its current thread, if it has one yet, and whether a new
+    /// one is being started.
+    pub bot: Bot,
+}
+
+/// `bots/newThread`: start a Bot's new thread, by id or name. Prompts for it wait from now on;
+/// once its current thread is idle, that thread is asked to save what's worth keeping to the
+/// Bot's memory files, note itself in `threads/` in the home and commit; then a new thread
+/// starts in the home, the old one names it as its successor, and the prompts that waited go
+/// into it. Invalid params, saying why, for a Bot with no thread yet or one starting one
+/// already.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "bots/newThread", response = BotResponse)]
+pub struct NewBotThreadRequest {
+    pub bot: String,
 }
 
 /// `dispatcher/join`, in the Host protocol: have the Host join the Dispatcher at `address` with

@@ -200,6 +200,13 @@ fn schema() -> Value {
         "projects/add" => dispatcher::AddProjectRequest,
         "projects/update" => dispatcher::UpdateProjectRequest,
         "projects/remove" => dispatcher::RemoveProjectRequest,
+        "bots/list" => dispatcher::ListBotsRequest,
+        "bots/get" => dispatcher::GetBotRequest,
+        "bots/add" => dispatcher::AddBotRequest,
+        "bots/update" => dispatcher::UpdateBotRequest,
+        "bots/remove" => dispatcher::RemoveBotRequest,
+        "bots/send" => dispatcher::SendToBotRequest,
+        "bots/newThread" => dispatcher::NewBotThreadRequest,
     };
     let dispatcher_notifications = notifications! { generator, inlined;
         "devices/paired" => devices::DevicePairedNotification,
@@ -249,7 +256,8 @@ fn schema() -> Value {
                 "hostSubprotocol": dispatcher::DISPATCHER_HOST_SUBPROTOCOL,
                 "carrySubprotocol": dispatcher::DISPATCHER_CARRY_SUBPROTOCOL,
                 "authMessage": dispatcher::dispatcher_auth_message("{dispatcherId}", "{deviceId}", "{nonce}"),
-                "features": {"projects": dispatcher::PROJECTS_FEATURE},
+                "features": {"projects": dispatcher::PROJECTS_FEATURE, "bots": dispatcher::BOTS_FEATURE},
+                "defaultPauseAfter": dispatcher::DEFAULT_PAUSE_AFTER,
             },
             "terminalStream": {
                 "subprotocol": terminals::stream::SUBPROTOCOL,

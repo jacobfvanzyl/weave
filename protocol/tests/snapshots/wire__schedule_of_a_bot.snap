@@ -1,0 +1,43 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&Schedule\n{\n    id: \"sch-4d5e6f7a8b9c0d1e2f3a\".to_owned(), name: \"remind-odin\".to_owned(),\n    cron: String::new(), at: Some(1_760_270_400_000), zone:\n    \"Africa/Johannesburg\".to_owned(), host_id: odin.host_id.clone(),\n    host_name: odin.host_name.clone(), bot_id: Some(odin.id.clone()),\n    bot_name: Some(odin.name.clone()), run: ScheduledRun\n    {\n        agent_id: odin.agent_id.clone(), cwd: odin.home.clone(), prompt:\n        vec![text(\"Check whether the deploy finished.\")], policy:\n        odin.policy.clone(), mode: None, thread: odin.thread.clone(),\n    }, missed: Missed::Latest, overlap: Overlap::Skip, created_at:\n    1_760_266_000_000, paused: None, failures: 0, next_at: None, next: None,\n    last:\n    Some(Occurrence\n    {\n        id: \"occ-7a8b9c0d1e2f3a4b5c6d\".to_owned(), schedule_id:\n        \"sch-4d5e6f7a8b9c0d1e2f3a\".to_owned(), scheduled_at:\n        1_760_270_400_000, late: false, manual: false, state:\n        OccurrenceState::Started, outcome: None, why: None, thread_id:\n        odin.thread.clone(), turn_id: Some(\"q-2c4e\".to_owned()), recorded_at:\n        1_760_270_400_100, ended_at: None,\n    }),\n})"
+---
+{
+  "id": "sch-4d5e6f7a8b9c0d1e2f3a",
+  "name": "remind-odin",
+  "cron": "",
+  "at": 1760270400000,
+  "zone": "Africa/Johannesburg",
+  "hostId": "Lw4nB7cR2tY9uI0oP5aS3d",
+  "hostName": "homelab",
+  "botId": "b-5e1d0c9b8a7f6e5d4c3b",
+  "botName": "odin",
+  "agentId": "claude",
+  "cwd": "~/bots/odin",
+  "prompt": [
+    {
+      "type": "text",
+      "text": "Check whether the deploy finished."
+    }
+  ],
+  "policy": {
+    "approve": [
+      "read"
+    ],
+    "otherwise": "ask"
+  },
+  "thread": "s-9b1c",
+  "missed": "latest",
+  "overlap": "skip",
+  "createdAt": 1760266000000,
+  "failures": 0,
+  "last": {
+    "id": "occ-7a8b9c0d1e2f3a4b5c6d",
+    "scheduleId": "sch-4d5e6f7a8b9c0d1e2f3a",
+    "scheduledAt": 1760270400000,
+    "state": "started",
+    "threadId": "s-9b1c",
+    "turnId": "q-2c4e",
+    "recordedAt": 1760270400100
+  }
+}

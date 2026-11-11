@@ -1,0 +1,14 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&AddBotRequest\n{\n    name: \"odin\".to_owned(), host: \"homelab\".to_owned(), agent_id:\n    \"claude\".to_owned(), home: \"~/bots/odin\".into(), policy: None, mode: None,\n    new_thread_at: Some(\"04:00\".to_owned()), zone: None, pause_after: None,\n})"
+---
+{
+  "method": "bots/add",
+  "params": {
+    "name": "odin",
+    "host": "homelab",
+    "agentId": "claude",
+    "home": "~/bots/odin",
+    "newThreadAt": "04:00"
+  }
+}

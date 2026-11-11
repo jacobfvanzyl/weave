@@ -14,6 +14,7 @@ use weave_dispatcher::DispatcherPaths;
 use weave_dispatcher::client::DispatcherConnection;
 use weave_dispatcher::paths::DIR_VARIABLE;
 use weave_dispatcher::socket;
+use weave_host_protocol::dispatcher::DispatcherHello;
 use weave_host_protocol::hello::ClientInfo;
 
 use crate::paired;
@@ -95,6 +96,29 @@ pub(crate) async fn connect_here(paths: &DispatcherPaths) -> anyhow::Result<Disp
         .map_err(|error| anyhow::anyhow!("{}", error.message))
 }
 
+/// Fail unless `dispatcher` answers the optional part of its API `feature` names, saying that
+/// it's older than `what`, as a Dispatcher from before them is, and needs updating.
+pub(crate) fn require(
+    dispatcher: &DispatcherConnection,
+    feature: &str,
+    what: &str,
+) -> anyhow::Result<()> {
+    match older(dispatcher.hello(), feature, what) {
+        Some(said) => bail!("{said}"),
+        None => Ok(()),
+    }
+}
+
+/// What to say of a Dispatcher whose hello doesn't offer `feature`: that it's older than `what`.
+fn older(hello: &DispatcherHello, feature: &str, what: &str) -> Option<String> {
+    (!hello.offers(feature)).then(|| {
+        format!(
+            "the Dispatcher runs weave {}, which is older than {what}: update weave where it runs",
+            hello.version
+        )
+    })
+}
+
 /// Whether the Dispatcher running from `paths` answers, waiting up to [`STARTUP_WAIT`] for it.
 pub(crate) async fn answers(paths: &DispatcherPaths) -> bool {
     let deadline = Instant::now() + STARTUP_WAIT;
@@ -124,4 +148,32 @@ pub(crate) async fn wait_until_stopped(paths: &DispatcherPaths) -> anyhow::Resul
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use weave_host_protocol::dispatcher::BOTS_FEATURE;
+    use weave_host_protocol::dispatcher::PROJECTS_FEATURE;
+
+    use super::*;
+
+    #[test]
+    fn a_dispatcher_from_before_a_feature_is_said_to_be_older() {
+        let hello = DispatcherHello {
+            protocol: 2,
+            version: "0.1.0".to_owned(),
+            id: String::new(),
+            device: None,
+            features: vec![PROJECTS_FEATURE.to_owned()],
+        };
+        assert_eq!(older(&hello, PROJECTS_FEATURE, "Projects"), None);
+        assert_eq!(
+            older(&hello, BOTS_FEATURE, "Bots").as_deref(),
+            Some(
+                "the Dispatcher runs weave 0.1.0, which is older than Bots: update weave where it \
+                 runs"
+            )
+        );
+    }
 }

@@ -100,15 +100,19 @@ enum Command {
     /// The agents weave launches: list them, move them to their newest releases, sign in to or
     /// out of one, or try one with a prompt.
     Agents(agents::AgentsArgs),
-    /// The Dispatcher's schedules, which start a headless turn on one of your Hosts at the times
-    /// a cron expression gives: list, add, remove, pause, resume or run one, or see what they
-    /// did.
+    /// The Dispatcher's schedules, which start a headless turn on one of your Hosts, or prompt
+    /// one of your Bots, at the times a cron expression gives or once: list, add, remove,
+    /// pause, resume or run one, or see what they did.
     Schedules(schedules::SchedulesArgs),
     /// Your Hosts the Dispatcher starts work on: list them, have one join it, or remove one.
     Hosts(hosts::HostsArgs),
     /// Your Projects, which the Dispatcher keeps, each with a location on one or more of your
     /// Hosts: list them, register a directory as one, rename one, or remove one.
     Projects(commands::projects::ProjectsArgs),
+    /// Your Bots, which the Dispatcher keeps: assistants with a home of their own on one of
+    /// your Hosts, working there in one thread at a time. List them, add, show, change or
+    /// remove one, send one a prompt, or start its new thread.
+    Bots(commands::bots::BotsArgs),
     /// Pair one of your devices, or another computer, with the Dispatcher, through which it
     /// reaches your Hosts. Run it where the Dispatcher runs.
     Pair(devices::PairArgs),
@@ -161,6 +165,7 @@ async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Projects(args) => {
             logged(commands::projects::LOG, commands::projects::command(args)).await
         }
+        Command::Bots(args) => logged(commands::bots::LOG, commands::bots::command(args)).await,
         Command::Pair(args) => logged(devices::LOG, devices::pair(args)).await,
         Command::Devices(args) => logged(devices::LOG, devices::command(args)).await,
         Command::Terminals(args) => logged(terminals::LOG, terminals::command(args)).await,
@@ -491,6 +496,7 @@ mod tests {
             "hosts",
             "devices",
             "projects",
+            "bots",
         ] {
             assert!(parses(&["weave", noun]), "{noun}");
             assert!(parses(&["weave", noun, "list"]), "{noun}");
@@ -544,6 +550,84 @@ mod tests {
             "odin",
             "--remove-host",
             "homelab"
+        ]));
+        // A Bot is named in place of where a schedule runs, and a time in place of a cron
+        // expression (WVE-118).
+        let schedule = |more: &[&str]| {
+            let mut line = vec!["weave", "schedules", "add", "tick"];
+            line.extend_from_slice(more);
+            line.extend_from_slice(&["--", "hi"]);
+            parses(&line)
+        };
+        assert!(schedule(&["--bot", "odin", "--cron", "0 9 * * *"]));
+        assert!(schedule(&["--bot", "odin", "--at", "2026-11-12 09:00"]));
+        assert!(schedule(&[
+            "--host",
+            "studio",
+            "--agent",
+            "claude",
+            "--at",
+            "2026-11-12 09:00"
+        ]));
+        assert!(!schedule(&["--bot", "odin"]), "a time is needed");
+        assert!(!schedule(&["--host", "studio", "--agent", "claude"]));
+        assert!(!schedule(&["--cron", "0 9 * * *", "--host", "studio"]));
+        assert!(!schedule(&[
+            "--bot",
+            "odin",
+            "--cron",
+            "0 9 * * *",
+            "--at",
+            "2026-11-12 09:00"
+        ]));
+        for alongside in [
+            &["--host", "studio"][..],
+            &["--agent", "claude"],
+            &["--cwd", "/tmp"],
+            &["--project", "odin"],
+            &["--thread", "t-1"],
+            &["--mode", "plan"],
+            &["--approve", "read"],
+            &["--allow-overlap"],
+        ] {
+            let mut more = vec!["--bot", "odin", "--cron", "0 9 * * *"];
+            more.extend_from_slice(alongside);
+            assert!(!schedule(&more), "--bot with {alongside:?}");
+        }
+        assert!(parses(&[
+            "weave",
+            "bots",
+            "add",
+            "odin",
+            "--agent",
+            "claude",
+            "--approve",
+            "read,edit",
+            "--new-thread-at",
+            "04:00",
+            "--pause-after",
+            "6h"
+        ]));
+        assert!(!parses(&["weave", "bots", "add", "odin"]), "an agent");
+        assert!(parses(&["weave", "bots", "send", "odin", "hello", "there"]));
+        assert!(parses(&["weave", "bots", "new-thread", "odin"]));
+        assert!(!parses(&[
+            "weave",
+            "bots",
+            "update",
+            "odin",
+            "--mode",
+            "a",
+            "--no-mode"
+        ]));
+        assert!(!parses(&[
+            "weave",
+            "bots",
+            "update",
+            "odin",
+            "--approve",
+            "read",
+            "--no-approve"
         ]));
     }
 

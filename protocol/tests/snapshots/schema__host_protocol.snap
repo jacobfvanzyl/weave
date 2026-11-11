@@ -372,6 +372,34 @@ expression: schema()
     "projects/remove": {
       "params": "RemoveProjectRequest",
       "result": "Empty"
+    },
+    "bots/list": {
+      "params": "ListBotsRequest",
+      "result": "ListBotsResponse"
+    },
+    "bots/get": {
+      "params": "GetBotRequest",
+      "result": "BotResponse"
+    },
+    "bots/add": {
+      "params": "AddBotRequest",
+      "result": "BotResponse"
+    },
+    "bots/update": {
+      "params": "UpdateBotRequest",
+      "result": "BotResponse"
+    },
+    "bots/remove": {
+      "params": "RemoveBotRequest",
+      "result": "Empty"
+    },
+    "bots/send": {
+      "params": "SendToBotRequest",
+      "result": "SentToBot"
+    },
+    "bots/newThread": {
+      "params": "NewBotThreadRequest",
+      "result": "BotResponse"
     }
   },
   "x-weave-dispatcher-notifications": {
@@ -396,8 +424,10 @@ expression: schema()
       "carrySubprotocol": "weave-dispatcher-carry",
       "authMessage": "weave-dispatcher-auth/1 {dispatcherId} {deviceId} {nonce}",
       "features": {
-        "projects": "projects"
-      }
+        "projects": "projects",
+        "bots": "bots"
+      },
+      "defaultPauseAfter": 43200000
     },
     "terminalStream": {
       "subprotocol": "weave-terminal",
@@ -11090,7 +11120,16 @@ expression: schema()
         },
         "cron": {
           "type": "string",
-          "description": "Five fields, minute to weekday, or a name such as `@daily`."
+          "description": "Five fields, minute to weekday, or a name such as `@daily`; empty for a one-off."
+        },
+        "at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "A one-off's time, its one occurrence's (feature `bots`)."
         },
         "zone": {
           "type": "string",
@@ -11101,6 +11140,23 @@ expression: schema()
         },
         "hostName": {
           "type": "string"
+        },
+        "botId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The Bot each occurrence prompts, for a Bot's schedule (feature `bots`): `run` gives its\nagent, home as `cwd`, policy, mode and current thread."
+        },
+        "botName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wakeUp": {
+          "type": "boolean",
+          "description": "The Bot asked for it itself, from one of its threads, with the Dispatcher's `wake_me`\ntool (feature `bots`): a one-off, which the Dispatcher forgets a week after its time once\nits occurrence is over. Absent for the person's own schedules."
         },
         "agentId": {
           "type": "string"
@@ -11166,7 +11222,7 @@ expression: schema()
           ],
           "format": "uint64",
           "minimum": 0,
-          "description": "When it next runs, unless it's paused."
+          "description": "When it next runs, unless it's paused; absent for a one-off once its time has come."
         },
         "next": {
           "type": [
@@ -11203,7 +11259,7 @@ expression: schema()
         "createdAt",
         "failures"
       ],
-      "description": "A schedule: a trigger whose occurrences start a headless turn on one of the person's Hosts\nat the times its cron expression gives, in its time zone."
+      "description": "A schedule: a trigger whose occurrences start a headless turn on one of the person's Hosts\nat the times its cron expression gives, in its time zone, or once at the time it names (a\none-off). A Bot's schedule prompts the Bot (WVE-118): its Host, agent, directory, policy,\nmode and thread are the Bot's as it lists now."
     },
     "Missed": {
       "oneOf": [
@@ -11356,7 +11412,20 @@ expression: schema()
           "description": "Unique among the Dispatcher's schedules."
         },
         "cron": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Absent for a one-off, which gives `at`."
+        },
+        "at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "A one-off's time, after now, in place of `cron`: it has one occurrence then, or a\ncatch-up after it as `missed` says, and is kept, done, with that occurrence."
         },
         "zone": {
           "type": [
@@ -11366,14 +11435,30 @@ expression: schema()
           "description": "The Dispatcher's own time zone when absent."
         },
         "host": {
-          "type": "string",
-          "description": "The Host, by id or name."
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The Host, by id or name; absent for a Bot's schedule."
+        },
+        "bot": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The Bot each occurrence prompts, by id or name, in place of `host`, `agentId`, `cwd`,\n`policy`, `mode` and `thread`: the prompt goes into its current thread, or starts its\nfirst. Its `overlap` is `skip`."
         },
         "agentId": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "cwd": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "prompt": {
           "type": "array",
@@ -11382,7 +11467,14 @@ expression: schema()
           }
         },
         "policy": {
-          "$ref": "#/$defs/PermissionPolicy"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "mode": {
           "type": [
@@ -11413,14 +11505,9 @@ expression: schema()
       },
       "required": [
         "name",
-        "cron",
-        "host",
-        "agentId",
-        "cwd",
-        "prompt",
-        "policy"
+        "prompt"
       ],
-      "description": "`schedules/add`."
+      "description": "`schedules/add`: a schedule with `cron`, or a one-off with `at` (feature `bots`), that names\neither a Host with `agentId`, `cwd` and `policy`, and maybe `mode` or `thread`, or a Bot\n(feature `bots`) in place of all of those. Invalid params, saying why, for both or neither of\neach pair."
     },
     "ScheduleResponse": {
       "type": "object",
@@ -11746,6 +11833,411 @@ expression: schema()
         "project"
       ],
       "description": "`projects/remove`: forget a Project, by id or name, and all its locations. What's in its\ndirectories stays."
+    },
+    "ListBotsRequest": {
+      "type": "object",
+      "description": "`bots/list`: the Bots, by name."
+    },
+    "ListBotsResponse": {
+      "type": "object",
+      "properties": {
+        "bots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Bot"
+          }
+        }
+      },
+      "required": [
+        "bots"
+      ]
+    },
+    "Bot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "`b-` and 20 hex digits."
+        },
+        "name": {
+          "type": "string",
+          "description": "What it's shown as and named by, with its id: unique among the Dispatcher's Bots,\nignoring case."
+        },
+        "agentId": {
+          "type": "string"
+        },
+        "hostId": {
+          "type": "string",
+          "description": "The Host its threads run on, which it never leaves."
+        },
+        "hostName": {
+          "type": "string",
+          "description": "What the Dispatcher calls that Host now."
+        },
+        "connected": {
+          "type": "boolean",
+          "description": "Whether the Dispatcher is connected to its Host now."
+        },
+        "home": {
+          "type": "string",
+          "description": "Where its threads run and its memory files are, on its Host: absolute there, or under\nthe Host's home as `~/…`."
+        },
+        "policy": {
+          "$ref": "#/$defs/PermissionPolicy",
+          "description": "What its new threads answer permission requests by."
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The mode its new threads start in; the agent's configured one when absent."
+        },
+        "newThreadAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A local time, `HH:MM` in `zone`, at which it starts a new thread each day, if its\nthread has had a turn since it started."
+        },
+        "zone": {
+          "type": "string",
+          "description": "An IANA time zone, such as `Africa/Johannesburg`."
+        },
+        "pauseAfter": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "How long, in milliseconds, a pending request in its thread may wait for the person\nbefore its schedules pause."
+        },
+        "thread": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its current thread; absent until the first prompt that reaches it starts one."
+        },
+        "threads": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BotThread"
+          },
+          "description": "Every thread it has had, oldest first, the current one last.",
+          "default": []
+        },
+        "state": {
+          "$ref": "#/$defs/BotState"
+        },
+        "waitingSince": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Since when a pending request in its current thread has waited for the person, as the\nDispatcher saw it."
+        },
+        "paused": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why its schedules' occurrences are skipped, while they are: its thread has waited on\nthe person longer than `pause_after`. It resumes by itself once the thread no longer\nwaits."
+        },
+        "startingThread": {
+          "type": "boolean",
+          "description": "A new thread is being started: prompts for it wait, oldest first, to go into that one."
+        },
+        "createdAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "updatedAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When it was last changed with `bots/update`."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "agentId",
+        "hostId",
+        "hostName",
+        "connected",
+        "home",
+        "policy",
+        "zone",
+        "pauseAfter",
+        "state",
+        "createdAt",
+        "updatedAt"
+      ],
+      "description": "A named assistant the Dispatcher keeps (ADR 0028, WVE-118), whose work goes on in ordinary\nthreads, one at a time, on the one Host it names, in its home. Its prompts, from the person\nthrough the Dispatcher and from its schedules, go into its current thread; a new thread takes\nover when asked or daily, after the one before saves what it learned to the home. Its Host\nlearns nothing of it: its threads carry the labels `dispatcher` and `bot:<id>`."
+    },
+    "BotThread": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "startedAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When its Host started it."
+        },
+        "endedAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When a new thread took over from it; absent for the current one."
+        }
+      },
+      "required": [
+        "threadId",
+        "startedAt"
+      ],
+      "description": "One of a Bot's threads."
+    },
+    "BotState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "working",
+          "description": "Its thread runs a turn."
+        },
+        {
+          "type": "string",
+          "const": "needsYou",
+          "description": "A pending request in its thread waits for the person."
+        },
+        {
+          "type": "string",
+          "const": "idle",
+          "description": "Nothing runs: its thread is idle or not open, it has none yet, or the Dispatcher isn't\nconnected to its Host."
+        }
+      ],
+      "description": "What a Bot's current thread is doing, as the Dispatcher last saw it on the Bot's Host."
+    },
+    "GetBotRequest": {
+      "type": "object",
+      "properties": {
+        "bot": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bot"
+      ],
+      "description": "`bots/get`: one Bot, by id or name, ignoring case; invalid params for none."
+    },
+    "BotResponse": {
+      "type": "object",
+      "properties": {
+        "bot": {
+          "$ref": "#/$defs/Bot"
+        }
+      },
+      "required": [
+        "bot"
+      ]
+    },
+    "AddBotRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string",
+          "description": "The Host, by id or name."
+        },
+        "agentId": {
+          "type": "string"
+        },
+        "home": {
+          "type": "string"
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Approving nothing, so what isn't approved waits for the person, when absent."
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "newThreadAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`HH:MM`: a new thread daily, then, in `zone`."
+        },
+        "zone": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The Dispatcher's own time zone when absent."
+        },
+        "pauseAfter": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "[`DEFAULT_PAUSE_AFTER`] when absent."
+        }
+      },
+      "required": [
+        "name",
+        "host",
+        "agentId",
+        "home"
+      ],
+      "description": "`bots/add`: a new Bot, with no thread yet: the first prompt that reaches it starts one in\nits home, which has to be a directory on its Host by then (the Dispatcher reads no Host's\nfiles). Invalid params, saying why, for an empty name or one of more than one line, a name\nanother Bot has ignoring case, a Host that hasn't joined, an empty agent, a home that is\nneither whole nor under `~`, a time zone that doesn't parse, or a `newThreadAt` that isn't\n`HH:MM`."
+    },
+    "UpdateBotRequest": {
+      "type": "object",
+      "properties": {
+        "bot": {
+          "type": "string",
+          "description": "By id or name."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "newThreadAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "zone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pauseAfter": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "bot"
+      ],
+      "description": "`bots/update`: change what's given, all or none, checked as `bots/add` checks it. A policy\nor mode applies to threads started from then on: an open thread keeps its own. `mode` and\n`newThreadAt` are cleared with `null`."
+    },
+    "RemoveBotRequest": {
+      "type": "object",
+      "properties": {
+        "bot": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bot"
+      ],
+      "description": "`bots/remove`: forget a Bot, by id or name, its schedules and the prompts still waiting for\nit. Its threads and its home stay on its Host."
+    },
+    "SendToBotRequest": {
+      "type": "object",
+      "properties": {
+        "bot": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentBlock"
+          }
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The sender's own name for this prompt, unique for the Bot."
+        }
+      },
+      "required": [
+        "bot",
+        "prompt"
+      ],
+      "description": "`bots/send`: a prompt for a Bot, by id or name, from a sender that isn't attached to its\nthread, such as the CLI or a script. It's written down, as a delivery, and goes into the\nBot's current thread when first sent (queued there behind whatever runs), or starts its\nfirst thread; while a new thread is being started, it waits for that one. With `key`, the\nsame key again names the same delivery and sends nothing more."
+    },
+    "SentToBot": {
+      "type": "object",
+      "properties": {
+        "deliveryId": {
+          "type": "string",
+          "description": "The delivery that carries the prompt, which its turn's origin names as its `id`."
+        },
+        "bot": {
+          "$ref": "#/$defs/Bot",
+          "description": "The Bot as it stands now: its current thread, if it has one yet, and whether a new\none is being started."
+        }
+      },
+      "required": [
+        "deliveryId",
+        "bot"
+      ]
+    },
+    "NewBotThreadRequest": {
+      "type": "object",
+      "properties": {
+        "bot": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bot"
+      ],
+      "description": "`bots/newThread`: start a Bot's new thread, by id or name. Prompts for it wait from now on;\nonce its current thread is idle, that thread is asked to save what's worth keeping to the\nBot's memory files, note itself in `threads/` in the home and commit; then a new thread\nstarts in the home, the old one names it as its successor, and the prompts that waited go\ninto it. Invalid params, saying why, for a Bot with no thread yet or one starting one\nalready."
     },
     "DevicePairedNotification": {
       "type": "object",

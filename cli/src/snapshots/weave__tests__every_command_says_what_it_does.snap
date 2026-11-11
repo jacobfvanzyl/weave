@@ -12,9 +12,10 @@ Commands:
   run         Run one prompt in a headless thread in the weave Host, printing the reply
   threads     Threads open in the weave Host: list, read, prompt or steer them, stop a turn, or close one
   agents      The agents weave launches: list them, move them to their newest releases, sign in to or out of one, or try one with a prompt
-  schedules   The Dispatcher's schedules, which start a headless turn on one of your Hosts at the times a cron expression gives: list, add, remove, pause, resume or run one, or see what they did
+  schedules   The Dispatcher's schedules, which start a headless turn on one of your Hosts, or prompt one of your Bots, at the times a cron expression gives or once: list, add, remove, pause, resume or run one, or see what they did
   hosts       Your Hosts the Dispatcher starts work on: list them, have one join it, or remove one
   projects    Your Projects, which the Dispatcher keeps, each with a location on one or more of your Hosts: list them, register a directory as one, rename one, or remove one
+  bots        Your Bots, which the Dispatcher keeps: assistants with a home of their own on one of your Hosts, working there in one thread at a time. List them, add, show, change or remove one, send one a prompt, or start its new thread
   pair        Pair one of your devices, or another computer, with the Dispatcher, through which it reaches your Hosts. Run it where the Dispatcher runs
   devices     Devices paired with the Dispatcher: list them, or revoke one
   terminals   The weave Host's terminals: show one here, as the TUI does in a Rex pane
@@ -548,13 +549,13 @@ Options:
           Print help
 
 $ weave schedules --help
-The Dispatcher's schedules, which start a headless turn on one of your Hosts at the times a cron expression gives: list, add, remove, pause, resume or run one, or see what they did
+The Dispatcher's schedules, which start a headless turn on one of your Hosts, or prompt one of your Bots, at the times a cron expression gives or once: list, add, remove, pause, resume or run one, or see what they did
 
 Usage: weave schedules [COMMAND]
 
 Commands:
   list         The schedules, when each runs next and how it last went (the default)
-  add          Add a schedule: at the times `--cron` gives, start a headless turn on a Host
+  add          Add a schedule: at the times `--cron` gives, or once `--at` a time, start a headless turn on a Host, or prompt a Bot
   remove       Forget a schedule and what it did. A turn it started runs on
   pause        Run nothing on schedule until resumed
   resume       Run on schedule again from now, catching up nothing missed while paused
@@ -579,9 +580,9 @@ Options:
           Print help
 
 $ weave schedules add --help
-Add a schedule: at the times `--cron` gives, start a headless turn on a Host
+Add a schedule: at the times `--cron` gives, or once `--at` a time, start a headless turn on a Host, or prompt a Bot
 
-Usage: weave schedules add [OPTIONS] --cron <CRON> --host <HOST> --agent <AGENT> <NAME> [-- <PROMPT>...]
+Usage: weave schedules add [OPTIONS] <--cron <CRON>|--at <TIME>> <NAME> [-- <PROMPT>...]
 
 Arguments:
   <NAME>
@@ -594,8 +595,14 @@ Options:
       --cron <CRON>
           When it runs: five fields, minute hour day-of-month month day-of-week, such as "0 9 * * 1-5" for 09:00 on weekdays; or @hourly, @daily, @weekly, @monthly
 
+      --at <TIME>
+          Run once, at this time, in place of --cron: 2026-11-12 09:00, in --zone, or 2026-11-12T09:00:00+02:00
+
       --zone <ZONE>
-          The IANA time zone its times are in, such as Africa/Johannesburg; the Dispatcher's computer's when omitted
+          The IANA time zone its times are in, such as Africa/Johannesburg; the Dispatcher's computer's when omitted, or with --at, this computer's
+
+      --bot <BOT>
+          Prompt this Bot, by its name or id, in place of --host, --agent, --cwd and the rest: each time goes into its thread, or starts its first, as the Bot is set up then
 
       --host <HOST>
           The Host it runs on, by name or id: one `weave hosts` lists
@@ -885,6 +892,190 @@ Usage: weave projects remove [OPTIONS] <PROJECT>
 Arguments:
   <PROJECT>
           The Project's name or id
+
+Options:
+      --json
+          Print what the Dispatcher answered as JSON
+
+  -h, --help
+          Print help
+
+$ weave bots --help
+Your Bots, which the Dispatcher keeps: assistants with a home of their own on one of your Hosts, working there in one thread at a time. List them, add, show, change or remove one, send one a prompt, or start its new thread
+
+Usage: weave bots [COMMAND]
+
+Commands:
+  list        The Bots, what each is doing, and its thread (the default)
+  add         Add a Bot on one of your Hosts, making its home first when that's this computer's. It has no thread until the first prompt you send it
+  show        A Bot: how it's set up, its threads and its schedules
+  update      Change a Bot. A thread it has open keeps the approvals and mode it started with
+  remove      Forget a Bot and its schedules. Its threads and its home stay
+  send        Send a Bot a prompt: into its thread, or starting its first
+  new-thread  Start a Bot's new thread: its thread saves what it knows to its home first
+  help        Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave bots list --help
+The Bots, what each is doing, and its thread (the default)
+
+Usage: weave bots list [OPTIONS]
+
+Options:
+      --json
+          Print them as JSON
+
+  -h, --help
+          Print help
+
+$ weave bots add --help
+Add a Bot on one of your Hosts, making its home first when that's this computer's. It has no thread until the first prompt you send it
+
+Usage: weave bots add [OPTIONS] --agent <AGENT> <NAME>
+
+Arguments:
+  <NAME>
+          Its name, unique among your Bots ignoring case
+
+Options:
+      --agent <AGENT>
+          The agent its threads run, by its id on the Bot's Host, as `weave agents` lists them there
+
+      --host <HOST>
+          The Host its threads run on, by its id or name as `weave hosts` lists them; this computer's when omitted, which has to have joined the Dispatcher
+
+      --home <DIR>
+          Its home on that Host: the git repository its threads run in and its memory is kept in, whole or under ~ there. ~/bots/<name> when omitted. On this computer's Host it's made, with its first memory files, unless they're there
+
+      --approve <KINDS>
+          Tool kinds its threads approve without asking you, comma-separated: read, edit, delete, move, search, execute, think, fetch, switch_mode, other; or all. It asks you about the rest
+
+      --mode <MODE>
+          The mode its threads start in; the agent's configured one when omitted
+
+      --new-thread-at <HH:MM>
+          Start a new thread every day at this time, in --zone, once its thread has had a turn
+
+      --zone <ZONE>
+          The IANA time zone its times are in, such as Africa/Johannesburg; the Dispatcher's computer's when omitted
+
+      --pause-after <DURATION>
+          How long a request in its thread may wait for you before its schedules pause, until it's answered: 90s, 30m, 12h. 12h when omitted
+
+      --json
+          Print the Bot as JSON
+
+  -h, --help
+          Print help
+
+$ weave bots show --help
+A Bot: how it's set up, its threads and its schedules
+
+Usage: weave bots show [OPTIONS] <BOT>
+
+Arguments:
+  <BOT>
+          The Bot's name or id
+
+Options:
+      --json
+          Print what the Dispatcher answered as JSON
+
+  -h, --help
+          Print help
+
+$ weave bots update --help
+Change a Bot. A thread it has open keeps the approvals and mode it started with
+
+Usage: weave bots update [OPTIONS] <BOT>
+
+Arguments:
+  <BOT>
+          The Bot's name or id
+
+Options:
+      --name <NAME>
+          Its new name
+
+      --approve <KINDS>
+          Tool kinds its threads approve without asking you, in place of those they do now, comma-separated: read, edit, delete, move, search, execute, think, fetch, switch_mode, other; or all. It asks you about the rest
+
+      --no-approve
+          Approve nothing: ask you about every tool
+
+      --mode <MODE>
+          The mode its threads start in
+
+      --no-mode
+          Start its threads in the agent's configured mode
+
+      --new-thread-at <HH:MM>
+          Start a new thread every day at this time, in its zone, once its thread has had a turn
+
+      --no-new-thread-at
+          Start a new thread only when asked
+
+      --zone <ZONE>
+          The IANA time zone its times are in, such as Africa/Johannesburg
+
+      --pause-after <DURATION>
+          How long a request in its thread may wait for you before its schedules pause: 90s, 30m, 12h
+
+      --json
+          Print the Bot as JSON
+
+  -h, --help
+          Print help
+
+$ weave bots remove --help
+Forget a Bot and its schedules. Its threads and its home stay
+
+Usage: weave bots remove [OPTIONS] <BOT>
+
+Arguments:
+  <BOT>
+          The Bot's name or id
+
+Options:
+      --json
+          Print what the Dispatcher answered as JSON
+
+  -h, --help
+          Print help
+
+$ weave bots send --help
+Send a Bot a prompt: into its thread, or starting its first
+
+Usage: weave bots send [OPTIONS] <BOT> [PROMPT]...
+
+Arguments:
+  <BOT>
+          The Bot's name or id
+
+  [PROMPT]...
+          The prompt; read from stdin when omitted or `-`
+
+Options:
+      --key <KEY>
+          A name of your choosing, such as a UUID: sending again with it, after a dropped connection, sends nothing twice
+
+      --json
+          Print what the Dispatcher answered as JSON
+
+  -h, --help
+          Print help
+
+$ weave bots new-thread --help
+Start a Bot's new thread: its thread saves what it knows to its home first
+
+Usage: weave bots new-thread [OPTIONS] <BOT>
+
+Arguments:
+  <BOT>
+          The Bot's name or id
 
 Options:
       --json

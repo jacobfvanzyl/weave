@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&NewBotThreadRequest { bot: \"odin\".to_owned(), })"
+---
+{
+  "method": "bots/newThread",
+  "params": {
+    "bot": "odin"
+  }
+}

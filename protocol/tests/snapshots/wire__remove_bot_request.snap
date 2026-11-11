@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&RemoveBotRequest { bot: \"odin\".to_owned(), })"
+---
+{
+  "method": "bots/remove",
+  "params": {
+    "bot": "odin"
+  }
+}

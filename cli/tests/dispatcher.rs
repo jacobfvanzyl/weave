@@ -4,7 +4,9 @@
 //! on this computer, also in the test, `connect` offers to have it join the Dispatcher too, and
 //! `weave hosts add` has it join, here, over SSH, or with a code (ADR 0030). With a Host on
 //! another computer that joined it, `weave run`, `weave threads` and the TUI reach that Host
-//! through the Dispatcher with `--host` (WVE-195).
+//! through the Dispatcher with `--host` (WVE-195). `weave projects` registers directories on
+//! both (WVE-189), and `weave bots` keeps Bots on both, making their homes on this computer's
+//! (WVE-118).
 
 #![allow(clippy::expect_used)]
 
@@ -110,26 +112,10 @@ impl World {
         .expect("its config");
         let paths = weave_host::DaemonPaths::in_dir(dir.join("host"));
         paths.prepare().expect("its directory");
-        let state = dir.join("agent-state.json");
-        let launcher: weave_host::Launcher = Arc::new(move |_, options, _| {
-            let config = weave_fake_agent::FakeAgentConfig {
-                state_path: Some(state.clone()),
-                ..weave_fake_agent::FakeAgentConfig::default()
-            };
-            Box::pin(async move {
-                let (client, agent) = agent_client_protocol::Channel::duplex();
-                tokio::spawn(weave_fake_agent::serve_with(agent, config));
-                weave_acp_core::AgentConnection::connect(client, options)
-                    .await
-                    .map_err(|error| {
-                        agent_client_protocol::Error::internal_error().data(error.to_string())
-                    })
-            })
-        });
         let mut config = DaemonConfig::in_process(Some(dir.join("config.toml")));
         config.devices = Some(paths.devices());
         config.traces = dir.join("traces");
-        config.launcher = launcher;
+        config.launcher = fake_agent(dir.join("agent-state.json"));
         config.home = Some(dir.join("home"));
         config.dispatcher = Some(DispatcherSettings {
             secure_enclave: false,
@@ -166,12 +152,23 @@ impl World {
         self.elsewhere = Some(host);
     }
 
-    /// Run a Host on this computer, where `weave` finds it, which can join the Dispatcher.
+    /// Run a Host on this computer, where `weave` finds it, which can join the Dispatcher, and
+    /// whose agent `fake` is the fake agent and whose home is `here/home`, as [`Self::home`]
+    /// gives it to `weave`.
     fn start_host(&mut self) {
-        let paths = weave_host::DaemonPaths::in_dir(self.dir.path().join("here/host"));
-        let mut config = DaemonConfig::in_process(None);
+        let dir = self.dir.path().join("here");
+        std::fs::create_dir_all(dir.join("home")).expect("its home");
+        std::fs::write(
+            dir.join("config.toml"),
+            "[agents.fake]\ncommand = \"fake-agent\"\n",
+        )
+        .expect("its config");
+        let paths = weave_host::DaemonPaths::in_dir(dir.join("host"));
+        let mut config = DaemonConfig::in_process(Some(dir.join("config.toml")));
         config.devices = Some(paths.devices());
-        config.traces = self.dir.path().join("here/traces");
+        config.traces = dir.join("traces");
+        config.launcher = fake_agent(dir.join("agent-state.json"));
+        config.home = Some(self.home());
         config.dispatcher = Some(DispatcherSettings {
             secure_enclave: false,
             ..DispatcherSettings::in_dir(&paths)
@@ -249,6 +246,11 @@ impl World {
         self.dir.path().join("here/state")
     }
 
+    /// This computer's home directory, for what `weave` puts under `~`.
+    fn home(&self) -> PathBuf {
+        self.dir.path().join("here/home")
+    }
+
     fn command(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_weave"));
         command
@@ -287,6 +289,25 @@ impl Drop for World {
             host.stop();
         }
     }
+}
+
+/// A launcher of the fake agent, which keeps its state in `state`.
+fn fake_agent(state: PathBuf) -> weave_host::Launcher {
+    Arc::new(move |_, options, _| {
+        let config = weave_fake_agent::FakeAgentConfig {
+            state_path: Some(state.clone()),
+            ..weave_fake_agent::FakeAgentConfig::default()
+        };
+        Box::pin(async move {
+            let (client, agent) = agent_client_protocol::Channel::duplex();
+            tokio::spawn(weave_fake_agent::serve_with(agent, config));
+            weave_acp_core::AgentConnection::connect(client, options)
+                .await
+                .map_err(|error| {
+                    agent_client_protocol::Error::internal_error().data(error.to_string())
+                })
+        })
+    })
 }
 
 fn said(output: &Output) -> String {
@@ -1048,5 +1069,589 @@ fn projects_name_directories_on_your_hosts() {
             .contains("The Dispatcher didn't answer, so this goes by the Projects it listed"),
         "{}",
         said(&threads_here)
+    );
+}
+
+/// `command` as the person runs it here: with `world`'s home directory as theirs, and git
+/// knowing them only from what's given here, as `identity` says, never from the computer's own
+/// configuration.
+fn as_person(mut command: Command, home: &std::path::Path, identity: bool) -> Command {
+    command
+        .env("HOME", home)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    for name in [
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "EMAIL",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+    ] {
+        command.env_remove(name);
+    }
+    if identity {
+        command
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com");
+    }
+    command
+}
+
+/// `git args…` in `dir`.
+fn git_in(dir: &std::path::Path, args: &[&str]) -> Output {
+    Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .expect("git")
+}
+
+/// What `git args…` in `dir` prints.
+fn git_says(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = git_in(dir, args);
+    assert!(output.status.success(), "git {args:?}: {}", said(&output));
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// The Bot `bot` once it's as `wanted`, as `weave bots show` gives it.
+fn bot_until(
+    weave: &dyn Fn(&[&str]) -> Output,
+    bot: &str,
+    wanted: impl Fn(&weave_host_protocol::dispatcher::Bot) -> bool,
+) -> weave_host_protocol::dispatcher::Bot {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let shown: weave_host_protocol::dispatcher::Bot =
+            parsed(&weave(&["bots", "show", bot, "--json"]));
+        if wanted(&shown) {
+            return shown;
+        }
+        assert!(std::time::Instant::now() < deadline, "{shown:?}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// `weave bots` (WVE-118) against a Dispatcher in the test, through this computer's pairing: a
+/// Bot on this computer's Host, whose home it makes, and one on another computer's, for which it
+/// says what to run there; listing, showing and changing them; the first prompt starting a
+/// Bot's thread in its home, the next going into it, and a new thread taking over; schedules
+/// prompting a Bot, at a cron expression's times and once; and removing them.
+#[test]
+fn bots_keep_a_home_and_work_in_one_thread_at_a_time() {
+    use weave_acp_core::schema::ToolKind;
+    use weave_host_protocol::Empty;
+    use weave_host_protocol::dispatcher::Bot;
+    use weave_host_protocol::dispatcher::Schedule;
+    use weave_host_protocol::dispatcher::SentToBot;
+    use weave_host_protocol::policy::PermissionPolicy;
+    use weave_host_protocol::policy::Unapproved;
+    use weave_host_protocol::threads::ThreadListing;
+
+    let mut world = World::new();
+    world.start_host();
+    world.start_host_elsewhere("studio");
+    let (url, code) = world.offer();
+    let paired = world.weave(&[
+        "dispatcher",
+        "connect",
+        &url,
+        &code,
+        "--name",
+        "laptop",
+        "--host",
+    ]);
+    assert!(paired.status.success(), "{}", said(&paired));
+    let weave = |args: &[&str]| {
+        as_person(world.command(args), &world.home(), true)
+            .output()
+            .expect("run weave")
+    };
+
+    let none = weave(&["bots"]);
+    assert!(none.status.success(), "{}", said(&none));
+    assert!(said(&none).contains("You have no Bots"), "{}", said(&none));
+
+    // On this computer's Host, as it is by default, its home is made under ~/bots.
+    let odin: Bot = parsed(&weave(&[
+        "bots",
+        "add",
+        "odin",
+        "--agent",
+        "fake",
+        "--approve",
+        "read,edit",
+        "--new-thread-at",
+        "4:00",
+        "--zone",
+        "UTC",
+        "--pause-after",
+        "6h",
+        "--json",
+    ]));
+    let home = world.home().join("bots/odin");
+    assert!(same_place(&odin.home, &home), "{odin:?}");
+    assert_eq!(
+        (
+            odin.host_name.as_str(),
+            odin.agent_id.as_str(),
+            odin.thread.as_ref()
+        ),
+        ("laptop", "fake", None)
+    );
+    assert_eq!(
+        odin.policy,
+        PermissionPolicy {
+            approve: vec![ToolKind::Read, ToolKind::Edit],
+            otherwise: Unapproved::Ask,
+        }
+    );
+    assert_eq!(
+        (
+            odin.new_thread_at.as_deref(),
+            odin.zone.as_str(),
+            odin.pause_after
+        ),
+        (Some("04:00"), "UTC", 6 * 3_600_000)
+    );
+    let agents = std::fs::read_to_string(home.join("AGENTS.md")).expect("its AGENTS.md");
+    assert!(
+        agents.contains("This directory is the home of the Bot named odin")
+            && agents.ends_with("## What I know\n"),
+        "{agents}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("CLAUDE.md")).expect("its CLAUDE.md"),
+        "@AGENTS.md\n"
+    );
+    assert_eq!(
+        git_says(&home, &["log", "--format=%s"]),
+        "Start odin's home\n"
+    );
+    assert_eq!(
+        git_says(&home, &["show", "--name-only", "--format="]),
+        "AGENTS.md\nCLAUDE.md\n"
+    );
+    let taken = weave(&["bots", "add", "ODIN", "--agent", "fake"]);
+    assert!(!taken.status.success());
+    assert!(
+        said(&taken).contains("there's a Bot called odin already"),
+        "{}",
+        said(&taken)
+    );
+
+    // On another computer's Host, it says what to run there, and makes nothing here.
+    let mimir = weave(&[
+        "bots", "add", "mimir", "--agent", "fake", "--host", "studio",
+    ]);
+    assert!(mimir.status.success(), "{}", said(&mimir));
+    for words in [
+        "Added the Bot mimir, with fake on studio, at home in ~/bots/mimir.",
+        "has to be a git repository on studio",
+        "  mkdir -p ~/bots/mimir\n  git -C ~/bots/mimir init\n",
+        "`weave bots add` makes a Bot's home itself",
+    ] {
+        assert!(said(&mimir).contains(words), "{words}: {}", said(&mimir));
+    }
+    assert!(!world.home().join("bots/mimir").exists());
+
+    // Listed and shown.
+    let listed: Vec<Bot> = parsed(&weave(&["bots", "list", "--json"]));
+    assert_eq!(
+        listed
+            .iter()
+            .map(|bot| bot.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["mimir", "odin"]
+    );
+    let lines = weave(&["bots"]);
+    for line in [
+        "mimir  idle  fake on studio  no thread yet\n",
+        "odin   idle  fake on laptop  no thread yet\n",
+    ] {
+        assert!(said(&lines).contains(line), "{line}: {}", said(&lines));
+    }
+    let shown = weave(&["bots", "show", "odin"]);
+    for line in [
+        "odin  idle\n",
+        "  approve        read,edit; it asks you about the rest\n",
+        "  new thread at  04:00 every day\n",
+        "  pause after    6h\n",
+        "  threads        none yet",
+        "  schedules      none",
+    ] {
+        assert!(said(&shown).contains(line), "{line}: {}", said(&shown));
+    }
+    let one: Bot = parsed(&weave(&["bots", "show", "ODIN", "--json"]));
+    assert_eq!(one, odin);
+
+    // Changed, and changed back.
+    let changed: Bot = parsed(&weave(&[
+        "bots",
+        "update",
+        "odin",
+        "--name",
+        "Odin",
+        "--no-approve",
+        "--mode",
+        "plan",
+        "--json",
+    ]));
+    assert_eq!(
+        (
+            changed.name.as_str(),
+            &changed.policy,
+            changed.mode.as_deref()
+        ),
+        ("Odin", &PermissionPolicy::ask(), Some("plan"))
+    );
+    let cleared = weave(&["bots", "update", "odin", "--no-mode", "--no-new-thread-at"]);
+    assert!(cleared.status.success(), "{}", said(&cleared));
+    assert!(
+        said(&cleared).contains("Changed Odin."),
+        "{}",
+        said(&cleared)
+    );
+    let cleared: Bot = parsed(&weave(&["bots", "show", "odin", "--json"]));
+    assert_eq!((cleared.mode, cleared.new_thread_at), (None, None));
+    let nothing = weave(&["bots", "update", "odin"]);
+    assert!(!nothing.status.success());
+    assert!(
+        said(&nothing).contains("nothing to change"),
+        "{}",
+        said(&nothing)
+    );
+
+    // The first prompt starts its thread, in its home, as its own.
+    let sent = weave(&["bots", "send", "odin", "hello", "there"]);
+    assert!(sent.status.success(), "{}", said(&sent));
+    assert!(
+        said(&sent).contains("Sent to Odin, which has no thread yet: it starts its first"),
+        "{}",
+        said(&sent)
+    );
+    let started = bot_until(&weave, "odin", |bot| bot.thread.is_some());
+    let thread = started.thread.clone().expect("its thread");
+    assert_eq!(started.threads.len(), 1);
+    let threads: Vec<ThreadListing> = parsed(&weave(&["threads", "list", "--json"]));
+    let listing = threads
+        .iter()
+        .find(|listing| listing.info.session_id.to_string() == thread.to_string())
+        .expect("its thread, on this computer's Host");
+    assert!(same_place(&listing.info.cwd, &home), "{listing:?}");
+    assert!(
+        listing.labels.contains(&format!("bot:{}", odin.id)),
+        "{listing:?}"
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let read = weave(&["threads", "read", &thread.to_string()]);
+        if String::from_utf8_lossy(&read.stdout).contains("You said: hello there") {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{}", said(&read));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let lines = weave(&["bots"]);
+    assert!(
+        said(&lines).contains(&format!("fake on laptop  thread {thread}\n")),
+        "{}",
+        said(&lines)
+    );
+
+    // The next goes into that thread; a key sends it once.
+    let again = weave(&["bots", "send", "odin", "again"]);
+    assert!(
+        said(&again).contains(&format!("Sent to Odin, into its thread {thread}")),
+        "{}",
+        said(&again)
+    );
+    let keyed: SentToBot = parsed(&weave(&[
+        "bots", "send", "odin", "--key", "k-1", "--json", "once",
+    ]));
+    let repeated: SentToBot = parsed(&weave(&[
+        "bots", "send", "odin", "--key", "k-1", "--json", "once",
+    ]));
+    assert_eq!(keyed.delivery_id, repeated.delivery_id);
+    assert_eq!(keyed.bot.thread.as_ref(), Some(&thread));
+
+    // A new thread: the one it has saves what it knows first, then the new one takes over.
+    let renewing = weave(&["bots", "new-thread", "odin"]);
+    assert!(renewing.status.success(), "{}", said(&renewing));
+    assert!(
+        said(&renewing).contains("Odin is starting a new thread")
+            && said(&renewing).contains("it saves what it knows to"),
+        "{}",
+        said(&renewing)
+    );
+    let renewed = bot_until(&weave, "odin", |bot| {
+        bot.thread.as_ref().is_some_and(|now| *now != thread) && !bot.starting_thread
+    });
+    assert_eq!(
+        renewed
+            .threads
+            .iter()
+            .map(|listed| (listed.thread_id.clone(), listed.ended_at.is_some()))
+            .collect::<Vec<_>>(),
+        vec![
+            (thread.clone(), true),
+            (renewed.thread.clone().expect("its new thread"), false)
+        ]
+    );
+    let shown = weave(&["bots", "show", "odin"]);
+    assert!(
+        said(&shown).contains(&format!("  threads        {thread}  "))
+            && said(&shown).contains(", its thread now\n"),
+        "{}",
+        said(&shown)
+    );
+
+    // Schedules prompting it, at a cron expression's times and once.
+    let tick = weave(&[
+        "schedules",
+        "add",
+        "tick",
+        "--bot",
+        "odin",
+        "--cron",
+        "0 9 * * *",
+        "--zone",
+        "UTC",
+        "--",
+        "tick",
+    ]);
+    assert!(tick.status.success(), "{}", said(&tick));
+    let later = weave(&[
+        "schedules",
+        "add",
+        "later",
+        "--bot",
+        "odin",
+        "--at",
+        "2099-01-01 09:00",
+        "--zone",
+        "UTC",
+        "--",
+        "later",
+    ]);
+    assert!(later.status.success(), "{}", said(&later));
+    assert!(
+        said(&later).contains("Added later, once at Thu 1 Jan 2099 09:00 UTC (in "),
+        "{}",
+        said(&later)
+    );
+    let schedules: Vec<Schedule> = parsed(&weave(&["schedules", "list", "--json"]));
+    let once = schedules
+        .iter()
+        .find(|schedule| schedule.name == "later")
+        .expect("the one-off");
+    assert_eq!(
+        (once.at, once.bot_id.as_deref(), once.cron.as_str()),
+        (Some(4_070_941_200_000), Some(odin.id.as_str()), "")
+    );
+    let listing = weave(&["schedules"]);
+    assert!(
+        said(&listing).contains("tick, 0 9 * * * in UTC, next ")
+            && said(&listing).contains("\n  bot Odin\n"),
+        "{}",
+        said(&listing)
+    );
+    let shown = weave(&["bots", "show", "odin"]);
+    assert!(
+        said(&shown).contains("  schedules      later, once at Thu 1 Jan 2099 09:00 UTC (in ")
+            && said(&shown).contains("tick, 0 9 * * * in UTC, next "),
+        "{}",
+        said(&shown)
+    );
+    let past = weave(&[
+        "schedules",
+        "add",
+        "past",
+        "--bot",
+        "odin",
+        "--at",
+        "2020-01-01T09:00:00Z",
+        "--",
+        "hi",
+    ]);
+    assert!(!past.status.success());
+    assert!(
+        said(&past).contains("--at 2020-01-01T09:00:00Z has passed"),
+        "{}",
+        said(&past)
+    );
+    for refused in [
+        &["--bot", "odin", "--host", "studio", "--cron", "0 9 * * *"][..],
+        &["--bot", "odin", "--approve", "read", "--cron", "0 9 * * *"],
+        &["--bot", "odin"],
+        &[
+            "--bot",
+            "odin",
+            "--cron",
+            "0 9 * * *",
+            "--at",
+            "2099-01-01 09:00",
+        ],
+    ] {
+        let mut line = vec!["schedules", "add", "x"];
+        line.extend_from_slice(refused);
+        line.extend_from_slice(&["--", "hi"]);
+        let output = weave(&line);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{refused:?}: {}",
+            said(&output)
+        );
+    }
+    let conflict = weave(&[
+        "schedules",
+        "add",
+        "x",
+        "--bot",
+        "odin",
+        "--host",
+        "studio",
+        "--cron",
+        "0 9 * * *",
+        "--",
+        "hi",
+    ]);
+    assert!(
+        said(&conflict).contains("'--bot <BOT>' cannot be used with '--host <HOST>'"),
+        "{}",
+        said(&conflict)
+    );
+    let timeless = weave(&["schedules", "add", "x", "--bot", "odin", "--", "hi"]);
+    assert!(
+        said(&timeless).contains("<--cron <CRON>|--at <TIME>>"),
+        "{}",
+        said(&timeless)
+    );
+
+    // Removed, a Bot's schedules go, and its threads and home stay.
+    let removed = weave(&["bots", "remove", "mimir"]);
+    assert!(removed.status.success(), "{}", said(&removed));
+    assert!(
+        said(&removed).contains(
+            "Removed the Bot mimir and its schedules. Its home, ~/bots/mimir, stays on studio as \
+             it was."
+        ),
+        "{}",
+        said(&removed)
+    );
+    let removed: Empty = parsed(&weave(&["bots", "remove", "odin", "--json"]));
+    assert_eq!(removed, Empty {});
+    assert!(home.join("AGENTS.md").exists());
+    let schedules: Vec<Schedule> = parsed(&weave(&["schedules", "list", "--json"]));
+    assert_eq!(schedules, Vec::new());
+    let threads: Vec<ThreadListing> = parsed(&weave(&["threads", "list", "--json"]));
+    assert!(
+        threads
+            .iter()
+            .any(|listing| listing.info.session_id.to_string() == thread.to_string()),
+        "{threads:?}"
+    );
+}
+
+/// A Bot's home on this computer keeps what was there: an `AGENTS.md` of the person's own, and a
+/// repository's commits and what's staged in it, committing only the memory files it writes;
+/// and with nobody git knows to commit as, it writes them and says it didn't commit them.
+#[test]
+fn a_bots_home_keeps_what_was_there() {
+    let mut world = World::new();
+    world.start_host();
+    let (url, code) = world.offer();
+    let paired = world.weave(&["dispatcher", "connect", &url, &code, "--host"]);
+    assert!(paired.status.success(), "{}", said(&paired));
+    let weave = |identity: bool, args: &[&str]| {
+        as_person(world.command(args), &world.home(), identity)
+            .output()
+            .expect("run weave")
+    };
+
+    // An AGENTS.md of the person's own stays as it was, beside no CLAUDE.md, in what's a
+    // repository now, with nothing committed.
+    let kept = world.home().join("bots/keep");
+    std::fs::create_dir_all(&kept).expect("its home");
+    std::fs::write(kept.join("AGENTS.md"), "mine\n").expect("an AGENTS.md");
+    let added = weave(true, &["bots", "add", "keep", "--agent", "fake"]);
+    assert!(added.status.success(), "{}", said(&added));
+    assert!(
+        said(&added).contains("a git repository. Its AGENTS.md was there already"),
+        "{}",
+        said(&added)
+    );
+    assert_eq!(
+        std::fs::read_to_string(kept.join("AGENTS.md")).expect("its AGENTS.md"),
+        "mine\n"
+    );
+    assert!(!kept.join("CLAUDE.md").exists());
+    assert!(git_says(&kept, &["rev-parse", "--is-inside-work-tree"]) == "true\n");
+    assert!(
+        !git_in(&kept, &["rev-parse", "--verify", "HEAD"])
+            .status
+            .success()
+    );
+
+    // A repository of the person's own keeps its commits and what's staged; only the memory
+    // files go into the commit made.
+    let notes = world.dir.path().join("here/code/notes");
+    repository(&notes, "https://github.com/j/notes.git");
+    std::fs::write(notes.join("draft.md"), "draft\n").expect("a draft");
+    assert!(git_in(&notes, &["add", "draft.md"]).status.success());
+    let added = weave(
+        true,
+        &[
+            "bots",
+            "add",
+            "notes",
+            "--agent",
+            "fake",
+            "--home",
+            notes.to_str().expect("a path"),
+        ],
+    );
+    assert!(added.status.success(), "{}", said(&added));
+    assert!(
+        said(&added).contains("is in a git repository already. Its first memory files"),
+        "{}",
+        said(&added)
+    );
+    assert_eq!(
+        git_says(&notes, &["log", "--format=%s"]),
+        "Start notes's home\nstart\n"
+    );
+    assert_eq!(
+        git_says(&notes, &["show", "--name-only", "--format="]),
+        "AGENTS.md\nCLAUDE.md\n"
+    );
+    assert_eq!(
+        git_says(&notes, &["diff", "--cached", "--name-only"]),
+        "draft.md\n"
+    );
+
+    // With nobody git knows to commit as, the files are there, uncommitted, and it says so.
+    let bare = weave(false, &["bots", "add", "bare", "--agent", "fake", "--json"]);
+    assert!(bare.status.success(), "{}", said(&bare));
+    let _: weave_host_protocol::dispatcher::Bot = parsed(&bare);
+    assert!(
+        String::from_utf8_lossy(&bare.stderr)
+            .contains("are there but not committed: git has no user.name and user.email"),
+        "{}",
+        said(&bare)
+    );
+    let bare = world.home().join("bots/bare");
+    assert!(bare.join("AGENTS.md").exists() && bare.join("CLAUDE.md").exists());
+    assert!(
+        !git_in(&bare, &["rev-parse", "--verify", "HEAD"])
+            .status
+            .success()
     );
 }

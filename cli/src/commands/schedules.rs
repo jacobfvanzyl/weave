@@ -1,15 +1,19 @@
 //! `weave schedules`: the Dispatcher's schedules (WVE-145), which start a headless turn on one of
-//! the person's Hosts at the times a cron expression gives, and what each time did.
+//! the person's Hosts at the times a cron expression gives, or once, at a time (a one-off), or
+//! prompt one of their Bots then (WVE-118); and what each time did.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Context as _;
+use anyhow::bail;
+use clap::ArgGroup;
 use clap::Args;
 use clap::Subcommand;
 use clap::ValueEnum;
 use weave_dispatcher::client::DispatcherConnection;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
+use weave_host_protocol::dispatcher::BOTS_FEATURE;
 use weave_host_protocol::dispatcher::ListOccurrencesRequest;
 use weave_host_protocol::dispatcher::ListSchedulesRequest;
 use weave_host_protocol::dispatcher::Missed;
@@ -21,12 +25,12 @@ use weave_host_protocol::dispatcher::RemoveScheduleRequest;
 use weave_host_protocol::dispatcher::ResumeScheduleRequest;
 use weave_host_protocol::dispatcher::RunScheduleRequest;
 use weave_host_protocol::dispatcher::Schedule;
-use weave_host_protocol::dispatcher::ScheduledRun;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::threads::TurnState;
 
 use crate::args::ApproveArgs;
 use crate::args::prompt_text;
+use crate::clock;
 use crate::clock::ago;
 use crate::clock::now_ms;
 use crate::dispatcher;
@@ -46,7 +50,8 @@ pub struct SchedulesArgs {
 enum SchedulesCommand {
     /// The schedules, when each runs next and how it last went (the default).
     List(JsonArgs),
-    /// Add a schedule: at the times `--cron` gives, start a headless turn on a Host.
+    /// Add a schedule: at the times `--cron` gives, or once `--at` a time, start a headless turn
+    /// on a Host, or prompt a Bot.
     Add(Box<AddArgs>),
     /// Forget a schedule and what it did. A turn it started runs on.
     Remove(NameArgs),
@@ -74,6 +79,7 @@ struct NameArgs {
 }
 
 #[derive(Args)]
+#[command(group(ArgGroup::new("when").required(true).args(["cron", "at"])))]
 struct AddArgs {
     /// Its name, unique among the Dispatcher's schedules.
     name: String,
@@ -81,20 +87,36 @@ struct AddArgs {
     /// When it runs: five fields, minute hour day-of-month month day-of-week, such as
     /// "0 9 * * 1-5" for 09:00 on weekdays; or @hourly, @daily, @weekly, @monthly.
     #[arg(long)]
-    cron: String,
+    cron: Option<String>,
+
+    /// Run once, at this time, in place of --cron: 2026-11-12 09:00, in --zone, or
+    /// 2026-11-12T09:00:00+02:00.
+    #[arg(long, value_name = "TIME")]
+    at: Option<String>,
 
     /// The IANA time zone its times are in, such as Africa/Johannesburg; the Dispatcher's
-    /// computer's when omitted.
+    /// computer's when omitted, or with --at, this computer's.
     #[arg(long)]
     zone: Option<String>,
 
+    /// Prompt this Bot, by its name or id, in place of --host, --agent, --cwd and the rest: each
+    /// time goes into its thread, or starts its first, as the Bot is set up then.
+    #[arg(
+        long,
+        value_name = "BOT",
+        conflicts_with_all = [
+            "host", "agent", "cwd", "project", "thread", "mode", "approve", "allow_overlap"
+        ]
+    )]
+    bot: Option<String>,
+
     /// The Host it runs on, by name or id: one `weave hosts` lists.
-    #[arg(long)]
-    host: String,
+    #[arg(long, required_unless_present = "bot")]
+    host: Option<String>,
 
     /// The agent on that Host, as `weave agents` lists them there.
-    #[arg(long)]
-    agent: String,
+    #[arg(long, required_unless_present = "bot")]
+    agent: Option<String>,
 
     /// The directory on that Host it runs in; `~/` starts at the home there. This directory
     /// when omitted.
@@ -168,7 +190,7 @@ pub async fn command(args: SchedulesArgs) -> anyhow::Result<ExitCode> {
                 }
             }
             SchedulesCommand::Add(add) => {
-                let request = add_request(*add).await?;
+                let request = add_request(&dispatcher, *add).await?;
                 let schedule = dispatcher.send(request).await?.schedule;
                 println!("Added {}.", summary(&schedule, now_ms()));
             }
@@ -252,30 +274,71 @@ async fn occurrences(
     Ok(())
 }
 
-async fn add_request(add: AddArgs) -> anyhow::Result<AddScheduleRequest> {
+async fn add_request(
+    dispatcher: &DispatcherConnection,
+    add: AddArgs,
+) -> anyhow::Result<AddScheduleRequest> {
     let prompt = prompt_text(&add.prompt)?;
+    if add.at.is_some() {
+        dispatcher::require(dispatcher, BOTS_FEATURE, "one-off schedules")?;
+    }
+    if add.bot.is_some() {
+        dispatcher::require(dispatcher, BOTS_FEATURE, "Bots")?;
+    }
+    let (cron, at, zone) = match &add.at {
+        Some(text) => {
+            let at = clock::parse_time(text, add.zone.as_deref())?;
+            if at <= now_ms() {
+                bail!("--at {text} has passed: a one-off's time has to come after now");
+            }
+            (None, Some(at), add.zone.or_else(clock::local_zone))
+        }
+        None => (add.cron, None, add.zone),
+    };
+    let missed = match add.missed {
+        MissedArg::Latest => Missed::Latest,
+        MissedArg::Skip => Missed::Skip,
+    };
+    if let Some(bot) = add.bot {
+        return Ok(AddScheduleRequest {
+            name: add.name,
+            cron,
+            at,
+            zone,
+            host: None,
+            bot: Some(bot),
+            agent_id: None,
+            cwd: None,
+            prompt: vec![prompt.into()],
+            policy: None,
+            mode: None,
+            thread: None,
+            missed,
+            overlap: Overlap::Skip,
+        });
+    }
+    let (Some(host), Some(agent)) = (add.host, add.agent) else {
+        bail!("a schedule names a Bot with --bot, or a Host and agent with --host and --agent");
+    };
     let cwd = match (add.cwd, &add.project) {
         (Some(cwd), _) => cwd,
-        (None, Some(project)) => projects::directory(project, On::Host(&add.host)).await?,
+        (None, Some(project)) => projects::directory(project, On::Host(&host)).await?,
         (None, None) => std::env::current_dir().context("reading this directory")?,
     };
     Ok(AddScheduleRequest {
         name: add.name,
-        cron: add.cron,
-        zone: add.zone,
-        host: add.host,
-        run: ScheduledRun {
-            agent_id: add.agent,
-            cwd,
-            prompt: vec![prompt.into()],
-            policy: PermissionPolicy::headless(add.approve.kinds()?),
-            mode: add.mode,
-            thread: add.thread.map(Into::into),
-        },
-        missed: match add.missed {
-            MissedArg::Latest => Missed::Latest,
-            MissedArg::Skip => Missed::Skip,
-        },
+        cron,
+        at,
+        zone,
+        host: Some(host),
+        bot: None,
+        agent_id: Some(agent),
+        cwd: Some(cwd),
+        prompt: vec![prompt.into()],
+        policy: Some(PermissionPolicy::headless(add.approve.kinds()?)),
+        mode: add.mode,
+        thread: add.thread.map(Into::into),
+        missed,
         overlap: if add.allow_overlap {
             Overlap::Allow
         } else {
@@ -284,17 +347,28 @@ async fn add_request(add: AddArgs) -> anyhow::Result<AddScheduleRequest> {
     })
 }
 
-/// "daily-review, 0 9 * * 1-5 in Africa/Johannesburg, next Wed 4 Nov 09:00 SAST (in 3h)".
-fn summary(schedule: &Schedule, now: u64) -> String {
-    let when = match (&schedule.paused, &schedule.next, schedule.next_at) {
-        (Some(why), _, _) => format!("paused: {why}"),
-        (None, Some(next), Some(at)) => format!("next {next} (in {})", ago(at, now)),
-        _ => "never runs again".to_owned(),
+/// "daily-review, 0 9 * * 1-5 in Africa/Johannesburg, next Wed 4 Nov 09:00 SAST (in 3h)", or for
+/// a one-off "standup, once at Thu 12 Nov 2026 09:00 SAST (in 2d)".
+pub(crate) fn summary(schedule: &Schedule, now: u64) -> String {
+    let when = match (schedule.at, &schedule.paused) {
+        (Some(at), paused) => {
+            let at = format!("once at {}", clock::describe(at, &schedule.zone));
+            match (paused, schedule.next_at) {
+                (Some(why), _) => format!("{at}, paused: {why}"),
+                (None, Some(next)) => format!("{at} (in {})", ago(next, now)),
+                (None, None) => format!("{at}, which has passed"),
+            }
+        }
+        (None, paused) => {
+            let when = match (paused, &schedule.next, schedule.next_at) {
+                (Some(why), _, _) => format!("paused: {why}"),
+                (None, Some(next), Some(at)) => format!("next {next} (in {})", ago(at, now)),
+                _ => "never runs again".to_owned(),
+            };
+            format!("{} in {}, {when}", schedule.cron, schedule.zone)
+        }
     };
-    format!(
-        "{}, {} in {}, {when}",
-        schedule.name, schedule.cron, schedule.zone
-    )
+    format!("{}, {when}", schedule.name)
 }
 
 fn describe(schedules: &[Schedule], now: u64) -> String {
@@ -304,21 +378,29 @@ fn describe(schedules: &[Schedule], now: u64) -> String {
     schedules
         .iter()
         .map(|schedule| {
-            let target = match &schedule.run.thread {
-                Some(thread) => format!("prompts thread {thread}"),
-                None => "starts a thread".to_owned(),
-            };
             let last = match &schedule.last {
                 Some(last) => format!("; last {}", outcome(last, now)),
                 None => String::new(),
             };
-            format!(
-                "{}\n  {} on {} in {}, {target}{last}\n",
-                summary(schedule, now),
-                schedule.run.agent_id,
-                schedule.host_name,
-                schedule.run.cwd.display(),
-            )
+            let what = match (&schedule.bot_name, &schedule.bot_id) {
+                (Some(bot), _) | (None, Some(bot)) if schedule.wake_up => {
+                    format!("bot {bot}, a wake-up it asked for")
+                }
+                (Some(bot), _) | (None, Some(bot)) => format!("bot {bot}"),
+                (None, None) => {
+                    let target = match &schedule.run.thread {
+                        Some(thread) => format!("prompts thread {thread}"),
+                        None => "starts a thread".to_owned(),
+                    };
+                    format!(
+                        "{} on {} in {}, {target}",
+                        schedule.run.agent_id,
+                        schedule.host_name,
+                        schedule.run.cwd.display(),
+                    )
+                }
+            };
+            format!("{}\n  {what}{last}\n", summary(schedule, now))
         })
         .collect()
 }
@@ -411,6 +493,84 @@ mod tests {
             recorded_at: 0,
             ended_at: None,
         }
+    }
+
+    fn schedule() -> Schedule {
+        Schedule {
+            id: "sch-1".to_owned(),
+            name: "daily".to_owned(),
+            cron: "0 9 * * *".to_owned(),
+            at: None,
+            zone: "UTC".to_owned(),
+            host_id: "h-1".to_owned(),
+            host_name: "studio".to_owned(),
+            bot_id: None,
+            bot_name: None,
+            wake_up: false,
+            run: weave_host_protocol::dispatcher::ScheduledRun {
+                agent_id: "claude".to_owned(),
+                cwd: "/srv/odin".into(),
+                prompt: Vec::new(),
+                policy: PermissionPolicy::headless(Vec::new()),
+                mode: None,
+                thread: None,
+            },
+            missed: Missed::Latest,
+            overlap: Overlap::Skip,
+            created_at: 0,
+            paused: None,
+            failures: 0,
+            next_at: Some(9 * 3_600_000),
+            next: Some("Thu 1 Jan 09:00 UTC".to_owned()),
+            last: None,
+        }
+    }
+
+    #[test]
+    fn a_bots_schedules_and_one_offs_list_as_such() {
+        let hour = 3_600_000;
+        assert_eq!(
+            describe(&[schedule()], 6 * hour),
+            "daily, 0 9 * * * in UTC, next Thu 1 Jan 09:00 UTC (in 3h)\n  \
+             claude on studio in /srv/odin, starts a thread\n"
+        );
+        let once = Schedule {
+            name: "later".to_owned(),
+            cron: String::new(),
+            at: Some(9 * hour),
+            bot_id: Some("b-1".to_owned()),
+            bot_name: Some("odin".to_owned()),
+            ..schedule()
+        };
+        assert_eq!(
+            describe(std::slice::from_ref(&once), 6 * hour),
+            "later, once at Thu 1 Jan 1970 09:00 UTC (in 3h)\n  bot odin\n"
+        );
+        let passed = Schedule {
+            next_at: None,
+            next: None,
+            last: Some(Occurrence {
+                outcome: Some(TurnState::Ended),
+                ended_at: Some(10 * hour),
+                ..occurrence(OccurrenceState::Finished)
+            }),
+            ..once
+        };
+        assert_eq!(
+            describe(std::slice::from_ref(&passed), 12 * hour),
+            "later, once at Thu 1 Jan 1970 09:00 UTC, which has passed\n  \
+             bot odin; last finished 2h ago: ended\n"
+        );
+        let woken = Schedule {
+            wake_up: true,
+            last: None,
+            ..passed
+        };
+        assert_eq!(
+            describe(&[woken], 12 * hour),
+            "later, once at Thu 1 Jan 1970 09:00 UTC, which has passed\n  \
+             bot odin, a wake-up it asked for\n"
+        );
     }
 
     #[test]

@@ -12,7 +12,12 @@
 //!
 //! The cron expressions are croner's five fields, in the schedule's IANA time zone: a time in
 //! an hour a clock change skips runs at the first valid moment after it, and one in an hour it
-//! repeats runs once.
+//! repeats runs once. A one-off has one time, considered as a cron expression's would be, and
+//! is kept, done, once it has come; but a Bot's own wake-up ([`crate::wakeups`]) is forgotten a
+//! week after its time, once its occurrence is over.
+//!
+//! It considers the Bots too (WVE-118, [`crate::bots::consider`]): pausing one whose thread has
+//! waited on the person too long, and its daily new thread, both by this clock.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -31,7 +36,9 @@ use weave_host_protocol::threads::RunRequest;
 use weave_host_protocol::threads::ServiceOrigin;
 
 use crate::Shared;
+use crate::bots;
 use crate::now_ms;
+use crate::store::BotPrompt;
 use crate::store::Fired;
 use crate::store::StoredSchedule;
 use crate::store::Work;
@@ -72,10 +79,15 @@ impl Clock for SystemClock {
     }
 }
 
-/// A schedule's times: its cron expression in its time zone.
+/// A schedule's times: its cron expression, or a one-off's one time, in its time zone.
 pub(crate) struct Plan {
-    cron: Cron,
+    times: Times,
     zone: TimeZone,
+}
+
+enum Times {
+    Cron(Box<Cron>),
+    Once(u64),
 }
 
 impl Plan {
@@ -86,21 +98,43 @@ impl Plan {
             .build()
             .parse(cron)
             .map_err(|error| format!("the cron expression {cron:?}: {error}"))?;
-        let zone =
-            TimeZone::get(zone).map_err(|error| format!("the time zone {zone:?}: {error}"))?;
-        Ok(Self { cron, zone })
+        Ok(Self {
+            times: Times::Cron(Box::new(cron)),
+            zone: zone_named(zone)?,
+        })
+    }
+
+    /// A one-off's: `at`, once.
+    pub(crate) fn once(at: u64, zone: &str) -> Result<Self, String> {
+        Ok(Self {
+            times: Times::Once(at),
+            zone: zone_named(zone)?,
+        })
+    }
+
+    /// `schedule`'s.
+    pub(crate) fn of(schedule: &StoredSchedule) -> Result<Self, String> {
+        match schedule.at {
+            Some(at) => Self::once(at, &schedule.zone),
+            None => Self::new(&schedule.cron, &schedule.zone),
+        }
     }
 
     /// The first time after `after`.
     pub(crate) fn next_after(&self, after: u64) -> Option<u64> {
-        let after = self.zoned(after)?;
-        let next = self.cron.find_next_occurrence(&after, false).ok()?;
-        u64::try_from(next.timestamp().as_millisecond()).ok()
+        match &self.times {
+            Times::Once(at) => (*at > after).then_some(*at),
+            Times::Cron(cron) => {
+                let after = self.zoned(after)?;
+                let next = cron.find_next_occurrence(&after, false).ok()?;
+                u64::try_from(next.timestamp().as_millisecond()).ok()
+            }
+        }
     }
 
     /// The times after `after`, up to and including `until`, the latest at most
     /// [`MOST_COUNTED`] of them.
-    fn between(&self, after: u64, until: u64) -> Vec<u64> {
+    pub(crate) fn between(&self, after: u64, until: u64) -> Vec<u64> {
         let mut times = Vec::new();
         let mut from = after;
         while let Some(next) = self.next_after(from).filter(|next| *next <= until) {
@@ -120,10 +154,29 @@ impl Plan {
             .unwrap_or_default()
     }
 
+    /// `at` in the schedule's time zone as RFC 3339: "2026-11-04T09:00:00+02:00".
+    pub(crate) fn rfc3339(&self, at: u64) -> String {
+        self.zoned(at)
+            .map(|zoned| zoned.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string())
+            .unwrap_or_default()
+    }
+
+    /// `at`'s date in the schedule's time zone: "2026-11-04".
+    pub(crate) fn date(&self, at: u64) -> String {
+        self.zoned(at)
+            .map(|zoned| zoned.strftime("%Y-%m-%d").to_string())
+            .unwrap_or_default()
+    }
+
     fn zoned(&self, at: u64) -> Option<jiff::Zoned> {
         let at = Timestamp::from_millisecond(i64::try_from(at).ok()?).ok()?;
         Some(at.to_zoned(self.zone.clone()))
     }
+}
+
+/// The IANA time zone `zone` names.
+pub(crate) fn zone_named(zone: &str) -> Result<TimeZone, String> {
+    TimeZone::get(zone).map_err(|error| format!("the time zone {zone:?}: {error}"))
 }
 
 /// The time zone schedules are in unless they name one: this computer's.
@@ -131,11 +184,16 @@ pub(crate) fn local_zone() -> String {
     TimeZone::system().iana_name().unwrap_or("UTC").to_owned()
 }
 
-/// Consider every schedule until the Dispatcher stops.
+/// Consider every Bot and schedule until the Dispatcher stops.
 pub(crate) async fn run(shared: Arc<Shared>) {
     loop {
         let now = shared.config.clock.now();
-        let next = consider_all(&shared, now);
+        // The Bots first, so an occurrence due as one pauses is skipped.
+        let bots_next = bots::consider(&shared, now);
+        let next = [consider_all(&shared, now), bots_next]
+            .into_iter()
+            .flatten()
+            .min();
         let wake = next.unwrap_or(now + 60 * 1000);
         tokio::select! {
             () = shared.config.clock.wait_until(wake) => {}
@@ -154,7 +212,7 @@ fn consider_all(shared: &Shared, now: u64) -> Option<u64> {
             return None;
         }
     };
-    schedules
+    let next = schedules
         .iter()
         .filter(|schedule| schedule.paused.is_none())
         .filter_map(|schedule| match consider(shared, schedule, now) {
@@ -164,13 +222,31 @@ fn consider_all(shared: &Shared, now: u64) -> Option<u64> {
                 None
             }
         })
-        .min()
+        .min();
+    // A Bot's wake-up is forgotten a week after its time, once its occurrence is over.
+    match shared.store.prune_wake_ups(now.saturating_sub(LOOK_BACK)) {
+        Ok(0) => {}
+        Ok(pruned) => tracing::info!(pruned, "forgot Bots' wake-ups done a week ago"),
+        Err(why) => tracing::warn!(%why, "forgetting Bots' done wake-ups failed"),
+    }
+    next
 }
 
 /// Start or skip what came due for `schedule` since it was last considered: when it's next
 /// due.
 fn consider(shared: &Shared, schedule: &StoredSchedule, now: u64) -> Result<Option<u64>, String> {
-    let plan = Plan::new(&schedule.cron, &schedule.zone)?;
+    let plan = Plan::of(schedule)?;
+    // A one-off's time missed by more than the look-back is said to be, as it won't come again.
+    if let Some(at) = schedule.at
+        && at > schedule.considered_until
+        && at < now.saturating_sub(LOOK_BACK)
+    {
+        let why = format!(
+            "missed at {}, more than a week ago, while the Dispatcher couldn't run it",
+            plan.describe(at)
+        );
+        shared.store.skip(&schedule.id, at, &why, now)?;
+    }
     let from = schedule.considered_until.max(now.saturating_sub(LOOK_BACK));
     let due = plan.between(from, now);
     if let Some((latest, earlier)) = due.split_last() {
@@ -219,20 +295,47 @@ pub(crate) fn fire(
     } else {
         format!("schedule/{}/{at}", schedule.id)
     };
+    // A Bot's own wake-up says so, by the Bot's name now; read before the store's transaction.
+    let wake_up = match (&schedule.wake_call, &schedule.bot_id) {
+        (Some(_), Some(bot_id)) => Some(shared.store.find_bot(bot_id).ok().flatten().map_or_else(
+            || "wake-up".to_owned(),
+            |bot| format!("wake-up {}", bot.name),
+        )),
+        _ => None,
+    };
     let work = |occurrence: &str| {
         let run = &schedule.run;
         let mut prompt = run.prompt.clone();
         if late {
+            let whose = match &wake_up {
+                Some(_) => "the wake-up you asked for".to_owned(),
+                None => format!("the schedule {}'s", schedule.name),
+            };
             prompt.insert(
                 0,
                 ContentBlock::from(format!(
-                    "This turn is the schedule {}'s, due at {} and started late, at {}, because \
-                     the Dispatcher couldn't start it on time.",
-                    schedule.name,
+                    "This turn is {whose}, due at {} and started late, at {}, because the \
+                     Dispatcher couldn't start it on time.",
                     plan.describe(at),
                     plan.describe(now)
                 )),
             );
+        }
+        let origin = ServiceOrigin {
+            label: wake_up
+                .clone()
+                .unwrap_or_else(|| format!("schedule {}", schedule.name)),
+            id: occurrence.to_owned(),
+        };
+        // A Bot's goes into its thread, settled when first sent, and a thread it starts is the
+        // Bot's, with its labels.
+        if let Some(bot_id) = &schedule.bot_id {
+            return Work::Bot(BotPrompt {
+                bot_id: bot_id.clone(),
+                prompt,
+                key: Some(key),
+                origin,
+            });
         }
         let request = RunRequest {
             agent_id: run.agent_id.clone(),
@@ -247,10 +350,7 @@ pub(crate) fn fire(
             trace: false,
             key: Some(key),
             caller: None,
-            origin: Some(ServiceOrigin {
-                label: format!("schedule {}", schedule.name),
-                id: occurrence.to_owned(),
-            }),
+            origin: Some(origin),
             // A thread it starts says whose it is (WVE-173); one the person named keeps its own.
             labels: match run.thread {
                 Some(_) => Vec::new(),
@@ -269,7 +369,7 @@ pub(crate) fn fire(
             shared.wake(&schedule.host_id);
         }
         Fired::Skipped(occurrence) => {
-            tracing::info!(schedule = %schedule.name, occurrence = %occurrence.id, "skipped a schedule's occurrence: its previous one is still waiting or running");
+            tracing::info!(schedule = %schedule.name, occurrence = %occurrence.id, why = occurrence.why.as_deref().unwrap_or_default(), "skipped a schedule's occurrence");
         }
         Fired::Already => {}
     }

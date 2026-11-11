@@ -3,6 +3,7 @@
 //! What more than one of them uses lives beside this module, in the crate's root.
 
 pub mod agents;
+pub mod bots;
 pub mod daemon;
 pub mod devices;
 pub mod dispatcher;

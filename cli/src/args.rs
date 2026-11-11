@@ -133,26 +133,51 @@ pub struct ApproveArgs {
 
 impl ApproveArgs {
     pub fn kinds(&self) -> anyhow::Result<Vec<ToolKind>> {
-        let mut kinds = Vec::new();
-        for name in &self.approve {
-            match name.trim() {
-                "all" => kinds.extend(ALL_KINDS.iter().map(|(_, kind)| *kind)),
-                name => match ALL_KINDS.iter().find(|(known, _)| *known == name) {
-                    Some((_, kind)) => kinds.push(*kind),
-                    None => bail!(
-                        "unknown tool kind {name:?}; expected some of {}, or all",
-                        ALL_KINDS
-                            .iter()
-                            .map(|(name, _)| *name)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                },
-            }
-        }
-        kinds.dedup();
-        Ok(kinds)
+        tool_kinds(&self.approve)
     }
+}
+
+/// The tool kinds `names` gives, as `--approve` takes them: by their protocol names, or all.
+pub fn tool_kinds(names: &[String]) -> anyhow::Result<Vec<ToolKind>> {
+    let mut kinds = Vec::new();
+    for name in names {
+        match name.trim() {
+            "all" => kinds.extend(ALL_KINDS.iter().map(|(_, kind)| *kind)),
+            name => match ALL_KINDS.iter().find(|(known, _)| *known == name) {
+                Some((_, kind)) => kinds.push(*kind),
+                None => bail!(
+                    "unknown tool kind {name:?}; expected some of {}, or all",
+                    ALL_KINDS
+                        .iter()
+                        .map(|(name, _)| *name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            },
+        }
+    }
+    kinds.dedup();
+    Ok(kinds)
+}
+
+/// `kinds` as `--approve` takes them: "read,edit", or "all" for every kind.
+pub fn approve_words(kinds: &[ToolKind]) -> String {
+    if ALL_KINDS.iter().all(|(_, kind)| kinds.contains(kind)) {
+        return "all".to_owned();
+    }
+    kinds
+        .iter()
+        .map(|kind| {
+            ALL_KINDS
+                .iter()
+                .find(|(_, known)| known == kind)
+                .map_or_else(
+                    || format!("{kind:?}").to_lowercase(),
+                    |(name, _)| (*name).to_owned(),
+                )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// ACP's tool kinds by their protocol names.
@@ -593,5 +618,13 @@ mod tests {
         );
         assert!(approve(&["write"]).kinds().is_err());
         assert_eq!(approve(&[]).kinds().ok(), Some(Vec::new()));
+        // And are said back in the same words.
+        assert_eq!(
+            approve_words(&[ToolKind::Read, ToolKind::SwitchMode]),
+            "read,switch_mode"
+        );
+        let all = approve(&["all"]).kinds().unwrap_or_default();
+        assert_eq!(approve_words(&all), "all");
+        assert_eq!(approve_words(&[]), "");
     }
 }

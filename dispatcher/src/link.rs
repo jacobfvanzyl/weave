@@ -5,7 +5,11 @@
 //! schedule's occurrence started goes idle it reads how the occurrence's turn ended. It says,
 //! too, that the Dispatcher reaches the person's Hosts, answers the calls the Host passes it
 //! for that ([`crate::calls`]), and follows the turns other Hosts' calls began there
-//! ([`crate::follows`]). A Host that leaves isn't taken up again until it joins again.
+//! ([`crate::follows`]). It settles the prompts for the Bots on the Host as it sends them, and
+//! carries their new threads on as the watch says their threads go idle or wait
+//! ([`crate::bots`]); it declares the Dispatcher's own tools there, a Bot's wake-ups, and
+//! answers their calls ([`crate::wakeups`]). A Host that leaves isn't taken up again until it
+//! joins again.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -40,6 +44,7 @@ use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
 use weave_remote::websocket;
 
 use crate::Shared;
+use crate::bots;
 use crate::calls;
 use crate::client_info;
 use crate::follows;
@@ -47,6 +52,7 @@ use crate::lock;
 use crate::now_ms;
 use crate::store::StoredHost;
 use crate::store::Work;
+use crate::wakeups;
 
 pub(crate) struct Link {
     /// Rung when work is written down for the Host.
@@ -174,6 +180,11 @@ impl Link {
         lock(&self.seen).clone()
     }
 
+    /// Whether the Host is connected now.
+    pub(crate) fn connected(&self) -> bool {
+        lock(&self.seen).connected
+    }
+
     pub(crate) fn listing(&self, thread_id: &ThreadId) -> Option<ThreadListing> {
         lock(&self.seen).threads.get(thread_id).cloned()
     }
@@ -272,15 +283,16 @@ async fn follow(
     closer: &websocket::Link,
 ) -> Ended {
     let handle = connection.handle();
-    // The Host passes the Dispatcher its agents' calls naming another Host from now on.
+    // The Host offers its threads the Dispatcher's own tools, a Bot's wake-ups, and passes the
+    // Dispatcher its agents' calls naming another Host, from now on.
     let declared = connection
         .send(DeclareToolsRequest {
-            tools: Vec::new(),
+            tools: wakeups::tools(),
             hosts: true,
         })
         .await;
     if let Err(error) = declared {
-        tracing::warn!(host = %host.host_id, %error, "a Host didn't take the Dispatcher as reaching the person's Hosts");
+        tracing::warn!(host = %host.host_id, %error, "a Host didn't take the Dispatcher's tools, nor it as reaching the person's Hosts");
     }
     {
         let mut seen = lock(seen);
@@ -305,6 +317,9 @@ async fn follow(
     send_pending(shared, host, &handle, seen).await;
     settle(shared, host, &connection, None).await;
     look(shared, host, &handle, seen, None).await;
+    if bots::advance(shared, host, &handle, seen, None).await {
+        wake.notify_one();
+    }
     let ended = loop {
         tokio::select! {
             event = events.recv() => match event {
@@ -320,9 +335,15 @@ async fn follow(
                     } else if waiting {
                         follows::waiting(shared, host, &handle, &thread_id).await;
                     }
+                    if bots::advance(shared, host, &handle, seen, Some(&thread_id)).await {
+                        wake.notify_one();
+                    }
                 }
                 Some(HostEvent::HostCall(call)) => {
                     tokio::spawn(calls::answer(Arc::clone(shared), host.clone(), handle.clone(), *call));
+                }
+                Some(HostEvent::ToolCall(call)) => {
+                    tokio::spawn(wakeups::answer(Arc::clone(shared), host.clone(), handle.clone(), *call));
                 }
                 Some(HostEvent::ThreadRemoved(removed)) => {
                     lock(seen).threads.remove(&removed.thread_id);
@@ -334,6 +355,9 @@ async fn follow(
                 send_pending(shared, host, &handle, seen).await;
                 settle(shared, host, &connection, None).await;
                 look(shared, host, &handle, seen, None).await;
+                if bots::advance(shared, host, &handle, seen, None).await {
+                    wake.notify_one();
+                }
             }
             () = stop.cancelled() => break Some(Ended::Stopped),
         }
@@ -354,7 +378,8 @@ async fn follow(
 
 /// Send the Host the work written down for it, oldest first, until it's all taken or the
 /// connection fails. Work the Host refuses is failed, saying why; work it couldn't take now,
-/// as while it stops, is sent again on the next connection.
+/// as while it stops, is sent again on the next connection. A Bot's prompt that has to wait
+/// stays written down, and what comes after it goes on.
 async fn send_pending(
     shared: &Shared,
     host: &StoredHost,
@@ -369,8 +394,15 @@ async fn send_pending(
         }
     };
     for mut delivery in pending {
-        if let Work::Prompt(request) = &delivery.work {
-            let work = into_thread(request, seen);
+        let settled = match &delivery.work {
+            Work::Prompt(request) => Some(into_thread(request, seen)),
+            Work::Bot(prompt) => match bots::settle(shared, &delivery, prompt, seen) {
+                Some(work) => Some(work),
+                None => continue,
+            },
+            _ => None,
+        };
+        if let Some(work) = settled {
             if let Err(why) = shared.store.settle(&delivery.id, &work) {
                 tracing::warn!(delivery = %delivery.id, %why, "recording a delivery failed");
                 return;
@@ -383,6 +415,9 @@ async fn send_pending(
                     tracing::warn!(delivery = %delivery.id, %why, "recording a delivery failed");
                 }
                 tracing::info!(host = %host.host_id, delivery = %delivery.id, "delivered");
+                if delivery.bot_id.is_some() {
+                    bots::delivered(connection, seen, &delivery, &answer).await;
+                }
                 delivery.answer = Some(answer);
                 calls::settled(shared, host, &delivery, None);
             }
@@ -410,6 +445,10 @@ pub(crate) async fn send(connection: &HostHandle, work: &Work) -> Result<serde_j
         }
         Work::Queue(request) => serde_json::to_value(connection.send(request.clone()).await?),
         Work::Report(request) => serde_json::to_value(connection.send(request.clone()).await?),
+        // Settled into one of those before it's first sent.
+        Work::Bot(_) => {
+            return Err(Error::internal_error().data("a Bot's prompt not yet settled"));
+        }
     };
     answer.map_err(|error| Error::internal_error().data(error.to_string()))
 }
@@ -417,7 +456,7 @@ pub(crate) async fn send(connection: &HostHandle, work: &Work) -> Result<serde_j
 /// How a prompt for a thread reaches it: added to its queue when it's open on the Host, as
 /// the Dispatcher last saw it, so it waits for whatever runs there; otherwise run in it, which
 /// opens it.
-fn into_thread(request: &RunRequest, seen: &Mutex<Seen>) -> Work {
+pub(crate) fn into_thread(request: &RunRequest, seen: &Mutex<Seen>) -> Work {
     let seen = lock(seen);
     // A thread that continues in another, as a Bot's does, is prompted there (WVE-168).
     let thread_id = request.thread_id.as_ref().map(|thread_id| {
@@ -562,7 +601,7 @@ async fn settle(
 
 /// Whether sending `error`'s work again later may go otherwise: the Host is stopping, or the
 /// connection failed rather than the Host answering.
-fn again(error: &Error) -> bool {
+pub(crate) fn again(error: &Error) -> bool {
     errors::is(error, errors::HOST_STOPPING) || error.code == Error::internal_error().code
 }
 

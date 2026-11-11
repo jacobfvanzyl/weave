@@ -1,0 +1,17 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&SendToBotRequest\n{\n    bot: \"odin\".to_owned(), prompt: vec![text(\"What's on today?\")], key:\n    Some(\"morning-2026-11-10\".to_owned()),\n})"
+---
+{
+  "method": "bots/send",
+  "params": {
+    "bot": "odin",
+    "prompt": [
+      {
+        "type": "text",
+        "text": "What's on today?"
+      }
+    ],
+    "key": "morning-2026-11-10"
+  }
+}

@@ -24,7 +24,6 @@ use weave_host_protocol::dispatcher::Occurrence;
 use weave_host_protocol::dispatcher::OccurrenceState;
 use weave_host_protocol::dispatcher::Overlap;
 use weave_host_protocol::dispatcher::RunScheduleRequest;
-use weave_host_protocol::dispatcher::ScheduledRun;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::threads::GetThreadRequest;
 use weave_host_protocol::threads::LatestTurn;
@@ -85,17 +84,17 @@ async fn pair(dispatcher: &Dispatcher, dir: &std::path::Path, world: &World) -> 
 fn schedule(world: &World, name: &str, cron: &str, prompt: &str) -> AddScheduleRequest {
     AddScheduleRequest {
         name: name.to_owned(),
-        cron: cron.to_owned(),
+        cron: Some(cron.to_owned()),
+        at: None,
         zone: Some("UTC".to_owned()),
-        host: "studio".to_owned(),
-        run: ScheduledRun {
-            agent_id: "fake".to_owned(),
-            cwd: world.dir.path().to_path_buf(),
-            prompt: vec![ContentBlock::from(prompt.to_owned())],
-            policy: PermissionPolicy::ask(),
-            mode: None,
-            thread: None,
-        },
+        host: Some("studio".to_owned()),
+        bot: None,
+        agent_id: Some("fake".to_owned()),
+        cwd: Some(world.dir.path().to_path_buf()),
+        prompt: vec![ContentBlock::from(prompt.to_owned())],
+        policy: Some(PermissionPolicy::ask()),
+        mode: None,
+        thread: None,
         missed: Missed::Latest,
         overlap: Overlap::Skip,
     }
@@ -407,7 +406,7 @@ async fn a_schedule_that_prompts_one_thread_queues_its_prompt_there() {
     let thread = first.thread_id.clone().expect("its thread");
 
     let mut again = schedule(&studio, "again", "30 9 * * *", "and again");
-    again.run.thread = Some(thread.clone());
+    again.thread = Some(thread.clone());
     dispatcher.add_schedule(again).expect("added");
     clock.set("2026-11-04T09:30:00Z");
     let queued = occurrences_until(&dispatcher, "again", |all| {
@@ -434,7 +433,7 @@ async fn an_occurrence_its_host_stops_under_ends_as_the_continuation_does() {
     let (dispatcher, serving) = start_with(dir.path(), clock.clone());
     pair(&dispatcher, dir.path(), &studio).await;
     let mut headless = schedule(&studio, "long-job", "0 9 * * *", "slow 20");
-    headless.run.policy = PermissionPolicy::headless(Vec::new());
+    headless.policy = Some(PermissionPolicy::headless(Vec::new()));
     dispatcher.add_schedule(headless).expect("added");
     clock.set("2026-11-04T09:00:00Z");
     let started = occurrences_until(&dispatcher, "long-job", |all| {
@@ -469,7 +468,7 @@ async fn three_failures_in_a_row_pause_a_schedule() {
     let (dispatcher, serving) = start_with(dir.path(), clock.clone());
     pair(&dispatcher, dir.path(), &studio).await;
     let mut broken = schedule(&studio, "broken", "* * * * *", "hello");
-    broken.run.agent_id = "nobody".to_owned();
+    broken.agent_id = Some("nobody".to_owned());
     dispatcher.add_schedule(broken).expect("added");
 
     for (count, minute) in [(1, "09:00"), (2, "09:01"), (3, "09:02")] {

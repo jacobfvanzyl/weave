@@ -1,0 +1,20 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&AddScheduleRequest\n{\n    name: \"remind-odin\".to_owned(), cron: None, at: Some(1_760_270_400_000),\n    zone: None, host: None, bot: Some(\"odin\".to_owned()), agent_id: None, cwd:\n    None, prompt: vec![text(\"Check whether the deploy finished.\")], policy:\n    None, mode: None, thread: None, missed: Missed::Latest, overlap:\n    Overlap::Skip,\n})"
+---
+{
+  "method": "schedules/add",
+  "params": {
+    "name": "remind-odin",
+    "at": 1760270400000,
+    "bot": "odin",
+    "prompt": [
+      {
+        "type": "text",
+        "text": "Check whether the deploy finished."
+      }
+    ],
+    "missed": "latest",
+    "overlap": "skip"
+  }
+}

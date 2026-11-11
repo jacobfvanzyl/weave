@@ -1,13 +1,21 @@
 //! The Dispatcher's state, in SQLite (ADR 0027): the Hosts it is paired with, the work
 //! written down for them, schedules and their occurrences ([`schedules`]), and the calls Hosts'
 //! agents make to the person's other Hosts and the turns they began there ([`calls`]), and its
-//! own id and the devices paired with it ([`devices`]), and the person's Projects
-//! ([`projects`]). Later issues add other triggers and Bots, each as a migration of its own.
+//! own id and the devices paired with it ([`devices`]), the person's Projects ([`projects`]),
+//! and their Bots ([`bots`]). Later issues add other triggers, each as a migration of its own.
 
+mod bots;
 mod calls;
 mod devices;
 mod projects;
 mod schedules;
+
+pub(crate) use bots::BotChange;
+pub(crate) use bots::BotError;
+pub(crate) use bots::NewBot;
+pub(crate) use bots::NewThread;
+pub(crate) use bots::Step;
+pub(crate) use bots::StoredBot;
 
 pub(crate) use calls::Call;
 pub(crate) use calls::Follow;
@@ -19,11 +27,13 @@ pub(crate) use projects::ProjectError;
 
 pub(crate) use schedules::Fired;
 pub(crate) use schedules::StoredSchedule;
+pub(crate) use schedules::WakeUp;
 
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
+use agent_client_protocol::schema::v1::ContentBlock;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension as _;
 use rusqlite::params;
@@ -33,12 +43,13 @@ use weave_host_protocol::devices::Jwk;
 use weave_host_protocol::queue::AddQueuedRequest;
 use weave_host_protocol::threads::ReportThreadRequest;
 use weave_host_protocol::threads::RunRequest;
+use weave_host_protocol::threads::ServiceOrigin;
 
 use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 7] = [
+const MIGRATIONS: [&str; 8] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -194,6 +205,61 @@ const MIGRATIONS: [&str; 7] = [
         UNIQUE (host_id, path)
     );
 ",
+    // Bots (ADR 0028, WVE-118): each on one Host, whose removal takes it, its schedules and the
+    // prompts waiting for it. `bot_threads` are the threads it has had, the current one last;
+    // `bot_new_threads` the new-thread sequence under way, step by step. A schedule may name a
+    // Bot, and may be a one-off (`at`, its `cron` empty); a delivery for a Bot names it. A Bot's
+    // own wake-up is a one-off its thread asked for with `wake_me`, which `wake_call` names: the
+    // Host's id for that tool call, once per Bot, so the same call makes one.
+    "
+    CREATE TABLE bots (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        host_id TEXT NOT NULL REFERENCES hosts (host_id) ON DELETE CASCADE,
+        home TEXT NOT NULL,
+        policy TEXT NOT NULL,
+        mode TEXT,
+        new_thread_at TEXT,
+        zone TEXT NOT NULL,
+        pause_after INTEGER NOT NULL,
+        thread_id TEXT,
+        paused TEXT,
+        waiting_since INTEGER,
+        new_thread_considered INTEGER NOT NULL,
+        new_thread_due INTEGER,
+        new_threads INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX bots_by_name ON bots (name COLLATE NOCASE);
+    CREATE TABLE bot_threads (
+        bot_id TEXT NOT NULL REFERENCES bots (id) ON DELETE CASCADE,
+        thread_id TEXT NOT NULL,
+        first_turn TEXT,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        PRIMARY KEY (bot_id, thread_id)
+    );
+    CREATE TABLE bot_new_threads (
+        bot_id TEXT PRIMARY KEY REFERENCES bots (id) ON DELETE CASCADE,
+        number INTEGER NOT NULL,
+        step TEXT NOT NULL,
+        from_thread TEXT NOT NULL,
+        note TEXT,
+        save_delivery TEXT,
+        start_delivery TEXT,
+        thread_id TEXT,
+        first_turn TEXT,
+        began_at INTEGER NOT NULL
+    );
+    ALTER TABLE schedules ADD COLUMN at INTEGER;
+    ALTER TABLE schedules ADD COLUMN bot_id TEXT REFERENCES bots (id) ON DELETE CASCADE;
+    ALTER TABLE schedules ADD COLUMN wake_call TEXT;
+    CREATE UNIQUE INDEX schedules_by_wake_call ON schedules (bot_id, wake_call);
+    ALTER TABLE deliveries ADD COLUMN bot_id TEXT REFERENCES bots (id) ON DELETE CASCADE;
+    CREATE INDEX deliveries_by_bot ON deliveries (bot_id, state);
+",
 ];
 
 /// A Host that joined the Dispatcher, or was paired with it before Hosts joined it.
@@ -228,6 +294,23 @@ pub enum Work {
     /// so every send asks the same under its key.
     Prompt(RunRequest),
     Report(ReportThreadRequest),
+    /// A prompt for a Bot (WVE-118), settled when first sent, as a thread's prompt is, into
+    /// its current thread, or into `thread/run` starting its first ([`crate::bots`]).
+    Bot(BotPrompt),
+}
+
+/// A prompt for a Bot, whose thread is settled when it's first sent: its current thread then,
+/// or a new one in its home when it has none. It waits while the Bot starts a new thread, and
+/// while another of its prompts starts its first.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotPrompt {
+    pub bot_id: String,
+    pub prompt: Vec<ContentBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// What sent it: `bot <name>`, or `schedule <name>` for a Bot's schedule.
+    pub origin: ServiceOrigin,
 }
 
 impl Work {
@@ -236,6 +319,7 @@ impl Work {
             Self::Run(request) | Self::Prompt(request) => request.key.as_deref(),
             Self::Queue(request) => request.key.as_deref(),
             Self::Report(request) => request.key.as_deref(),
+            Self::Bot(prompt) => prompt.key.as_deref(),
         }
     }
 
@@ -244,19 +328,20 @@ impl Work {
             Self::Run(request) | Self::Prompt(request) => request.key = Some(key),
             Self::Queue(request) => request.key = Some(key),
             Self::Report(request) => request.key = Some(key),
+            Self::Bot(prompt) => prompt.key = Some(key),
         }
         self
     }
 
     /// The thread and turn the Host's `answer` to this says it started, if it says.
-    fn started(&self, answer: &serde_json::Value) -> Option<(String, String)> {
+    pub(crate) fn started(&self, answer: &serde_json::Value) -> Option<(String, String)> {
         let text = |name: &str| answer.get(name)?.as_str().map(str::to_owned);
         match self {
             Self::Run(_) | Self::Prompt(_) => {
                 Some((answered_thread(answer)?.to_owned(), text("turnId")?))
             }
             Self::Queue(request) => Some((request.thread_id.0.to_string(), text("queuedId")?)),
-            Self::Report(_) => None,
+            Self::Report(_) | Self::Bot(_) => None,
         }
     }
 }
@@ -275,6 +360,8 @@ pub(crate) fn answered_thread(answer: &serde_json::Value) -> Option<&str> {
 pub struct Delivery {
     pub id: String,
     pub host_id: String,
+    /// The Bot it's for, if it is one's (WVE-118).
+    pub bot_id: Option<String>,
     /// What it asks, always under a request key.
     pub work: Work,
     pub state: DeliveryState,
@@ -541,11 +628,13 @@ impl Store {
             )
             .optional()
             .map_err(failed)?;
-        let started = work
-            .and_then(|work| serde_json::from_str::<Work>(&work).ok())
-            .and_then(|work| work.started(answer));
+        let work = work.and_then(|work| serde_json::from_str::<Work>(&work).ok());
+        let started = work.as_ref().and_then(|work| work.started(answer));
         if let Some((thread_id, turn_id)) = &started {
             calls::begun(&transaction, id, thread_id, turn_id).map_err(failed)?;
+        }
+        if let Some(work) = &work {
+            bots::answered(&transaction, id, work, answer).map_err(failed)?;
         }
         let (thread_id, turn_id) = started.unzip();
         transaction
@@ -581,6 +670,7 @@ impl Store {
             schedules::end(&transaction, &occurrence, schedules::Ending::Refused(why))
                 .map_err(failed)?;
         }
+        bots::refused(&transaction, id).map_err(failed)?;
         transaction.commit().map_err(failed)
     }
 
@@ -598,13 +688,29 @@ impl Store {
 }
 
 /// Write `work` down for `host_id`, under its own request key or else one made from the
-/// delivery's id.
+/// delivery's id; a Bot's prompt names its Bot.
 fn insert_delivery(
     connection: &Connection,
     host_id: &str,
     work: Work,
 ) -> rusqlite::Result<Delivery> {
+    let bot_id = match &work {
+        Work::Bot(prompt) => Some(prompt.bot_id.clone()),
+        _ => None,
+    };
+    insert_delivery_as(connection, host_id, bot_id.as_deref(), |_| work)
+}
+
+/// Write down for `host_id` the work `make` makes from the delivery's id, under its own request
+/// key or else one made from that id, for the Bot `bot_id` if it names one.
+fn insert_delivery_as(
+    connection: &Connection,
+    host_id: &str,
+    bot_id: Option<&str>,
+    make: impl FnOnce(&str) -> Work,
+) -> rusqlite::Result<Delivery> {
     let id = format!("w-{}", random_id());
+    let work = make(&id);
     let work = match work.key() {
         Some(_) => work,
         None => work.keyed(format!("dispatcher/{id}")),
@@ -612,6 +718,7 @@ fn insert_delivery(
     let delivery = Delivery {
         id,
         host_id: host_id.to_owned(),
+        bot_id: bot_id.map(str::to_owned),
         work,
         state: DeliveryState::Pending,
         created_at: now_ms(),
@@ -622,27 +729,29 @@ fn insert_delivery(
     let work = serde_json::to_string(&delivery.work)
         .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     connection.execute(
-        "INSERT INTO deliveries (id, host_id, work, state, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO deliveries (id, host_id, work, state, created_at, bot_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             delivery.id,
             delivery.host_id,
             work,
             delivery.state.name(),
-            to_sql(delivery.created_at)
+            to_sql(delivery.created_at),
+            delivery.bot_id
         ],
     )?;
     Ok(delivery)
 }
 
-const SELECT_DELIVERY: &str =
-    "SELECT id, host_id, work, state, created_at, delivered_at, answer, error FROM deliveries";
+const SELECT_DELIVERY: &str = "SELECT id, host_id, work, state, created_at, delivered_at, \
+     answer, error, bot_id FROM deliveries";
 
 fn delivery(row: &rusqlite::Row<'_>) -> rusqlite::Result<Delivery> {
     let state: String = row.get(3)?;
     Ok(Delivery {
         id: row.get(0)?,
         host_id: row.get(1)?,
+        bot_id: row.get(8)?,
         work: json(2, &row.get::<_, String>(2)?)?,
         state: DeliveryState::named(&state),
         created_at: from_sql(row.get(4)?),

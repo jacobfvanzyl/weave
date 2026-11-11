@@ -14,6 +14,9 @@
 //!   and reports on to the calling thread.
 //! - [`projects`]: the person's Projects (ADR 0031, WVE-189), each with at most one location on
 //!   each Host.
+//! - [`bots`]: the person's Bots (ADR 0028, WVE-118), whose work goes on in ordinary threads on
+//!   one Host each, and their new threads; and [`wakeups`], the service tools a Bot's thread
+//!   asks to be woken with, the first the Dispatcher declares on each Host (WVE-171).
 //! - [`api`]: what the `weave` CLI asks over its socket ([`socket`]), and over its WebSocket
 //!   from the person's other devices once one pairs ([`devices`], WVE-176), which
 //!   `weave-remote` serves as it does the Host's.
@@ -25,6 +28,7 @@
 //! is `docs/specs/wve-175-dispatcher.md`.
 
 mod api;
+mod bots;
 mod calls;
 mod carry;
 pub mod client;
@@ -37,6 +41,7 @@ mod projects;
 mod scheduler;
 pub mod socket;
 mod store;
+mod wakeups;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,8 +56,10 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use weave_host_client::HostHandle;
 use weave_host_client::remote::DeviceKey;
+use weave_host_protocol::dispatcher::AddBotRequest;
 use weave_host_protocol::dispatcher::AddProjectRequest;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
+use weave_host_protocol::dispatcher::Bot;
 use weave_host_protocol::dispatcher::DispatcherHost;
 use weave_host_protocol::dispatcher::DispatcherStatus;
 use weave_host_protocol::dispatcher::Occurrence;
@@ -61,6 +68,10 @@ use weave_host_protocol::dispatcher::Overlap;
 use weave_host_protocol::dispatcher::Project;
 use weave_host_protocol::dispatcher::Reachability;
 use weave_host_protocol::dispatcher::Schedule;
+use weave_host_protocol::dispatcher::ScheduledRun;
+use weave_host_protocol::dispatcher::SendToBotRequest;
+use weave_host_protocol::dispatcher::SentToBot;
+use weave_host_protocol::dispatcher::UpdateBotRequest;
 use weave_host_protocol::dispatcher::UpdateProjectRequest;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::threads::ThreadId;
@@ -74,10 +85,12 @@ pub use crate::paths::DispatcherPaths;
 pub use crate::scheduler::Clock;
 use crate::scheduler::Plan;
 pub use crate::scheduler::SystemClock;
+pub use crate::store::BotPrompt;
 pub use crate::store::Delivery;
 pub use crate::store::DeliveryState;
 use crate::store::Fired;
 use crate::store::Store;
+use crate::store::StoredBot;
 use crate::store::StoredHost;
 use crate::store::StoredSchedule;
 pub use crate::store::Work;
@@ -307,6 +320,39 @@ impl Dispatcher {
         self.shared.remove_project(by)
     }
 
+    /// The person's Bots, by name.
+    pub fn bots(&self) -> Result<Vec<Bot>, Error> {
+        self.shared.bots()
+    }
+
+    /// The Bot `by` names, by id or name, ignoring case.
+    pub fn bot(&self, by: &str) -> Result<Bot, Error> {
+        self.shared.bot(by)
+    }
+
+    pub fn add_bot(&self, request: AddBotRequest) -> Result<Bot, Error> {
+        self.shared.add_bot(request)
+    }
+
+    pub fn update_bot(&self, request: UpdateBotRequest) -> Result<Bot, Error> {
+        self.shared.update_bot(request)
+    }
+
+    /// Forget the Bot `by` names, its schedules and the prompts waiting for it.
+    pub fn remove_bot(&self, by: &str) -> Result<(), Error> {
+        self.shared.remove_bot(by)
+    }
+
+    /// Write a prompt down for a Bot, and send it as soon as its Host can take it.
+    pub fn send_to_bot(&self, request: SendToBotRequest) -> Result<SentToBot, Error> {
+        self.shared.send_to_bot(request)
+    }
+
+    /// Begin the Bot `by` names' new thread.
+    pub fn new_bot_thread(&self, by: &str) -> Result<Bot, Error> {
+        self.shared.new_bot_thread(by)
+    }
+
     /// The threads on `host_id` as the Dispatcher last saw them, while it is connected there.
     pub fn threads(&self, host_id: &str) -> Vec<ThreadListing> {
         lock(&self.shared.links)
@@ -327,6 +373,11 @@ impl Shared {
     /// The connection to `host_id`, while there's one.
     pub(crate) fn handle(&self, host_id: &str) -> Option<HostHandle> {
         lock(&self.links).get(host_id)?.seen().handle
+    }
+
+    /// Whether the Dispatcher is connected to `host_id` now.
+    pub(crate) fn connected(&self, host_id: &str) -> bool {
+        lock(&self.links).get(host_id).is_some_and(Link::connected)
     }
 
     /// How the link to `host_id` stands.
@@ -372,31 +423,51 @@ impl Shared {
     fn schedules(&self) -> Result<Vec<Schedule>, Error> {
         let schedules = self.store.schedules().map_err(internal)?;
         let hosts = self.store.hosts().map_err(internal)?;
+        let bots = self.store.bots().map_err(internal)?;
         let now = self.config.clock.now();
         schedules
             .into_iter()
-            .map(|schedule| self.listing(schedule, &hosts, now))
+            .map(|schedule| self.listing(schedule, &hosts, &bots, now))
             .collect()
     }
 
     fn schedule(&self, id: &str) -> Result<Schedule, Error> {
         let schedule = self.resolve_schedule(id)?;
         let hosts = self.store.hosts().map_err(internal)?;
-        self.listing(schedule, &hosts, self.config.clock.now())
+        let bots = self.store.bots().map_err(internal)?;
+        self.listing(schedule, &hosts, &bots, self.config.clock.now())
     }
 
+    /// `schedule` as the API gives it: a Bot's with the Bot's agent, home, policy, mode and
+    /// thread as they are now.
     fn listing(
         &self,
-        schedule: StoredSchedule,
+        mut schedule: StoredSchedule,
         hosts: &[StoredHost],
+        bots: &[StoredBot],
         now: u64,
     ) -> Result<Schedule, Error> {
         let next_at = match &schedule.paused {
             Some(_) => None,
-            None => Plan::new(&schedule.cron, &schedule.zone)
+            None => Plan::of(&schedule)
                 .ok()
                 .and_then(|plan| plan.next_after(now).map(|at| (at, plan.describe(at)))),
         };
+        let bot = schedule
+            .bot_id
+            .as_ref()
+            .and_then(|bot_id| bots.iter().find(|bot| bot.id == *bot_id));
+        if let Some(bot) = bot {
+            schedule.host_id.clone_from(&bot.host_id);
+            schedule.run = ScheduledRun {
+                agent_id: bot.agent_id.clone(),
+                cwd: bot.home.clone(),
+                prompt: schedule.run.prompt,
+                policy: bot.policy.clone(),
+                mode: bot.mode.clone(),
+                thread: bot.thread.clone().map(ThreadId::new),
+            };
+        }
         let last = self
             .store
             .occurrences(Some(&schedule.id), 1)
@@ -409,11 +480,15 @@ impl Shared {
                 .find(|host| host.host_id == schedule.host_id)
                 .map(|host| host.name.clone())
                 .unwrap_or_default(),
+            bot_name: bot.map(|bot| bot.name.clone()),
+            wake_up: schedule.wake_call.is_some(),
             id: schedule.id,
             name: schedule.name,
             cron: schedule.cron,
+            at: schedule.at,
             zone: schedule.zone,
             host_id: schedule.host_id,
+            bot_id: schedule.bot_id,
             run: schedule.run,
             missed: schedule.missed,
             overlap: schedule.overlap,
@@ -431,33 +506,114 @@ impl Shared {
         if name.is_empty() {
             return Err(invalid("a schedule needs a name".to_owned()));
         }
-        if request.run.prompt.is_empty() {
+        if request.prompt.is_empty() {
             return Err(invalid("a schedule needs a prompt".to_owned()));
         }
-        if request.run.thread.is_some() && request.overlap == Overlap::Allow {
+        if request.thread.is_some() && request.overlap == Overlap::Allow {
             return Err(invalid(
                 "a schedule that prompts one thread can't overlap its runs: they'd queue there"
                     .to_owned(),
             ));
         }
         let zone = request.zone.unwrap_or_else(scheduler::local_zone);
-        let cron = request.cron.trim().to_owned();
-        Plan::new(&cron, &zone).map_err(invalid)?;
-        let host = self.resolve_host(&request.host)?;
         let now = self.config.clock.now();
+        let (cron, at) = match (request.cron, request.at) {
+            (Some(_), Some(_)) => {
+                return Err(invalid(
+                    "a schedule has a cron expression or a time (at), not both",
+                ));
+            }
+            (None, None) => {
+                return Err(invalid(
+                    "a schedule needs a cron expression, or a time (at) for a one-off",
+                ));
+            }
+            (Some(cron), None) => {
+                let cron = cron.trim().to_owned();
+                Plan::new(&cron, &zone).map_err(invalid)?;
+                (cron, None)
+            }
+            (None, Some(at)) => {
+                let plan = Plan::once(at, &zone).map_err(invalid)?;
+                if at <= now {
+                    return Err(invalid(format!(
+                        "a one-off's time has to come after now: {} has passed",
+                        plan.describe(at)
+                    )));
+                }
+                (String::new(), Some(at))
+            }
+        };
+        let (host_id, run, bot_id) = match &request.bot {
+            Some(by) => {
+                if request.host.is_some()
+                    || request.agent_id.is_some()
+                    || request.cwd.is_some()
+                    || request.policy.is_some()
+                    || request.mode.is_some()
+                    || request.thread.is_some()
+                {
+                    return Err(invalid(
+                        "a Bot's schedule names the Bot in place of host, agentId, cwd, policy, \
+                         mode and thread",
+                    ));
+                }
+                if request.overlap == Overlap::Allow {
+                    return Err(invalid(
+                        "a Bot's schedule prompts its thread, so its occurrences can't overlap",
+                    ));
+                }
+                let bot = self
+                    .store
+                    .find_bot(by)
+                    .map_err(internal)?
+                    .ok_or_else(|| invalid(format!("there's no Bot {by}")))?;
+                let run = ScheduledRun {
+                    agent_id: bot.agent_id,
+                    cwd: bot.home,
+                    prompt: request.prompt,
+                    policy: bot.policy,
+                    mode: bot.mode,
+                    thread: None,
+                };
+                (bot.host_id, run, Some(bot.id))
+            }
+            None => {
+                let (Some(host), Some(agent_id), Some(cwd), Some(policy)) =
+                    (request.host, request.agent_id, request.cwd, request.policy)
+                else {
+                    return Err(invalid(
+                        "a schedule names a Bot, or a Host with agentId, cwd and policy",
+                    ));
+                };
+                let host = self.resolve_host(&host)?;
+                let run = ScheduledRun {
+                    agent_id,
+                    cwd,
+                    prompt: request.prompt,
+                    policy,
+                    mode: request.mode,
+                    thread: request.thread,
+                };
+                (host.host_id, run, None)
+            }
+        };
         let schedule = StoredSchedule {
             id: StoredSchedule::new_id(),
             name,
             cron,
+            at,
             zone,
-            host_id: host.host_id,
-            run: request.run,
+            host_id,
+            run,
+            bot_id,
             missed: request.missed,
             overlap: request.overlap,
             created_at: now,
             considered_until: now,
             paused: None,
             failures: 0,
+            wake_call: None,
         };
         self.store.add_schedule(&schedule).map_err(invalid)?;
         tracing::info!(schedule = %schedule.name, "added a schedule");
@@ -493,7 +649,7 @@ impl Shared {
 
     fn run_schedule(&self, by: &str) -> Result<Occurrence, Error> {
         let schedule = self.resolve_schedule(by)?;
-        let plan = Plan::new(&schedule.cron, &schedule.zone).map_err(internal)?;
+        let plan = Plan::of(&schedule).map_err(internal)?;
         let now = self.config.clock.now();
         match scheduler::fire(self, &schedule, &plan, now, false, true, now).map_err(internal)? {
             Fired::Started(occurrence, _) | Fired::Skipped(occurrence) => Ok(occurrence),

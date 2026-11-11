@@ -1,0 +1,29 @@
+---
+source: protocol/tests/wire.rs
+expression: message(&host_schedule)
+---
+{
+  "method": "schedules/add",
+  "params": {
+    "name": "daily-review",
+    "cron": "0 9 * * 1-5",
+    "zone": "Africa/Johannesburg",
+    "host": "studio",
+    "agentId": "claude",
+    "cwd": "/Users/jaco/Projects/weave",
+    "prompt": [
+      {
+        "type": "text",
+        "text": "Review yesterday's commits."
+      }
+    ],
+    "policy": {
+      "approve": [
+        "read"
+      ],
+      "otherwise": "reject"
+    },
+    "missed": "latest",
+    "overlap": "skip"
+  }
+}

@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&GetBotRequest { bot: \"odin\".to_owned(), })"
+---
+{
+  "method": "bots/get",
+  "params": {
+    "bot": "odin"
+  }
+}

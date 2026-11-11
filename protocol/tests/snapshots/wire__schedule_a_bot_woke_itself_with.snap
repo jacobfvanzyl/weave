@@ -1,0 +1,37 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&Schedule\n{\n    id: \"sch-9e8d7c6b5a4f3e2d1c0b\".to_owned(), name:\n    \"wake-up-9e8d7c6b5a4f\".to_owned(), cron: String::new(), at:\n    Some(1_760_274_000_000), zone: \"Africa/Johannesburg\".to_owned(), host_id:\n    odin.host_id.clone(), host_name: odin.host_name.clone(), bot_id:\n    Some(odin.id.clone()), bot_name: Some(odin.name.clone()), wake_up: true,\n    run: ScheduledRun\n    {\n        agent_id: odin.agent_id.clone(), cwd: odin.home.clone(), prompt:\n        vec![text(\"See whether the deploy finished, and tell Jaco if it failed.\")],\n        policy: odin.policy.clone(), mode: None, thread: odin.thread.clone(),\n    }, missed: Missed::Latest, overlap: Overlap::Skip, created_at:\n    1_760_270_400_000, paused: None, failures: 0, next_at:\n    Some(1_760_274_000_000), next: Some(\"Sun 12 Oct 15:00 SAST\".to_owned()),\n    last: None,\n})"
+---
+{
+  "id": "sch-9e8d7c6b5a4f3e2d1c0b",
+  "name": "wake-up-9e8d7c6b5a4f",
+  "cron": "",
+  "at": 1760274000000,
+  "zone": "Africa/Johannesburg",
+  "hostId": "Lw4nB7cR2tY9uI0oP5aS3d",
+  "hostName": "homelab",
+  "botId": "b-5e1d0c9b8a7f6e5d4c3b",
+  "botName": "odin",
+  "wakeUp": true,
+  "agentId": "claude",
+  "cwd": "~/bots/odin",
+  "prompt": [
+    {
+      "type": "text",
+      "text": "See whether the deploy finished, and tell Jaco if it failed."
+    }
+  ],
+  "policy": {
+    "approve": [
+      "read"
+    ],
+    "otherwise": "ask"
+  },
+  "thread": "s-9b1c",
+  "missed": "latest",
+  "overlap": "skip",
+  "createdAt": 1760270400000,
+  "failures": 0,
+  "nextAt": 1760274000000,
+  "next": "Sun 12 Oct 15:00 SAST"
+}
