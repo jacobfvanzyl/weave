@@ -326,6 +326,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
     ...(phone ? { surface, onSwipeBack: onBack } : {}),
   });
   const title = (block: SessionBlock) => blockType(block.type).title(block, { controller, session });
+  const icon = (block: SessionBlock) => blockType(block.type).icon;
   const mark = (block: SessionBlock) => blockType(block.type).mark?.(block, { controller, session }) ?? null;
   // The Bot's thread isn't deleted from its Block: it's the Bot's.
   const menu = (block: SessionBlock) => (blockType(block.type).actions?.(block, context(block)) ?? []).filter((item) => !(isLocked(block) && item.destructive));
@@ -580,67 +581,75 @@ export function SessionView({ controller, session, members, leading, phone = fal
     if (focused) document.querySelector<HTMLTextAreaElement>(`[data-block-id="${focused.id}"] textarea`)?.focus();
   }, Boolean(focused && threadOf(focused)));
 
+  // New Block shows as a button only here, in an empty tab: elsewhere a Block's split icons,
+  // the keys, the menu bar and the palette open it.
   const empty = (
     <div data-slot='empty-tab' className='flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center'>
       <p className='text-sm font-medium'>Nothing in this tab</p>
       <p className='max-w-xs text-xs text-muted-foreground'>
         A Block shows a thread or a terminal: a new one, or one of this Session's that isn't shown{notShown > 0 ? `, of which there ${notShown === 1 ? 'is 1' : `are ${notShown}`}` : ''}.
       </p>
-      <Button onClick={() => setAdding({ target: here() })}>New Block</Button>
+      <Button aria-label='New Block' onClick={() => setAdding({ target: here() })}>
+        <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+        New Block
+      </Button>
     </div>
   );
 
-  const newBlock = (
-    <Button size={phone ? (notShown > 0 ? 'sm' : 'icon') : 'sm'} variant='ghost' className='shrink-0'
-      aria-label={notShown > 0 ? `New Block, ${notShown} not shown` : 'New Block'}
-      title={notShown > 0 ? `New Block: ${notShown} of this Session's threads and terminals aren't shown` : 'New Block'}
-      onClick={() => setAdding({ target: here() })}>
-      <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-      {!phone && 'New Block'}
-      {notShown > 0 && <span className='text-muted-foreground'>{notShown}</span>}
-    </Button>
-  );
-  // The tabs: each with its name, which is typed in place to rename it, and its own close; then
-  // a + for a new one, which a Block dragged onto it moves into.
+  // The tabs, as pills in a pill: each with the mark of what it shows first and its name, which is
+  // typed in place to rename it, and its own close. A + after them opens a new tab, and takes a
+  // Block dragged onto it into one. The pill is only as wide as its tabs, scrolling when they
+  // don't fit, so the rest of the rail stays empty, where on the Mac it drags the window.
   const tabRail = (
-    <div role='tablist' aria-label='Tabs' className='flex h-full min-w-0 flex-1 items-stretch gap-px overflow-x-auto'>
-      {layout.tabs.map((listed) => {
-        const selected = listed.id === tab.id;
-        const name = tabName(listed);
-        const show = () => changeView((current) => showTab(current, listed.id));
-        return (
-          <div key={listed.id} role='tab' tabIndex={0} aria-selected={selected} aria-label={name} data-tab-drop={listed.id} title={name}
-            className={cn(
-              'flex max-w-56 min-w-0 shrink-0 cursor-default items-center gap-1 border-b-2 border-transparent pr-1 pl-3 text-xs text-muted-foreground outline-none focus-visible:bg-accent',
-              selected && 'border-primary text-foreground',
-            )}
-            onClick={show}
-            onDoubleClick={() => setRenaming(listed.id)}
-            onKeyDown={(event) => {
-              if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
-              event.preventDefault();
-              show();
-            }}>
-            {renaming === listed.id
-              ? (
-                <NameInput label='Tab name' name={listed.title ?? ''} placeholder={tabName({ ...listed, title: undefined })}
-                  onKeep={(next) => update((current) => renameTab(current, listed.id, next))} onDone={() => setRenaming(undefined)} />
-              )
-              : <span className='truncate'>{name}</span>}
-            <Button size='icon-xs' variant='ghost' aria-label={`Close tab ${name}`} title='Close tab' className='shrink-0 opacity-60 hover:opacity-100'
-              onClick={(event) => {
-                event.stopPropagation();
-                closeTab(listed);
+    <>
+      <div role='tablist' aria-label='Tabs'
+        className='flex h-9 min-w-0 items-stretch gap-1 overflow-x-auto rounded-full bg-muted/50 p-1 [scrollbar-width:none]'>
+        {layout.tabs.map((listed) => {
+          const selected = listed.id === tab.id;
+          const name = tabName(listed);
+          const show = () => changeView((current) => showTab(current, listed.id));
+          const first = (listed.id === tab.id ? focused : undefined) ?? tabBlocks(listed)[0];
+          const icon = first ? blockType(first.type).icon : undefined;
+          return (
+            <div key={listed.id} role='tab' tabIndex={0} aria-selected={selected} aria-label={name} data-tab-drop={listed.id} title={name}
+              className={cn(
+                'flex max-w-56 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-full border border-transparent pr-0.5 pl-1 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50',
+                !icon && 'pl-3',
+                selected && 'border-foreground/10 bg-muted text-foreground',
+              )}
+              onClick={show}
+              onDoubleClick={() => setRenaming(listed.id)}
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+                event.preventDefault();
+                show();
               }}>
-              <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
-            </Button>
-          </div>
-        );
-      })}
-      <Button size='icon' variant='ghost' aria-label='New tab' title='New tab' data-tab-drop='new' className='shrink-0 self-center' onClick={openTab}>
+              {icon && (
+                <span aria-hidden='true' className='grid size-5 shrink-0 place-items-center rounded-md border border-foreground/10 bg-background text-foreground/80'>
+                  <HugeiconsIcon icon={icon} strokeWidth={2} className='size-3' />
+                </span>
+              )}
+              {renaming === listed.id
+                ? (
+                  <NameInput label='Tab name' name={listed.title ?? ''} placeholder={tabName({ ...listed, title: undefined })}
+                    onKeep={(next) => update((current) => renameTab(current, listed.id, next))} onDone={() => setRenaming(undefined)} />
+                )
+                : <span className='truncate'>{name}</span>}
+              <Button size='icon-xs' variant='ghost' aria-label={`Close tab ${name}`} title='Close tab' className='shrink-0 rounded-full opacity-60 hover:opacity-100'
+                onClick={(event) => {
+                  event.stopPropagation();
+                  closeTab(listed);
+                }}>
+                <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+      <Button size='icon' variant='ghost' aria-label='New tab' title='New tab' data-tab-drop='new' className='shrink-0' onClick={openTab}>
         <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
       </Button>
-    </div>
+    </>
   );
   const swipe = useSwipe(stepBlock);
   const sessionName = directoryName(session.directory);
@@ -649,9 +658,9 @@ export function SessionView({ controller, session, members, leading, phone = fal
   return (
     <section aria-label={bot ? `Bot ${bot.name}` : `Session ${sessionName}`} data-slot='session-view' data-session={session.key} data-bot={bot?.id}
       className='flex min-h-0 min-w-0 flex-1 flex-col'>
-      <ThreadHeader leading={leading}>
+      {/* No line under it but on the iPhone: Blocks have edges of their own. */}
+      <ThreadHeader leading={leading} divided={phone}>
         {bot ? <BotHeading bot={bot} unread={model.unread} onOpen={onOpenBot} /> : tabRail}
-        {newBlock}
       </ThreadHeader>
       {bot?.startingThread && (
         <p role='status' data-slot='bot-starting' className='shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground'>
@@ -675,7 +684,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
               // One Block at a time: the tab's Blocks by name, and the one in front's menu and close.
               <div {...swipe}>
                 <BlockRail block={focused} among={tabBlocks(tab)} focusedId={focused.id} locked={locked?.id}
-                  actions={blockActions} title={title} mark={mark} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={false} />
+                  actions={blockActions} title={title} mark={mark} icon={icon} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={false} />
               </div>
             )}
             {focused
@@ -683,7 +692,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
               : empty}
           </>
         )
-        : <TabBlocks tab={tab} focusedId={focused?.id} zoomedId={zoomed?.id} actions={blockActions} title={title} mark={mark} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={shown.length > 1} empty={empty}
+        : <TabBlocks tab={tab} focusedId={focused?.id} zoomedId={zoomed?.id} actions={blockActions} title={title} mark={mark} icon={icon} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={shown.length > 1} empty={empty}
             locked={locked?.id} allows={locked ? (block, target) => botAllows(layout, locked.id, block, target) : undefined} />}
 
       <NewBlockDialog

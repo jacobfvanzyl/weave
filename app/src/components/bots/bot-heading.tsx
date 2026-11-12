@@ -4,13 +4,16 @@ import type { BotSummary } from '@/app/app-controller';
 import { BotStateDot } from '@/components/bots/bot-list';
 import { botRowState, botStateLabel } from '@/session/bots';
 
-/** A Bot's name and what it's doing, atop its Session in place of tabs: it leads to the Bot's page. */
+/**
+ * A Bot's name and what it's doing, atop its Session in place of tabs, a pill as tall as theirs and
+ * as wide as it needs: it leads to the Bot's page.
+ */
 export function BotHeading({ bot, unread, onOpen }: { bot: BotSummary; unread: ReadonlySet<string>; onOpen?(): void }) {
   const state = botRowState(bot, unread);
   const label = bot.startingThread ? 'starting a new thread' : state === 'idle' && !bot.thread ? 'no thread yet' : botStateLabel[state];
   return (
     <button type='button' data-slot='bot-heading' aria-label={`${bot.name}, ${label}: about this Bot`} title='About this Bot'
-      className='flex h-full min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left outline-none hover:bg-accent focus-visible:bg-accent'
+      className='flex h-9 max-w-full min-w-0 items-center gap-2 rounded-full bg-muted/50 pr-2.5 pl-1.5 text-left outline-none hover:bg-muted focus-visible:bg-muted'
       onClick={onOpen}>
       <span className='relative grid size-6 shrink-0 place-items-center rounded-full border border-border bg-muted text-foreground/80'>
         <HugeiconsIcon icon={BotIcon} strokeWidth={2} className='size-3.5' aria-hidden />

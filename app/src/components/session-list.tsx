@@ -1,7 +1,8 @@
-import { useRef, useState, type TouchEvent } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Add01Icon, Cancel01Icon, ComputerIcon, Folder01Icon, GitBranchIcon, LaptopIcon, Search01Icon } from '@hugeicons/core-free-icons';
 import type { AppController, DispatcherSummary, HostStatus, HostSummary, ProjectSummary, SessionSummary } from '@/app/app-controller';
+import { dragsWindow, platform } from '@/app/platform';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { BotList } from '@/components/bots/bot-list';
 import { RemoveWorktreeDialog } from '@/components/remove-worktree-dialog';
@@ -225,8 +226,10 @@ function usePullToRefresh(onRefresh?: () => Promise<void> | void) {
  * heading. Above them all, the Bots, from a Dispatcher that keeps them (WVE-178). While the Dispatcher can't be reached, a banner says so, and the Sessions of the Hosts
  * it last listed stay, greyed out unless their Host is still connected.
  */
-export function SessionList({ controller, sessions, selected, selectedBot, onOpen, onOpenBot, onNewBot, onOpenHosts, onNewSession, onEndSession }: {
+export function SessionList({ controller, sessions, selected, selectedBot, leading, onOpen, onOpenBot, onNewBot, onOpenHosts, onNewSession, onEndSession }: {
   controller: AppController;
+  /** First in its top rail: the toggle that hides it, beside a Session. */
+  leading?: ReactNode;
   sessions: SessionSummary[];
   /** The Session on screen, by key. */
   selected?: string;
@@ -243,6 +246,18 @@ export function SessionList({ controller, sessions, selected, selectedBot, onOpe
 }) {
   const { model, actions } = controller;
   const [query, setQuery] = useState('');
+  // The filter is closed until asked for, on every launch; closing it shows everything again.
+  const [filtering, setFiltering] = useState(false);
+  const filterId = useId();
+  const filterInput = useRef<HTMLInputElement>(null);
+  const filterButton = useRef<HTMLButtonElement>(null);
+  const showFilter = (show: boolean) => {
+    setFiltering(show);
+    if (!show) setQuery('');
+  };
+  useEffect(() => {
+    if (filtering) filterInput.current?.focus();
+  }, [filtering]);
   const pull = usePullToRefresh(actions.refresh);
   const view = sessionListView(sessions, model.hosts, model.projects, { query });
   const listed = view.projects.length > 0 || view.hosts.length > 0;
@@ -274,22 +289,38 @@ export function SessionList({ controller, sessions, selected, selectedBot, onOpe
 
   return (
     <div data-slot='session-list' className='flex h-full min-h-0 w-full flex-col bg-sidebar text-sidebar-foreground'>
-      {/* As tall as the Session's tab bar beside it, so their edges line up. */}
-      <SidebarHeader className='h-[calc(env(safe-area-inset-top)+var(--title-bar-height))] shrink-0 flex-row items-center gap-1 border-b border-sidebar-border pt-[env(safe-area-inset-top)] pr-1.5 pb-0 pl-3'>
+      {/* As tall as the Session's tab bar beside it, so their edges line up; on the Mac the
+          window's title row, after its traffic lights, whose empty parts drag the window. */}
+      <SidebarHeader {...dragsWindow()}
+        className={cn('h-[calc(env(safe-area-inset-top)+var(--title-bar-height))] shrink-0 flex-row items-center gap-1 pt-[env(safe-area-inset-top)] pr-1.5 pb-0 pl-2',
+          platform().titleBar === 'overlay' && 'pl-(--traffic-lights-width)')}>
         <h1 className='sr-only'>Sessions</h1>
+        {leading}
         {model.hosts.length > 0 && (
-          <div className='relative min-w-0 flex-1'>
-            <HugeiconsIcon icon={Search01Icon} strokeWidth={2}
-              className='pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-icon-muted' />
-            <SidebarInput type='search' aria-label='Filter Sessions' placeholder='Filter Sessions' className='pl-7'
-              value={query} onChange={(event) => setQuery(event.target.value)} />
-          </div>
+          <Button ref={filterButton} size='icon' variant='ghost' aria-label='Filter Sessions' title='Filter Sessions' aria-expanded={filtering} aria-controls={filterId}
+            data-sidebar='header-action' className='ml-auto shrink-0 aria-expanded:bg-sidebar-accent' onClick={() => showFilter(!filtering)}>
+            <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
+          </Button>
         )}
-        <Button size='icon' variant='ghost' aria-label='New Session' title='New Session' data-sidebar='header-action' className='ml-auto shrink-0'
+        <Button size='icon' variant='ghost' aria-label='New Session' title='New Session' data-sidebar='header-action' className={cn('shrink-0', model.hosts.length === 0 && 'ml-auto')}
           disabled={!model.hosts.some(({ status }) => status === 'connected')} onClick={() => onNewSession()}>
           <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
         </Button>
       </SidebarHeader>
+      {filtering && model.hosts.length > 0 && (
+        <div className='relative mx-2 mb-1.5 shrink-0'>
+          <HugeiconsIcon icon={Search01Icon} strokeWidth={2}
+            className='pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-icon-muted' />
+          <SidebarInput ref={filterInput} id={filterId} type='search' aria-label='Filter Sessions' placeholder='Filter Sessions' className='pl-7'
+            value={query} onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return;
+              event.preventDefault();
+              showFilter(false);
+              filterButton.current?.focus();
+            }} />
+        </div>
+      )}
 
       <SidebarContent {...pull.handlers}>
         {pull.state !== 'idle' && (
@@ -354,7 +385,7 @@ export function SessionList({ controller, sessions, selected, selectedBot, onOpe
         )}
       </SidebarContent>
 
-      <SidebarFooter className='shrink-0 flex-row items-center gap-1 border-t border-sidebar-border px-2 pt-1.5 pb-[calc(env(safe-area-inset-bottom)+0.375rem)]'>
+      <SidebarFooter className='shrink-0 flex-row items-center gap-1 px-2 pt-1.5 pb-[calc(env(safe-area-inset-bottom)+0.375rem)]'>
         <Button variant='ghost' size='lg' className='ml-auto' onClick={onOpenHosts}>
           <HugeiconsIcon icon={ComputerIcon} strokeWidth={2} />
           Hosts

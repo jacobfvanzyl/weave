@@ -29,6 +29,14 @@ use crate::core::Pairing;
 use crate::relay::Incoming;
 use crate::relay::Sink;
 
+/// Where the window's traffic lights sit over the page: x is the close button's left edge from the
+/// window's, and y sets how far down they are, though not as a top edge. Measured in the app on
+/// macOS 27.2, their middle came 16 points down at y = 18 and 34 at y = 36, so 2 above y: 27 puts
+/// it at 25, the middle of the page's top rails, 50 points tall (`--title-bar-height` in
+/// `src/styles.css`), level with their icons.
+#[cfg(target_os = "macos")]
+const TRAFFIC_LIGHTS: tauri::LogicalPosition<f64> = tauri::LogicalPosition::new(16.0, 27.0);
+
 /// What the app calls itself to the Host and the Dispatcher.
 fn client() -> ClientInfo {
     ClientInfo {
@@ -243,7 +251,21 @@ pub fn run() {
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(page.into()))
                 .title("Weave")
                 .inner_size(1280.0, 820.0)
-                .min_inner_size(720.0, 480.0)
+                .min_inner_size(720.0, 480.0);
+            // The page is the window's title row, as Rex's is: no title bar over it, the
+            // traffic lights at its top left, centred in its rails, which leave them room
+            // (`--traffic-lights-width` in `src/styles.css`) and drag the window. Not for a
+            // terminal check, whose page is one terminal.
+            #[cfg(target_os = "macos")]
+            let window = if checking {
+                window
+            } else {
+                window
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .hidden_title(true)
+                    .traffic_light_position(TRAFFIC_LIGHTS)
+            };
+            let window = window
                 .on_navigation(|url| {
                     if own_page(url) {
                         return true;

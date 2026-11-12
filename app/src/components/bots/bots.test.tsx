@@ -67,9 +67,10 @@ describe("a Bot's Session", () => {
     const block = await within(view).findByRole('group', { name: 'Block, Morning sweep of the issue tracker' });
     expect(within(block).queryByRole('button', { name: /^Close/ })).not.toBeInTheDocument();
     expect(within(block).queryByRole('button', { name: /^Float/ })).not.toBeInTheDocument();
-    expect(within(block).getByRole('button', { name: /^Split .* right/ })).toBeInTheDocument();
-    // New Block offers terminals, and no thread.
-    await user.click(within(view).getByRole('button', { name: /^New Block/ }));
+    // No New Block in its title row, as in any Session's: its Block's splits open it, and it
+    // offers terminals, and no thread.
+    expect(within(view).queryByRole('button', { name: /^New Block/ })).not.toBeInTheDocument();
+    await user.click(within(block).getByRole('button', { name: /^Split .* right/ }));
     const dialog = await screen.findByRole('dialog', { name: 'New Block' });
     expect(within(dialog).queryByRole('button', { name: 'New thread…' })).not.toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'New terminal' })).toBeInTheDocument();

@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AppController, AppModel } from '@/app/app-controller';
+import { saveLastSession } from '@/session/view';
 import { requestOpenThread } from '@/app/open-thread';
 import { MOCK_FAILS, type MockScenario, useMockController } from '@/app/use-mock-controller';
 import { AppShell } from './app-shell';
@@ -46,12 +48,47 @@ describe('the list of Sessions', () => {
     setIdiom('phone');
     const user = userEvent.setup();
     render(<MockApp />);
+    // The filter is closed until its button opens it, with the keyboard in it.
+    const toggle = screen.getByRole('button', { name: 'Filter Sessions' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('searchbox', { name: 'Filter Sessions' })).not.toBeInTheDocument();
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('searchbox', { name: 'Filter Sessions' })).toHaveFocus();
     await user.type(screen.getByRole('searchbox', { name: 'Filter Sessions' }), 'odin');
     expect(tile(/^odin/)).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'weave' })).not.toBeInTheDocument();
     await user.clear(screen.getByRole('searchbox', { name: 'Filter Sessions' }));
     await user.type(screen.getByRole('searchbox', { name: 'Filter Sessions' }), 'reconnect');
     expect(within(screen.getByRole('group', { name: 'weave' })).getAllByRole('button', { name: /mac · / })).toHaveLength(1);
+
+    // Closing it shows everything again: nothing stays filtered out of sight.
+    await user.click(toggle);
+    expect(screen.queryByRole('searchbox', { name: 'Filter Sessions' })).not.toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'weave' })).getAllByRole('button', { name: /mac · / })).toHaveLength(2);
+    // Escape in it closes it too, and opened again it starts empty.
+    await user.click(toggle);
+    await user.type(screen.getByRole('searchbox', { name: 'Filter Sessions' }), 'odin{Escape}');
+    expect(screen.queryByRole('searchbox', { name: 'Filter Sessions' })).not.toBeInTheDocument();
+    expect(toggle).toHaveFocus();
+    expect(screen.getByRole('group', { name: 'weave' })).toBeInTheDocument();
+    await user.click(toggle);
+    expect(screen.getByRole('searchbox', { name: 'Filter Sessions' })).toHaveValue('');
+  });
+
+  it('keeps the toggle for the list in the list’s own rail while it shows, and in the Session’s while it’s hidden', async () => {
+    setIdiom('pad');
+    const user = userEvent.setup();
+    render(<MockApp scenario='session' />);
+    const session = screen.getByRole('region', { name: 'Session weave' });
+    const hide = screen.getByRole('button', { name: 'Hide Sessions' });
+    expect(session).not.toContainElement(hide);
+    expect(within(session).queryByRole('button', { name: /Sessions/ })).not.toBeInTheDocument();
+    await user.click(hide);
+    expect(screen.queryByRole('button', { name: 'Hide Sessions' })).not.toBeInTheDocument();
+    await user.click(within(session).getByRole('button', { name: /^Show Sessions/ }));
+    expect(screen.getByRole('button', { name: 'Hide Sessions' })).toBeInTheDocument();
+    expect(within(session).queryByRole('button', { name: /Sessions/ })).not.toBeInTheDocument();
   });
 
   it('shows the pairing screen until the app is paired with the Dispatcher, then the list', async () => {
@@ -178,8 +215,10 @@ describe('a Session nobody arranged', () => {
     expect(screen.getByRole('group', { name: 'build' })).toBeInTheDocument();
 
     // Nothing else of the Session's was placed for the person: its other threads and its
-    // terminals have no Block, and its closed thread opens again from the same place.
-    await user.click(within(session).getByRole('button', { name: 'New Block, 7 not shown' }));
+    // terminals have no Block, and its closed thread opens again from the same place. New Block
+    // lists them, from the Block's split, as its rail has no New Block of its own.
+    expect(within(session).queryByRole('button', { name: /^New Block/ })).not.toBeInTheDocument();
+    await user.click(within(alpha).getByRole('button', { name: 'Split Bring Alpha back right' }));
     const dialog = await screen.findByRole('dialog', { name: 'New Block' });
     const hidden = within(dialog).getByRole('group', { name: 'Not shown' });
     const names = within(hidden).getAllByRole('button').map((button) => button.textContent);
@@ -230,8 +269,10 @@ describe('a Session someone arranged', () => {
     const tabs = within(session).getByRole('tablist', { name: 'Tabs' });
     expect(within(tabs).getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Update the Host protocol spec', 'Notes']);
     // No menu for the Session: each tab closes and renames itself, and a + after them adds one.
+    // New Block isn't in the rail: an empty tab has it.
     expect(within(session).queryByRole('button', { name: 'Tab actions' })).not.toBeInTheDocument();
-    expect(within(tabs).getByRole('button', { name: 'New tab' })).toBeInTheDocument();
+    expect(within(session).getByRole('button', { name: 'New tab' })).toBeInTheDocument();
+    expect(within(session).queryByRole('button', { name: /^New Block/ })).not.toBeInTheDocument();
     // A thread beside a column of a terminal and a thread, and a terminal floating over them.
     expect(within(session).getByRole('group', { name: 'Block, Update the Host protocol spec' })).toBeInTheDocument();
     const tests = within(session).getByRole('group', { name: 'Block, cargo test -p weave-tui' });
@@ -277,10 +318,10 @@ describe('a Session someone arranged', () => {
     expect(order()).toEqual(['Block, Update the Host protocol spec', 'Block, cargo test -p weave-tui', 'Block, Bring Alpha back']);
     const spec = within(session).getByRole('group', { name: 'Block, Update the Host protocol spec' });
     spec.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 600, right: 1000, bottom: 600, x: 0, y: 0, toJSON: () => ({}) });
-    const rail = within(session).getByRole('group', { name: 'Block, Bring Alpha back' }).querySelector('[data-slot="block-rail"]') as HTMLElement;
+    const handle = within(session).getByRole('group', { name: 'Block, Bring Alpha back' }).querySelector('[data-slot="block-title"]') as HTMLElement;
     const elementFromPoint = document.elementFromPoint;
     document.elementFromPoint = () => spec;
-    fireEvent.pointerDown(rail, { button: 0, clientX: 900, clientY: 500 });
+    fireEvent.pointerDown(handle, { button: 0, clientX: 900, clientY: 500 });
     fireEvent.pointerMove(window, { clientX: 500, clientY: 300 });
     fireEvent.pointerUp(window, { clientX: 500, clientY: 300 });
     document.elementFromPoint = elementFromPoint;
@@ -351,11 +392,11 @@ describe('a Session someone arranged', () => {
     await user.click(within(session).getByRole('button', { name: 'Unzoom Nightly dependency check' }));
     expect(within(session).getAllByRole('group', { name: /^Block, / })).toHaveLength(4);
 
-    // Its rail is its handle: dragged onto the + after the tabs, it moves to a tab of its own.
-    const rail = within(session).getByRole('group', { name: 'Block, Nightly dependency check' }).querySelector('[data-slot="block-rail"]') as HTMLElement;
+    // Its name's pill is its handle: dragged onto the + after the tabs, it moves to a tab of its own.
+    const handle = within(session).getByRole('group', { name: 'Block, Nightly dependency check' }).querySelector('[data-slot="block-title"]') as HTMLElement;
     const elementFromPoint = document.elementFromPoint;
     document.elementFromPoint = () => within(session).getByRole('button', { name: 'New tab' });
-    fireEvent.pointerDown(rail, { button: 0, clientX: 300, clientY: 60 });
+    fireEvent.pointerDown(handle, { button: 0, clientX: 300, clientY: 60 });
     fireEvent.pointerMove(window, { clientX: 200, clientY: 20 });
     fireEvent.pointerUp(window, { clientX: 200, clientY: 20 });
     document.elementFromPoint = elementFromPoint;
@@ -372,7 +413,7 @@ describe('a Session someone arranged', () => {
     await user.click(await within(session).findByRole('button', { name: 'Close Steer handling in the TUI' }));
     await waitFor(() => expect(within(session).queryByRole('group', { name: 'Floating, Steer handling in the TUI' })).not.toBeInTheDocument());
     expect(within(session).queryByRole('group', { name: 'Minimized Blocks' })).not.toBeInTheDocument();
-    await user.click(within(session).getByRole('button', { name: /^New Block/ }));
+    await user.click(within(session).getByRole('button', { name: 'Split Bring Alpha back right' }));
     const dialog = await screen.findByRole('dialog', { name: 'New Block' });
     expect(within(within(dialog).getByRole('group', { name: 'Closed threads' })).getByRole('button', { name: /Steer handling in the TUI/ })).toBeInTheDocument();
     await user.keyboard('{Escape}');
@@ -389,7 +430,7 @@ describe('a Session someone arranged', () => {
     const ending = await screen.findByRole('alertdialog', { name: 'End cargo test -p weave-tui?' });
     await user.click(within(ending).getByRole('button', { name: 'End terminal' }));
     await waitFor(() => expect(within(session).queryByRole('group', { name: 'Block, cargo test -p weave-tui' })).not.toBeInTheDocument());
-    await user.click(within(session).getByRole('button', { name: /^New Block/ }));
+    await user.click(within(session).getByRole('button', { name: 'Split Bring Alpha back right' }));
     expect(within(await screen.findByRole('dialog', { name: 'New Block' })).queryByRole('button', { name: /^cargo test/ })).not.toBeInTheDocument();
   });
 
@@ -419,6 +460,57 @@ describe('a Session someone arranged', () => {
     await user.keyboard('{Escape}');
     await user.dblClick(title(within(session).getByRole('group', { name: 'Block, cargo test -p weave-tui' })));
     expect(within(session).queryByRole('textbox', { name: 'Block name' })).not.toBeInTheDocument();
+  });
+
+  it('keeps a Block’s controls in a row atop it, empty until the pointer is over it, where the pointer hovers', () => {
+    const session = open();
+    const alpha = within(session).getByRole('group', { name: 'Block, Bring Alpha back' });
+    const rail = alpha.querySelector('[data-slot="block-rail"]') as HTMLElement;
+    // Two pills in a row of their own, seen while the pointer is over the row.
+    expect(rail).toHaveClass('h-10', 'opacity-0', 'hover:opacity-100');
+    expect(rail).toHaveClass('cursor-grab');
+    expect(within(alpha).queryByRole('button', { name: 'Bring Alpha back controls' })).not.toBeInTheDocument();
+  });
+
+  describe('on a touch screen', () => {
+    const coarse = (query: string) => ({
+      matches: false, media: query, onchange: null,
+      addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+    }) as MediaQueryList;
+    let matchMedia: typeof window.matchMedia;
+    beforeEach(() => {
+      matchMedia = window.matchMedia;
+      window.matchMedia = (query: string) => query.includes('hover') ? coarse(query) : matchMedia.call(window, query);
+    });
+    afterEach(() => { window.matchMedia = matchMedia; });
+
+    it('shows a Block’s controls once its strip is tapped, and puts them away again', async () => {
+      const user = userEvent.setup();
+      const session = open();
+      const alpha = within(session).getByRole('group', { name: 'Block, Bring Alpha back' });
+      const strip = within(alpha).getByRole('button', { name: 'Bring Alpha back controls' });
+      expect(strip).toHaveAttribute('aria-expanded', 'false');
+      expect(within(alpha).queryByRole('button', { name: 'Close Bring Alpha back' })).not.toBeInTheDocument();
+      expect(alpha.querySelector('[data-slot="block-title"]')).not.toBeInTheDocument();
+
+      // Tapped, its row has the name's pill and the icons'.
+      await user.click(strip);
+      expect(strip).toHaveAttribute('aria-expanded', 'true');
+      expect(within(alpha).getByRole('button', { name: 'Close Bring Alpha back' })).toBeInTheDocument();
+      expect(alpha.querySelector('[data-slot="block-title"]')).toHaveTextContent('Bring Alpha back');
+      // A press in the Block leaves them; one outside it puts them away.
+      fireEvent.pointerDown(within(alpha).getByRole('textbox', { name: 'Message agent' }));
+      expect(within(alpha).getByRole('button', { name: 'Close Bring Alpha back' })).toBeInTheDocument();
+      fireEvent.pointerDown(within(session).getByRole('group', { name: 'Block, Update the Host protocol spec' }));
+      await waitFor(() => expect(within(alpha).queryByRole('button', { name: 'Close Bring Alpha back' })).not.toBeInTheDocument());
+      expect(strip).toHaveAttribute('aria-expanded', 'false');
+
+      // Tapping the strip again puts them away too.
+      await user.click(strip);
+      expect(within(alpha).getByRole('button', { name: 'Split Bring Alpha back right' })).toBeInTheDocument();
+      await user.click(strip);
+      expect(within(alpha).queryByRole('button', { name: 'Split Bring Alpha back right' })).not.toBeInTheDocument();
+    });
   });
 
   it('drags the edge between two docked Blocks to share their space out again', () => {
@@ -454,9 +546,14 @@ describe('a Session someone arranged', () => {
     await user.type(within(tabs).getByRole('textbox', { name: 'Tab name' }), 'Scratch{Escape}');
     expect(within(tabs).getByRole('tab', { name: 'Work' })).toBeInTheDocument();
 
-    await user.click(within(tabs).getByRole('button', { name: 'New tab' }));
+    await user.click(within(session).getByRole('button', { name: 'New tab' }));
     expect(await within(tabs).findByRole('tab', { name: 'Empty tab' })).toHaveAttribute('aria-selected', 'true');
     expect(within(session).getByText('Nothing in this tab')).toBeInTheDocument();
+    // New Block shows in the middle of an empty tab, and only there.
+    expect(within(session).getAllByRole('button', { name: /New Block/ })).toHaveLength(1);
+    await user.click(within(session).getByRole('button', { name: 'New Block' }));
+    expect(await screen.findByRole('dialog', { name: 'New Block' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
     expect(within(tabs).getAllByRole('tab').map((tab) => tab.getAttribute('aria-label'))).toEqual(['Work', 'Empty tab', 'Notes']);
     // An empty tab has nothing to lose, and closes without asking.
     await user.click(within(tabs).getByRole('button', { name: 'Close tab Empty tab' }));
@@ -614,5 +711,17 @@ describe('the composer in a running thread', () => {
     await user.type(screen.getByRole('textbox', { name: 'Message agent' }), 'And the docs');
     await user.click(screen.getByRole('button', { name: 'Queue message' }));
     expect(within(screen.getByRole('list', { name: 'Queued messages' })).getByText('And the docs')).toBeInTheDocument();
+  });
+});
+
+describe('the Session this device last showed', () => {
+  it('is asked for again once the controller can show it, as at launch, before the store is there', () => {
+    saveLastSession('mac//work/weave');
+    const model: AppModel = { starting: true, hosts: [], threads: [], agents: {}, unread: new Set() };
+    const idle = {} as AppController['actions'];
+    const { rerender } = render(<AppShell controller={{ model, actions: idle }} />);
+    const selectSession = vi.fn();
+    rerender(<AppShell controller={{ model, actions: { ...idle, selectSession } }} />);
+    expect(selectSession).toHaveBeenCalledWith('mac//work/weave');
   });
 });

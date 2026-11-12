@@ -101,14 +101,16 @@
   --zed-error-background: #f38ba81f;
   --zed-success: #a6e3a1;
   --zed-success-background: #a6e3a11f;
-  --zed-sidebar-background: color-mix(
-    in srgb,
-    var(--zed-rail-background) 75%,
-    var(--zed-panel-background) 25%
-  );
+  /* The app's canvas is Catppuccin Mocha's Crust (Zed's rail background): the list, the title
+     row and the Session behind its Blocks. A thread's Block is Mantle (Zed's panel background),
+     its composer Base (Zed's editor background), and a terminal's Block is Base. */
+  --app-background: var(--zed-rail-background);
+  --block-background: var(--zed-editor-background);
+  /* The edge of the Block with the keyboard: Catppuccin Mocha's blue, at half strength. */
+  --block-focus: #89b4fa80;
 
   /* shadcn semantic roles mapped onto the corresponding Zed roles. */
-  --background: var(--zed-editor-background);
+  --background: var(--app-background);
   --foreground: var(--zed-text);
   --card: var(--zed-panel-background);
   --card-foreground: var(--foreground);
@@ -132,7 +134,7 @@
   --chat-background: var(--zed-panel-background);
   /* Tool calls and runs of work: cards a little lighter than the chat, as the TUI shades their rows. */
   --work-background: color-mix(in srgb, var(--muted) 35%, var(--chat-background));
-  --composer-background: var(--zed-editor-background);
+  --composer-background: var(--block-background);
   --ring: var(--zed-focus);
   --placeholder: var(--zed-text-placeholder);
   --disabled: var(--zed-text-disabled);
@@ -144,17 +146,21 @@
   --success: var(--zed-success);
   --success-background: var(--zed-success-background);
   --status-active: var(--zed-success);
-  --title-bar: var(--zed-rail-background);
+  --title-bar: var(--app-background);
   /* The bars atop the thread list and the thread, below the safe area: one height, so they line up. */
   --title-bar-height: 3.125rem;
-  --status-bar: var(--zed-rail-background);
+  /* On the Mac the window's traffic lights sit over the left of that row (`src-tauri/src/lib.rs`,
+     TRAFFIC_LIGHTS), from 16px to about 74px, 9px apart: the leftmost rail starts after them, so
+     that the list's toggle, whose icon is 6px into its button, comes 9px after the last. */
+  --traffic-lights-width: 4.8125rem;
+  --status-bar: var(--app-background);
   --chart-1: #cba6f7;
   --chart-2: #b4befe;
   --chart-3: #74c7ec;
   --chart-4: #a6e3a1;
   --chart-5: #f9e2af;
   --radius: 0.375rem;
-  --sidebar: var(--zed-sidebar-background);
+  --sidebar: var(--app-background);
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--primary-foreground);
@@ -189,6 +195,8 @@
   --color-disabled: var(--disabled);
   --color-placeholder: var(--placeholder);
   --color-chat-background: var(--chat-background);
+  --color-block-background: var(--block-background);
+  --color-block-focus: var(--block-focus);
   --color-work-background: var(--work-background);
   --color-composer-background: var(--composer-background);
   --color-input-background: var(--input-background);

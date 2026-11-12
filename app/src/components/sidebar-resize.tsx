@@ -42,7 +42,7 @@ export function ResizableSidebarProvider({ style, children, ...props }: Componen
 }
 
 /**
- * The sidebar's right edge, with a grip: dragging it, or the arrow keys, make the list wider or
+ * The sidebar's right edge: dragging it, or the arrow keys, make the list wider or
  * narrower, and a double-click puts the initial width back. Not in the sheet a narrow window shows
  * the sidebar in.
  */
@@ -57,6 +57,7 @@ export function SidebarResizeHandle() {
       onResizing={setResizing}
       // The sidebar starts at the window's left edge, so its width is where the pointer is.
       onPointer={resize} onResize={resize}
-      className='group-data-[collapsible=offcanvas]:hidden' />
+      // No grip at rest: the edge shows a line under the pointer and while it's dragged.
+      className='group-data-[collapsible=offcanvas]:hidden [&>span]:hidden' />
   );
 }

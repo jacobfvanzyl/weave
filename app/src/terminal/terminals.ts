@@ -4,7 +4,7 @@ import type { TerminalSummary } from '@/app/app-controller';
 // for itself: their font size. Where a terminal shows is its Session's layout (ADR 0031): the
 // layout each device kept for a thread's terminals went with WVE-203.
 
-export const FONT_SIZE = { initial: 13, min: 9, max: 24, step: 1 } as const;
+export const FONT_SIZE = { initial: 16, min: 9, max: 24, step: 1 } as const;
 
 const STORAGE_KEY = 'weave.terminalFontSize';
 

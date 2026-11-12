@@ -40,6 +40,12 @@ export type Platform = {
   /** How many windows the app may have: one on every device, until the Mac's shell takes more. */
   windows: 'one';
   /**
+   * Whether the page is the window's title row: the Mac's window has no title bar of its own
+   * (`overlay`), so its traffic lights sit over the page's top left, the leftmost rail there leaves
+   * them room, and the rails' empty parts drag the window. Elsewhere the page keeps to the safe area.
+   */
+  titleBar: 'overlay' | 'none';
+  /**
    * Puts text on the device's clipboard without the person's tap or key, as an agent's call or
    * a terminal's program (OSC 52) needs: the native clipboard, or on the Mac its core's.
    */
@@ -64,6 +70,7 @@ const mac: Platform = {
   keys: 'menu',
   localHost: true,
   windows: 'one',
+  titleBar: 'overlay',
   notify: macNotify,
   writeClipboard: macClipboard,
   store: () => ({
@@ -83,6 +90,7 @@ const ios: Platform = {
   keys: 'page',
   localHost: false,
   windows: 'one',
+  titleBar: 'none',
   writeClipboard: nativeClipboard,
   store: () => ({
     storage: preferencesStorage,
@@ -111,6 +119,7 @@ const web: Platform = {
   keys: 'page',
   localHost: false,
   windows: 'one',
+  titleBar: 'none',
   writeClipboard: nativeClipboard,
   store: () => ({
     storage: preferencesStorage,
@@ -129,3 +138,10 @@ const web: Platform = {
 
 /** The shell the page runs in. */
 export const platform = (): Platform => onMac() ? mac : Capacitor.isNativePlatform() ? ios : web;
+
+/**
+ * What makes a rail in the window's title row drag the window on the Mac: Tauri's `drag.js` moves
+ * it from a press anywhere in the rail but on a button, tab, input or link, and a double click
+ * zooms it. Nothing elsewhere.
+ */
+export const dragsWindow = (): { 'data-tauri-drag-region'?: 'deep' } => platform().titleBar === 'overlay' ? { 'data-tauri-drag-region': 'deep' } : {};

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEve
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ArrowLeft01Icon, Cancel01Icon, Delete02Icon, Edit02Icon, InformationCircleIcon, MoreHorizontalIcon, SparklesIcon, StopIcon, Tv01Icon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
 import type { AgentUpdateNotice, AppController, DispatcherSummary, HostSummary, OpenThread, ThreadSummary } from '@/app/app-controller';
+import { dragsWindow } from '@/app/platform';
 import { usePhoneLayout } from '@/app/use-phone-layout';
 import { useUpdateNotice } from '@/app/use-update-notice';
 import { allSubagents, findSubagent, threadLabel, waitsForAnswer } from '@/chat/acp-transcript';
@@ -16,14 +17,22 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import { SurfaceScrubber } from '@/surface/surface-scrubber';
 import type { DeviceSurface } from '@/surface/use-surface';
 
 /** The bar above a thread, and above the empty state when none is open. */
-export function ThreadHeader({ leading, children }: { leading?: ReactNode; children?: ReactNode }) {
+export function ThreadHeader({ leading, divided = true, children }: {
+  leading?: ReactNode;
+  /** A line under it; none above Blocks, which have edges of their own. */
+  divided?: boolean;
+  children?: ReactNode;
+}) {
+  // On the Mac it's the window's title row: its empty parts drag the window.
   return (
-    <header data-slot='thread-header'
-      className='flex h-[calc(env(safe-area-inset-top)+var(--title-bar-height))] shrink-0 items-center gap-2 border-b border-border bg-title-bar pt-[env(safe-area-inset-top)] pr-2 pl-[max(env(safe-area-inset-left),0.5rem)]'>
+    <header data-slot='thread-header' {...dragsWindow()}
+      className={cn('flex h-[calc(env(safe-area-inset-top)+var(--title-bar-height))] shrink-0 items-center gap-2 bg-title-bar pt-[env(safe-area-inset-top)] pr-2 pl-[max(env(safe-area-inset-left),0.5rem)]',
+        divided && 'border-b border-border')}>
       {leading}
       {children}
     </header>

@@ -1,7 +1,8 @@
 // A tab's Blocks on the Mac and the iPad (WVE-203): those docked, in rows and columns with edges
-// to drag, each under a rail with its name and the same icons for any Block; those floating over
-// them; and, at the bottom right, the names of the floating ones put away. A docked Block is
-// dragged by its rail to another's edge or middle, or to a tab.
+// to drag, each with a rail of its name and the same icons for any Block, as pills in a row atop
+// it that show under the pointer or when tapped; those floating over them; and, at the bottom right,
+// the names of the floating ones put away. A docked Block is dragged by its rail to
+// another's edge or middle, or to a tab.
 import { Fragment, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import {
@@ -16,11 +17,13 @@ import {
   PictureInPictureExitIcon,
   PictureInPictureOnIcon,
 } from '@hugeicons/core-free-icons';
+import { platform } from '@/app/platform';
 import { NameInput } from '@/components/session/name-input';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import type { SessionBlock, SessionFloating, SessionFrame, SessionNode, SessionTab } from '@/host/protocol';
 import { cn } from '@/lib/utils';
+import { THREAD_BLOCK } from '@/session/blocks';
 import { type Path, type Side, type Split, type Target, fitFrame, newTab, shares, tabBlocks } from '@/session/layout';
 
 /** What a Block's rail and its edges do to the layout and the view, by Block. */
@@ -47,6 +50,8 @@ export type TabProps = {
   actions: BlockActions;
   title(block: SessionBlock): string;
   mark(block: SessionBlock): ReactNode;
+  /** Its type's icon, before its name in its rail. */
+  icon?(block: SessionBlock): IconSvgElement | undefined;
   body(block: SessionBlock): ReactNode;
   /** What a Block's type offers in its rail's menu. */
   menu(block: SessionBlock): BlockAction[];
@@ -66,10 +71,21 @@ export type TabProps = {
 };
 
 /**
- * The edge of the Block with the keyboard, where its tab shows others to tell it from: drawn over
- * the Block, so nothing moves as the keyboard does.
+ * The edge of the Block with the keyboard, where its tab shows others to tell it from: its border
+ * in Mocha's blue at half strength (`--block-focus`), and a ring just outside it, so nothing moves as the keyboard does.
  */
-const FOCUS_EDGE = "after:pointer-events-none after:absolute after:inset-0 after:z-50 after:border-2 after:border-primary after:content-['']";
+const FOCUS_EDGE = 'border-block-focus ring-1 ring-block-focus';
+
+/**
+ * A docked Block: a rounded card with a thin edge, 4px in from the tab's sides and bottom, flush
+ * under the Session's rail, and 8px from the next (`Divider`). Its shadow is the background, as wide as that inset: it fills the corners
+ * outside its rounding, so a terminal drawn natively beneath the page (the iPad's) shows no square
+ * corners there, where the page above it is otherwise clear.
+ */
+const BLOCK_CARD = 'overflow-hidden rounded-xl border border-border shadow-[0_0_0_4px_var(--background)]';
+
+/** A Block's surface, its rail's row included: a thread's is its chat's, any other's a terminal's. */
+const surface = (block: SessionBlock) => block.type === THREAD_BLOCK ? 'bg-chat-background' : 'bg-block-background';
 
 /** Something a Block's type offers of its own. */
 export type BlockAction = { title: string; destructive?: boolean; run(): void };
@@ -79,10 +95,19 @@ type IconSvgElement = Parameters<typeof HugeiconsIcon>[0]['icon'];
 
 /** The least share of a split a Block keeps when its edge is dragged. */
 const MIN_SHARE = 0.1;
-/** How far a Block's rail moves under the pointer before the Block is being dragged, in pixels. */
+/** How far a Block's handle moves under the pointer before the Block is being dragged, in pixels. */
 const DRAG_START = 8;
 /** How much of a Block, in from each edge, docks what's dropped there beside it; its middle swaps the two. */
 const EDGE = 0.25;
+
+/** Has an element keep a pointer until it lifts, where the browser can. */
+function keepPointer(element: Element, pointerId: number) {
+  try {
+    element.setPointerCapture?.(pointerId);
+  } catch {
+    // The pointer has gone already.
+  }
+}
 
 type Drop = { target: Target; rect: { left: number; top: number; width: number; height: number } };
 
@@ -124,11 +149,20 @@ function useBlockDrag(move: BlockActions['move'], allows?: TabProps['allows']) {
   const [drag, setDrag] = useState<{ block: SessionBlock; title: string; x: number; y: number; drop?: Drop }>();
   const start = (event: ReactPointerEvent, block: SessionBlock, title: string) => {
     if (event.button !== 0) return;
+    // The press selects nothing, and once it's a drag the rail keeps the pointer: what it passes
+    // over, a thread's text or a terminal, hears nothing of it.
+    event.preventDefault();
+    const handle = event.currentTarget;
     const from = { x: event.clientX, y: event.clientY };
     let moving = false;
     let latest: Drop | undefined;
     const moved = (next: PointerEvent) => {
       if (!moving && Math.hypot(next.clientX - from.x, next.clientY - from.y) < DRAG_START) return;
+      if (!moving) {
+        keepPointer(handle, next.pointerId);
+        document.body.style.userSelect = 'none';
+        document.body.style.setProperty('-webkit-user-select', 'none');
+      }
       moving = true;
       latest = dropAt(next.clientX, next.clientY, block.id);
       // A target refused, as one before a Bot's Thread Block, shows nothing and takes nothing.
@@ -139,6 +173,8 @@ function useBlockDrag(move: BlockActions['move'], allows?: TabProps['allows']) {
       window.removeEventListener('pointermove', moved);
       window.removeEventListener('pointerup', done);
       window.removeEventListener('pointercancel', done);
+      document.body.style.userSelect = '';
+      document.body.style.removeProperty('-webkit-user-select');
       setDrag(undefined);
       if (moving && latest && next.type === 'pointerup') move(block, latest.target);
     };
@@ -164,22 +200,61 @@ function useBlockDrag(move: BlockActions['move'], allows?: TabProps['allows']) {
 type Drag = ReturnType<typeof useBlockDrag>;
 
 /** One of a rail's icons: named with its Block for a screen reader, and by what it does under the pointer. */
-function RailButton({ label, hint, icon, pressed, onClick }: { label: string; hint: string; icon: IconSvgElement; pressed?: boolean; onClick(): void }) {
+function RailButton({ label, hint, icon, pressed, className, onClick }: {
+  label: string;
+  hint: string;
+  icon: IconSvgElement;
+  pressed?: boolean;
+  className?: string;
+  onClick(): void;
+}) {
   return (
-    <Button size='icon-sm' variant='ghost' aria-label={label} title={hint} aria-pressed={pressed} onClick={onClick}>
+    <Button size='icon-sm' variant='ghost' aria-label={label} title={hint} aria-pressed={pressed} className={className} onClick={onClick}>
       <HugeiconsIcon icon={icon} strokeWidth={2} />
     </Button>
   );
 }
 
+/** Where the pointer hovers, as the Mac's does, and a touch screen's doesn't. */
+const HOVERS = '(hover: hover) and (pointer: fine)';
+
 /**
- * A Block's rail, atop it: its name, then the same icons whatever the Block is. Docked, it has
- * split right, split down, float, zoom when its tab has another Block to zoom over, a menu of
- * what its type offers, and close; floating, it has dock and minimize in place of the splits.
- * The whole rail is the Block's handle: dragging it moves a docked Block, and `onHandle` takes
- * the drags for a floating one, to move it. A name clicked twice is typed over in place, where
- * the Block's type lets it be renamed. With `among`, as on the iPhone, which shows one Block at a
- * time, it names each of the tab's Blocks to pick between, and has only the menu and close.
+ * Whether a Block's controls wait for the pointer over it, as on the Mac, rather than for a tap:
+ * not on a touch screen, nor where terminals are drawn natively beneath the page (the iPad's),
+ * which take the touches over a Block's body. Where there's no `matchMedia` to ask, they wait for
+ * the pointer.
+ */
+function useHoverControls() {
+  const query = () => (platform().terminals === 'native' || typeof window.matchMedia !== 'function' ? undefined : window.matchMedia(HOVERS));
+  const [hovers, setHovers] = useState(() => platform().terminals !== 'native' && (query()?.matches ?? true));
+  useEffect(() => {
+    const list = query();
+    if (!list) return;
+    const update = () => setHovers(list.matches);
+    update();
+    list.addEventListener?.('change', update);
+    return () => list.removeEventListener?.('change', update);
+  }, []);
+  return hovers;
+}
+
+/** A Block's title and its icons, each a pill over or atop it, as Rex's are. */
+const PILL = 'pointer-events-auto flex h-7 items-center rounded-full border border-foreground/10 bg-muted/60 shadow-sm backdrop-blur-md';
+
+/**
+ * A Block's rail: its name and, apart from it, the same icons whatever the Block is. Docked, it has
+ * split right, split down, float, zoom when its tab has another Block to zoom over, a menu of what
+ * its type offers, and close; floating, it has dock and minimize in place of the splits. They're
+ * two pills, the name's at the left and the icons' at the right: where the pointer hovers, as on
+ * the Mac, they keep a row atop the Block, empty until the pointer is over that row, one of them
+ * has the keyboard, the name is typed over or the menu is open; on a touch
+ * screen, a slim strip atop the Block shows them in a row of its own when tapped, pushing the body
+ * down (a native terminal under it follows), until it's tapped again or something outside the
+ * Block is pressed. The rail is the Block's handle wherever it isn't a button (on a touch screen, its name's pill), but for a locked one: dragging it moves
+ * a docked Block, and `onHandle` takes the drags for a floating one, to move it. A name clicked
+ * twice is typed over in place, where the Block's type lets it be renamed. With `among`, as on the
+ * iPhone, which shows one Block at a time, the rail is a row atop it that names each of the tab's
+ * Blocks to pick between, and has only the menu and close.
  */
 export function BlockRail({ block, among, floating = false, drag, onHandle, ...props }: TabProps & {
   block: SessionBlock;
@@ -197,6 +272,26 @@ export function BlockRail({ block, among, floating = false, drag, onHandle, ...p
   const handle = !pinned && Boolean(onHandle ?? drag);
   const arrange = !among;
   const [renaming, setRenaming] = useState<string>();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const hovers = useHoverControls();
+  // On a touch screen: whether the strip has been tapped to show the controls.
+  const [expanded, setExpanded] = useState(false);
+  const rail = useRef<HTMLDivElement>(null);
+  // The controls stay while the name is typed over or the menu is open.
+  const keep = menuOpen || Boolean(renaming);
+  const keepOpen = useRef(keep);
+  keepOpen.current = keep;
+  useEffect(() => {
+    if (!expanded) return;
+    // A press outside the Block puts the controls away, but not one in the menu they opened.
+    const press = (event: PointerEvent) => {
+      const card = rail.current?.parentElement;
+      if (keepOpen.current || !card || (event.target instanceof Node && card.contains(event.target))) return;
+      setExpanded(false);
+    };
+    document.addEventListener('pointerdown', press, true);
+    return () => document.removeEventListener('pointerdown', press, true);
+  }, [expanded]);
   /** A Block's name: typed over while it's being renamed, else what a double click renames. */
   const named = (shown: SessionBlock) => {
     const label = title(shown);
@@ -206,71 +301,119 @@ export function BlockRail({ block, among, floating = false, drag, onHandle, ...p
     }
     return <span className='truncate' onDoubleClick={() => { if (rename) setRenaming(shown.id); }}>{label}</span>;
   };
-  return (
-    <div data-slot='block-rail' className={cn('flex h-9 shrink-0 items-stretch gap-px border-b border-border bg-title-bar pr-1 text-xs', handle && 'cursor-grab touch-none')}
-      onPointerDown={(event) => {
-        if (renaming || pinned) return;
-        if (onHandle) onHandle(event);
-        else drag?.start(event, block, name);
-      }}>
-      {among
-        ? (
-          <div role='tablist' aria-label='Blocks in this tab' className='flex min-w-0 flex-1 items-stretch overflow-x-auto'>
-            {among.map((listed) => {
-              const selected = listed.id === block.id;
-              return (
-                <div key={listed.id} role='tab' tabIndex={0} aria-selected={selected} title={title(listed)}
-                  className={cn('flex max-w-56 min-w-0 shrink-0 cursor-default items-center gap-1.5 px-3 text-muted-foreground outline-none focus-visible:bg-accent', selected && 'text-foreground')}
-                  onClick={() => actions.focus(listed.id)}
-                  onKeyDown={(event) => {
-                    if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
-                    event.preventDefault();
-                    actions.focus(listed.id);
-                  }}>
-                  {mark(listed)}
-                  {named(listed)}
-                </div>
-              );
-            })}
-          </div>
-        )
-        : (
-          <div data-slot='block-title' title={name} className='flex min-w-0 flex-1 items-center gap-1.5 px-3 text-foreground'>
-            {mark(block)}
-            {named(block)}
-          </div>
-        )}
-      <div className='flex shrink-0 items-center gap-0.5' onPointerDown={(event) => event.stopPropagation()}>
-        {arrange && !floating && <RailButton label={`Split ${name} right`} hint='Split Right' icon={LayoutTwoColumnIcon} onClick={() => actions.split(block.id, 'right')} />}
-        {arrange && !floating && <RailButton label={`Split ${name} down`} hint='Split Down' icon={LayoutTwoRowIcon} onClick={() => actions.split(block.id, 'down')} />}
-        {arrange && !pinned && (
-          <RailButton label={floating ? `Dock ${name}` : `Float ${name}`} hint={floating ? 'Dock' : 'Float'}
-            icon={floating ? PictureInPictureExitIcon : PictureInPictureOnIcon} onClick={() => actions.float(block)} />
-        )}
-        {arrange && floating && !pinned && <RailButton label={`Minimize ${name}`} hint='Minimize' icon={MinusSignIcon} onClick={() => actions.minimize(block, true)} />}
-        {arrange && (props.inTab > 1 || zoomed) && (
-          <RailButton label={zoomed ? `Unzoom ${name}` : `Zoom ${name}`} hint={zoomed ? 'Unzoom' : 'Zoom'}
-            icon={zoomed ? ArrowShrink01Icon : ArrowExpand01Icon} pressed={zoomed} onClick={() => actions.zoom(block.id)} />
-        )}
-        <DropdownMenu>
-          <DropdownMenuTrigger disabled={own.length === 0} render={<Button size='icon-sm' variant='ghost' aria-label={`${name} actions`} title='More' />}>
-            <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align='end'>
-            <DropdownMenuGroup>
-              {own.map((item) => (
-                <DropdownMenuItem key={item.title} variant={item.destructive ? 'destructive' : undefined} onClick={item.run}>{item.title}</DropdownMenuItem>
-              ))}
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        {!pinned && <RailButton label={`Close ${name}`} hint='Close' icon={Cancel01Icon} onClick={() => actions.close(block)} />}
+  const icon = among ? undefined : 'rounded-full';
+  const buttons = (
+    <>
+      {arrange && !floating && <RailButton label={`Split ${name} right`} hint='Split Right' icon={LayoutTwoColumnIcon} className={icon} onClick={() => actions.split(block.id, 'right')} />}
+      {arrange && !floating && <RailButton label={`Split ${name} down`} hint='Split Down' icon={LayoutTwoRowIcon} className={icon} onClick={() => actions.split(block.id, 'down')} />}
+      {arrange && !pinned && (
+        <RailButton label={floating ? `Dock ${name}` : `Float ${name}`} hint={floating ? 'Dock' : 'Float'}
+          icon={floating ? PictureInPictureExitIcon : PictureInPictureOnIcon} className={icon} onClick={() => actions.float(block)} />
+      )}
+      {arrange && floating && !pinned && <RailButton label={`Minimize ${name}`} hint='Minimize' icon={MinusSignIcon} className={icon} onClick={() => actions.minimize(block, true)} />}
+      {arrange && (props.inTab > 1 || zoomed) && (
+        <RailButton label={zoomed ? `Unzoom ${name}` : `Zoom ${name}`} hint={zoomed ? 'Unzoom' : 'Zoom'}
+          icon={zoomed ? ArrowShrink01Icon : ArrowExpand01Icon} pressed={zoomed} className={icon} onClick={() => actions.zoom(block.id)} />
+      )}
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+        <DropdownMenuTrigger disabled={own.length === 0} render={<Button size='icon-sm' variant='ghost' aria-label={`${name} actions`} title='More' className={icon} />}>
+          <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align='end'>
+          <DropdownMenuGroup>
+            {own.map((item) => (
+              <DropdownMenuItem key={item.title} variant={item.destructive ? 'destructive' : undefined} onClick={item.run}>{item.title}</DropdownMenuItem>
+            ))}
+          </DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {!pinned && <RailButton label={`Close ${name}`} hint='Close' icon={Cancel01Icon} className={icon} onClick={() => actions.close(block)} />}
+    </>
+  );
+
+  if (among) {
+    return (
+      <div data-slot='block-rail' className={cn('flex h-9 shrink-0 items-stretch gap-px pr-1 text-xs', surface(block), handle && 'cursor-grab touch-none')}
+        onPointerDown={(event) => {
+          if (renaming || pinned) return;
+          if (onHandle) onHandle(event);
+          else drag?.start(event, block, name);
+        }}>
+        <div role='tablist' aria-label='Blocks in this tab' className='flex min-w-0 flex-1 items-stretch overflow-x-auto'>
+          {among.map((listed) => {
+            const selected = listed.id === block.id;
+            return (
+              <div key={listed.id} role='tab' tabIndex={0} aria-selected={selected} title={title(listed)}
+                className={cn('flex max-w-56 min-w-0 shrink-0 cursor-default items-center gap-1.5 px-3 text-muted-foreground outline-none focus-visible:bg-accent', selected && 'text-foreground')}
+                onClick={() => actions.focus(listed.id)}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+                  event.preventDefault();
+                  actions.focus(listed.id);
+                }}>
+                {mark(listed)}
+                {named(listed)}
+              </div>
+            );
+          })}
+        </div>
+        <div className='flex shrink-0 items-center gap-0.5' onPointerDown={(event) => event.stopPropagation()}>
+          {buttons}
+        </div>
       </div>
+    );
+  }
+
+  const typeIcon = props.icon?.(block);
+  // A press on the rail that isn't on one of its buttons, or the name being typed, drags the Block.
+  const grab = (event: ReactPointerEvent) => {
+    if (!handle || renaming) return;
+    if (event.target instanceof Element && event.target.closest('button, input, [role="menu"]')) return;
+    if (onHandle) onHandle(event);
+    else drag?.start(event, block, name);
+  };
+  const pills = (
+    <>
+      <div data-slot='block-title' title={name}
+        className={cn(PILL, 'relative min-w-0 max-w-80 gap-1.5 pr-3 pl-2 text-xs text-foreground', handle && !hovers && 'cursor-grab touch-none')}
+        onPointerDown={hovers ? undefined : grab}>
+        {typeIcon && <HugeiconsIcon icon={typeIcon} strokeWidth={2} aria-hidden='true' className='size-3.5 shrink-0 text-muted-foreground' />}
+        {mark(block)}
+        {named(block)}
+      </div>
+      <div data-slot='block-actions' className={cn(PILL, 'relative shrink-0 gap-px px-0.5')}>
+        {buttons}
+      </div>
+    </>
+  );
+
+  if (hovers) {
+    // A row of its own atop the Block, empty until the pointer is over the row, one of the pills
+    // has the keyboard, the name is typed over or the menu is open. All of it but its buttons is
+    // the Block's handle.
+    return (
+      <div ref={rail} data-slot='block-rail' data-shown={keep || undefined} onPointerDown={grab}
+        className={cn(handle && 'cursor-grab touch-none', 'flex h-10 shrink-0 items-center justify-between gap-2 px-1.5 opacity-0 transition-opacity duration-150 hover:opacity-100 has-focus-visible:opacity-100 data-shown:opacity-100 motion-reduce:transition-none')}>
+        {pills}
+      </div>
+    );
+  }
+
+  // A touch screen's: a slim strip atop the Block, its row of controls once it's tapped.
+  return (
+    <div ref={rail} data-slot='block-rail' data-expanded={expanded || undefined}
+      className={cn('relative flex shrink-0 items-center justify-between gap-2', expanded ? 'h-9 px-1' : 'h-3')}>
+      <button type='button' aria-label={`${name} controls`} aria-expanded={expanded}
+        className='absolute inset-0 flex justify-center pt-1 outline-none focus-visible:bg-accent/50'
+        onClick={() => setExpanded((shown) => !shown)}>
+        {!expanded && <span aria-hidden='true' className='h-1 w-8 rounded-full bg-muted-foreground/40' />}
+      </button>
+      {expanded && pills}
     </div>
   );
 }
 
-/** What fills a Block under its rail. */
+/** What fills a Block, under its rail's row, or strip on a touch screen. */
 const Body = ({ block, body }: { block: SessionBlock; body: TabProps['body'] }) => (
   <div data-block-id={block.id} className='flex min-h-0 min-w-0 flex-1 flex-col'>
     {body(block)}
@@ -284,7 +427,7 @@ function DockedBlock({ block, drag, ...props }: TabProps & { block: SessionBlock
   return (
     <div role='group' data-slot='docked-block' data-block={block.id} data-focused={focused || undefined}
       data-focus-edge={(focused && props.marksFocus) || undefined} aria-label={`Block, ${props.title(block)}`}
-      className={cn('relative isolate flex min-h-0 min-w-0 flex-1 flex-col bg-background', focused && props.marksFocus && FOCUS_EDGE)}
+      className={cn('group/block relative isolate flex min-h-0 min-w-0 flex-1 flex-col', BLOCK_CARD, surface(block), focused && props.marksFocus && FOCUS_EDGE)}
       onPointerDownCapture={() => { if (!focused) actions.focus(block.id); }}>
       <BlockRail {...props} block={block} drag={drag} />
       <Body key={block.id} block={block} body={props.body} />
@@ -292,12 +435,20 @@ function DockedBlock({ block, drag, ...props }: TabProps & { block: SessionBlock
   );
 }
 
-/** The edge between two docked Blocks of a split, dragged to share their space out again. */
+/**
+ * The gap between two docked Blocks of a split, 8px, dragged to share their space out again: a
+ * line shows in it under the pointer, and while it's dragged. Above the Blocks' shadows, which
+ * fill the gap with the background.
+ */
 function Divider({ row, onDrag, onDone }: { row: boolean; onDrag(position: { x: number; y: number }): void; onDone(): void }) {
   const [dragging, setDragging] = useState(false);
   return (
     <div role='separator' aria-orientation={row ? 'vertical' : 'horizontal'} aria-label='Resize Blocks' data-slot='block-divider'
-      className={cn('relative shrink-0 touch-none bg-border', row ? 'w-px cursor-col-resize' : 'h-px cursor-row-resize', dragging && 'bg-primary')}
+      className={cn(
+        "relative z-10 shrink-0 touch-none after:pointer-events-none after:absolute after:rounded-full after:content-[''] hover:after:bg-border",
+        row ? 'w-2 cursor-col-resize after:inset-y-2 after:left-[3px] after:w-0.5' : 'h-2 cursor-row-resize after:inset-x-2 after:top-[3px] after:h-0.5',
+        dragging && 'after:bg-primary hover:after:bg-primary',
+      )}
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
         setDragging(true);
@@ -309,8 +460,8 @@ function Divider({ row, onDrag, onDone }: { row: boolean; onDrag(position: { x: 
         onDone();
       }}
       onPointerCancel={() => setDragging(false)}>
-      {/* Wider than it looks, so a finger finds it. */}
-      <span aria-hidden='true' className={cn('absolute z-10', row ? '-inset-x-1.5 inset-y-0' : 'inset-x-0 -inset-y-1.5')} />
+      {/* A little wider than the gap, so a finger finds it. */}
+      <span aria-hidden='true' className={cn('absolute z-10', row ? '-inset-x-0.5 inset-y-0' : 'inset-x-0 -inset-y-0.5')} />
     </div>
   );
 }
@@ -368,7 +519,9 @@ function FloatingBlock({ item, bounds, ...props }: TabProps & { item: SessionFlo
     const from = frame;
     const origin = { x: event.clientX, y: event.clientY };
     let latest: SessionFrame | undefined;
+    const handle = event.currentTarget;
     const moved = (next: PointerEvent) => {
+      if (!latest) keepPointer(handle, next.pointerId);
       latest = fitFrame(change(from, (next.clientX - origin.x) / rect.width, (next.clientY - origin.y) / rect.height));
       setLive(latest);
     };
@@ -387,8 +540,9 @@ function FloatingBlock({ item, bounds, ...props }: TabProps & { item: SessionFlo
     <div role='group' data-slot='floating-block' data-focused={focused || undefined} data-focus-edge={(focused && props.marksFocus) || undefined}
       aria-label={`Floating, ${props.title(block)}`} style={style}
       className={cn(
-        'absolute z-10 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-md border border-border bg-background shadow-xl',
-        focused && props.marksFocus && cn(FOCUS_EDGE, 'after:rounded-md'),
+        'group/block absolute z-10 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border shadow-xl',
+        surface(block),
+        focused && props.marksFocus && FOCUS_EDGE,
       )}
       onPointerDownCapture={() => { if (!focused) actions.focus(block.id); }}>
       <BlockRail {...props} block={block} floating
@@ -434,7 +588,8 @@ export function TabBlocks({ tab, empty, ...props }: TabProps & { tab: SessionTab
   const zoomed = props.zoomedId ? tabBlocks(tab).find(({ id }) => id === props.zoomedId) : undefined;
   const floating = tab.floating ?? [];
   return (
-    <div ref={body} data-slot='session-tab' role='tabpanel' className='relative flex min-h-0 min-w-0 flex-1'>
+    // Inset from the window's edges, so the Blocks' rounded corners show.
+    <div ref={body} data-slot='session-tab' role='tabpanel' className='relative flex min-h-0 min-w-0 flex-1 p-1 pt-0'>
       {zoomed
         ? <DockedBlock {...props} block={zoomed} />
         : tab.root

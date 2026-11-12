@@ -2,6 +2,8 @@
 // what fills the Block. A Block of a type that isn't here shows its type and props as text, the
 // floor every device has (ADR 0018).
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import type { HugeiconsIcon } from '@hugeicons/react';
+import { BubbleChatIcon, ComputerTerminal01Icon } from '@hugeicons/core-free-icons';
 import { type AppController, type OpenSession, type TerminalSummary, type ThreadSummary, threadController, threadKey } from '@/app/app-controller';
 import { useCommand } from '@/app/commands';
 import { platform } from '@/app/platform';
@@ -35,6 +37,8 @@ export type BlockContext = {
 };
 
 export type BlockType = {
+  /** Its type's icon, as a tab shows the Block it names. */
+  icon?: Parameters<typeof HugeiconsIcon>[0]['icon'];
   /** What the Block's rail calls it. */
   title(block: SessionBlock, context: Pick<BlockContext, 'controller' | 'session'>): string;
   /** A mark of what it's doing, beside its name. */
@@ -62,6 +66,7 @@ const summaryOf = (block: SessionBlock, { controller, session }: Pick<BlockConte
 };
 
 const thread: BlockType = {
+  icon: BubbleChatIcon,
   title: (block, context) => summaryOf(block, context)?.title || 'New thread',
   mark: (block, context) => {
     const summary = summaryOf(block, context);
@@ -239,6 +244,7 @@ function TerminalText({ terminal }: { terminal: TerminalSummary }) {
 const terminalIn = (block: SessionBlock, session: OpenSession) => session.terminals?.find(({ id }) => id === terminalOf(block));
 
 const terminal: BlockType = {
+  icon: ComputerTerminal01Icon,
   title: (block, { session }) => {
     const found = terminalIn(block, session);
     return found ? terminalName(found) : 'Terminal';

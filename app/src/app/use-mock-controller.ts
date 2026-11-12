@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef } from 'react';
-import { createAcpShowcaseTranscript, createMarkdownShowcaseTranscript } from '@/chat/acp-showcase';
+import { createAcpShowcaseTranscript, createFinishedTurnsTranscript, createMarkdownShowcaseTranscript } from '@/chat/acp-showcase';
 import { type AcpTranscript, type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
 import type { ContentBlock, McpServerStatus, SessionLayout } from '@/host/protocol';
 import { terminalBlock, threadBlock } from '@/session/blocks';
@@ -415,7 +415,10 @@ const arranged = (): SessionLayout => tidy({
 const MARKDOWN = 'rich-markdown';
 
 const transcriptFor = (thread: ThreadSummary): AcpTranscript => {
-  const showcase = thread.threadId === MARKDOWN ? createMarkdownShowcaseTranscript() : createAcpShowcaseTranscript();
+  // Turns that finished before the showcase's, folded as the app shows them (WVE-218).
+  const showcase = thread.threadId === MARKDOWN
+    ? createMarkdownShowcaseTranscript()
+    : createAcpShowcaseTranscript(createFinishedTurnsTranscript('showcase', Date.now() - 20 * 60_000));
   const transcript = { ...showcase, threadId: thread.threadId, title: thread.title };
   return thread.activity === 'running' ? reduceAcpEvent(transcript, { type: 'turn/started' }) : transcript;
 };
@@ -584,6 +587,8 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
     reduce(
       key,
       { type: 'session/update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done. This reply is from the mock controller.' } } },
+      // As the Host journals a turn's end, and then says so live.
+      { type: 'turn/ended', stopReason: 'end_turn' },
       { type: 'turn/stopped', stopReason: 'end_turn' },
     );
     setThread(key, { activity: 'idle', waitingOn: undefined, lastActivityAt: Date.now() });
@@ -698,7 +703,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
     cancelTurn() {
       const key = pick();
       if (!key) return;
-      reduce(key, { type: 'turn/stopped', stopReason: 'cancelled' });
+      reduce(key, { type: 'turn/ended', stopReason: 'cancelled' }, { type: 'turn/stopped', stopReason: 'cancelled' });
       setThread(key, { activity: 'idle', waitingOn: undefined });
     },
     respondToPermission(requestId, optionId) {

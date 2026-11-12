@@ -8,7 +8,7 @@ const config: CapacitorConfig = {
   appName: 'Weave',
   webDir: 'dist',
   ios: {
-    backgroundColor: '#1e1e2e',
+    backgroundColor: '#11111b',
     contentInset: 'never',
     scrollEnabled: false,
     zoomEnabled: false,

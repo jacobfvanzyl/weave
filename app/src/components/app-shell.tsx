@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import { Sidebar, SidebarInset, useSidebar } from '@/components/ui/sidebar';
 import { Spinner } from '@/components/ui/spinner';
+import { cn } from '@/lib/utils';
 import { botOfThread, botSelection, selectedBot, waitingBots } from '@/session/bots';
 import { botSessionKey, directoryName, sessionListView, sessionSummaries, sessionWith, threadDirectories, threadDirectory, waitingSessions } from '@/session/sessions';
 import { loadLastSession, saveLastSession } from '@/session/view';
@@ -46,14 +47,27 @@ function BackButton({ count, onBack }: { count: number; onBack(): void }) {
   );
 }
 
-/** iPad and wider: shows and hides the list of Sessions, with a count while it is hidden. */
+/** Whether the list of Sessions is out of sight: collapsed, or in a narrow window its sheet closed. */
+const useSidebarHidden = () => {
+  const { isMobile, openMobile, state } = useSidebar();
+  return isMobile ? !openMobile : state === 'collapsed';
+};
+
+/**
+ * iPad and wider: shows and hides the list of Sessions. Shown, it's in the list's own top rail;
+ * hidden, it's first in the rail beside it, with a count of what waits. On the Mac that's after
+ * the window's traffic lights.
+ */
 function SidebarToggle({ waiting }: { waiting: number }) {
-  const { isMobile, openMobile, state, toggleSidebar } = useSidebar();
-  const hidden = isMobile ? !openMobile : state === 'collapsed';
+  const { toggleSidebar } = useSidebar();
+  const hidden = useSidebarHidden();
   const count = hidden ? waiting : 0;
   return (
     <Button variant='ghost' size='lg' aria-label={hidden ? (count ? `Show Sessions, ${count} waiting` : 'Show Sessions') : 'Hide Sessions'}
-      aria-expanded={!hidden} className='min-h-11 shrink-0 px-1.5 aria-expanded:bg-transparent' onClick={toggleSidebar}>
+      aria-expanded={!hidden} className={cn('min-h-11 shrink-0 px-1.5 aria-expanded:bg-transparent', hidden && platform().titleBar === 'overlay' && 'ml-[calc(var(--traffic-lights-width)-0.5rem)]',
+        // What follows it in the Session's rail comes as close as it does to the lights.
+        hidden && '-mr-1')}
+      onClick={toggleSidebar}>
       <HugeiconsIcon icon={SidebarLeftIcon} strokeWidth={2} />
       <WaitingBadge count={count} />
     </Button>
@@ -160,16 +174,20 @@ function PhoneShell({ controller, sessions, session, selected, bot, botSession, 
 
 function SplitShell({ controller, sessions, session, selected, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onEndSession }: ShellProps) {
   const { setOpenMobile } = useSidebar();
-  const leading = <SidebarToggle waiting={waiting} />;
+  // The toggle is in the list's rail while the list shows, and in the Session's while it doesn't.
+  const hidden = useSidebarHidden();
+  const leading = hidden ? <SidebarToggle waiting={waiting} /> : undefined;
   const open = (key: string) => {
     onOpenSession(key);
     setOpenMobile(false);
   };
   return (
     <>
-      <Sidebar collapsible='offcanvas'>
+      {/* No line at its edge: the resize handle shows one under the pointer and while it drags. */}
+      <Sidebar collapsible='offcanvas' className='group-data-[side=left]:border-r-0'>
         <SessionList controller={controller} sessions={sessions} selected={selected} selectedBot={selectedBot(selected)} onOpenHosts={onOpenHosts} onNewSession={onNewSession}
-          onEndSession={onEndSession} onOpen={open} onOpenBot={(id) => open(botSelection(id))} onNewBot={onNewBot} />
+          onEndSession={onEndSession} onOpen={open} onOpenBot={(id) => open(botSelection(id))} onNewBot={onNewBot}
+          leading={hidden ? undefined : <SidebarToggle waiting={waiting} />} />
         <SidebarResizeHandle />
       </Sidebar>
       <SidebarInset className='min-h-0 min-w-0 overflow-hidden'>
@@ -227,9 +245,11 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
   const showing = botId ? botSessionAt : selected;
 
   useEffect(() => saveLastSession(selected), [selected]);
+  // Again once the controller can show one: at launch the store isn't there yet when this first
+  // runs, and the Session this device last showed would wait on it for good.
   useEffect(() => {
     actions.selectSession?.(showing);
-  }, [showing]);
+  }, [showing, actions.selectSession]);
   useEffect(() => {
     if (!botId) setBotPage(false);
   }, [botId]);
