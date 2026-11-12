@@ -4,7 +4,8 @@
 //! loses it nor starts it again. A one-off has one time (`at`), and a Bot's schedule prompts
 //! the Bot, skipping its occurrences while the Bot is paused (WVE-118). A Bot's own wake-up is a
 //! one-off its thread asked for (`wake_call`), counted, listed and cancelled while it's still to
-//! come, and forgotten a week after its time once its occurrence is over.
+//! come, and forgotten a week after its time once its occurrence is over. A schedule a Bot added
+//! itself (`made_call`, WVE-178) is counted among the Bot's schedules as it's added.
 
 use rusqlite::Connection;
 use rusqlite::OptionalExtension as _;
@@ -56,6 +57,9 @@ pub(crate) struct StoredSchedule {
     pub(crate) failures: u32,
     /// For a Bot's own wake-up, the Host's id for the `wake_me` call that asked for it.
     pub(crate) wake_call: Option<String>,
+    /// For a schedule a Bot added itself, the Host's id for the `add_schedule` call that added
+    /// it.
+    pub(crate) made_call: Option<String>,
 }
 
 impl StoredSchedule {
@@ -72,6 +76,17 @@ pub(crate) enum WakeUp {
     /// The call that asked for it was written down before: the wake-up it made.
     Again(StoredSchedule),
     /// The Bot has this many still to come, the most it may have.
+    Full(u32),
+}
+
+/// What writing down a schedule a Bot added itself did.
+#[derive(Debug, PartialEq)]
+pub(crate) enum BotSchedule {
+    /// Written down.
+    Added(StoredSchedule),
+    /// The call that added it was written down before: the schedule it added.
+    Again(StoredSchedule),
+    /// The Bot has this many schedules, wake-ups aside, the most it may have when it adds one.
     Full(u32),
 }
 
@@ -105,7 +120,7 @@ pub(crate) enum Ending<'a> {
 }
 
 const SELECT_SCHEDULE: &str = "SELECT id, name, cron, zone, host_id, run, missed, overlap, \
-     created_at, considered_until, paused, failures, at, bot_id, wake_call FROM schedules";
+     created_at, considered_until, paused, failures, at, bot_id, wake_call, made_call FROM schedules";
 
 const SELECT_OCCURRENCE: &str = "SELECT id, schedule_id, scheduled_at, late, manual, state, \
      outcome, why, thread_id, turn_id, recorded_at, ended_at FROM occurrences";
@@ -148,6 +163,42 @@ impl Store {
         insert_schedule(&transaction, schedule)?;
         transaction.commit().map_err(failed)?;
         Ok(WakeUp::Added(schedule.clone()))
+    }
+
+    /// Write down `schedule`, which a Bot added itself, unless the call that added it was
+    /// written down before, or the Bot has `most` schedules already, wake-ups aside, its
+    /// person's included.
+    pub(crate) fn add_bot_schedule(
+        &self,
+        schedule: &StoredSchedule,
+        most: u32,
+    ) -> Result<BotSchedule, String> {
+        let mut connection = self.lock();
+        let transaction = connection.transaction().map_err(failed)?;
+        let before = transaction
+            .query_row(
+                &format!("{SELECT_SCHEDULE} WHERE bot_id = ?1 AND made_call = ?2"),
+                params![schedule.bot_id, schedule.made_call],
+                self::schedule,
+            )
+            .optional()
+            .map_err(failed)?;
+        if let Some(before) = before {
+            return Ok(BotSchedule::Again(before));
+        }
+        let had: u32 = transaction
+            .query_row(
+                "SELECT count(*) FROM schedules WHERE bot_id = ?1 AND wake_call IS NULL",
+                params![schedule.bot_id],
+                |row| row.get(0),
+            )
+            .map_err(failed)?;
+        if had >= most {
+            return Ok(BotSchedule::Full(had));
+        }
+        insert_schedule(&transaction, schedule)?;
+        transaction.commit().map_err(failed)?;
+        Ok(BotSchedule::Added(schedule.clone()))
     }
 
     /// `bot_id`'s wake-ups still to come, soonest first.
@@ -574,8 +625,8 @@ fn insert_schedule(connection: &Connection, schedule: &StoredSchedule) -> Result
     connection
         .execute(
             "INSERT INTO schedules (id, name, cron, zone, host_id, run, missed, overlap, \
-             created_at, considered_until, paused, failures, at, bot_id, wake_call) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+             created_at, considered_until, paused, failures, at, bot_id, wake_call, made_call) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 schedule.id,
                 schedule.name,
@@ -591,7 +642,8 @@ fn insert_schedule(connection: &Connection, schedule: &StoredSchedule) -> Result
                 schedule.failures,
                 schedule.at.map(to_sql),
                 schedule.bot_id,
-                schedule.wake_call
+                schedule.wake_call,
+                schedule.made_call
             ],
         )
         .map(drop)
@@ -679,6 +731,7 @@ fn schedule(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredSchedule> {
         at: row.get::<_, Option<i64>>(12)?.map(from_sql),
         bot_id: row.get(13)?,
         wake_call: row.get(14)?,
+        made_call: row.get(15)?,
     })
 }
 
@@ -766,6 +819,7 @@ mod tests {
             paused: None,
             failures: 0,
             wake_call: None,
+            made_call: None,
         };
         store.add_schedule(&schedule).expect("a schedule");
         (store, schedule)
@@ -798,6 +852,7 @@ mod tests {
                     policy: PermissionPolicy::ask(),
                     mode: None,
                     new_thread_at: None,
+                    created_by: None,
                     zone: "UTC".to_owned(),
                     pause_after: 1000,
                 },
@@ -879,6 +934,73 @@ mod tests {
         assert_eq!(store.prune_wake_ups(2000).expect("pruned"), 1);
         assert_eq!(store.find_schedule(&first.id).expect("read"), None);
         assert!(store.find_schedule(&base.id).expect("read").is_some());
+    }
+
+    #[test]
+    fn a_bots_own_schedules_are_counted_with_the_persons_but_not_its_wake_ups() {
+        let (store, base) = store();
+        let bot = store
+            .add_bot(
+                &crate::store::NewBot {
+                    name: "odin".to_owned(),
+                    host_id: "h1".to_owned(),
+                    agent_id: "fake".to_owned(),
+                    home: "~/odin".into(),
+                    policy: PermissionPolicy::ask(),
+                    mode: None,
+                    new_thread_at: None,
+                    created_by: None,
+                    zone: "UTC".to_owned(),
+                    pause_after: 1000,
+                },
+                1,
+            )
+            .expect("a Bot");
+        let named = |name: &str, call: Option<&str>| StoredSchedule {
+            id: StoredSchedule::new_id(),
+            name: name.to_owned(),
+            bot_id: Some(bot.id.clone()),
+            made_call: call.map(str::to_owned),
+            ..base.clone()
+        };
+        store
+            .add_schedule(&named("the person's", None))
+            .expect("the person's own for odin");
+        store
+            .add_wake_up(&wake_up(&base, &bot.id, "c-0", 1000), 5)
+            .expect("a wake-up");
+        let first = named("first", Some("c-1"));
+        assert_eq!(
+            store.add_bot_schedule(&first, 3).expect("written"),
+            BotSchedule::Added(first.clone())
+        );
+        // The same call again, as a Host repeating it would: the one it added.
+        assert_eq!(
+            store
+                .add_bot_schedule(&named("again", Some("c-1")), 3)
+                .expect("read"),
+            BotSchedule::Again(first)
+        );
+        assert!(matches!(
+            store
+                .add_bot_schedule(&named("second", Some("c-2")), 3)
+                .expect("written"),
+            BotSchedule::Added(_)
+        ));
+        assert_eq!(
+            store
+                .add_bot_schedule(&named("third", Some("c-3")), 3)
+                .expect("read"),
+            BotSchedule::Full(3),
+            "the person's counts, the wake-up doesn't"
+        );
+        assert_eq!(
+            store
+                .find_schedule("first")
+                .expect("read")
+                .map(|found| found.made_call),
+            Some(Some("c-1".to_owned()))
+        );
     }
 
     fn work(occurrence: &str) -> Work {

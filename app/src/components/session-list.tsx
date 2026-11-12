@@ -3,6 +3,7 @@ import { HugeiconsIcon } from '@hugeicons/react';
 import { Add01Icon, Cancel01Icon, ComputerIcon, Folder01Icon, GitBranchIcon, LaptopIcon, Search01Icon } from '@hugeicons/core-free-icons';
 import type { AppController, DispatcherSummary, HostStatus, HostSummary, ProjectSummary, SessionSummary } from '@/app/app-controller';
 import { ActivityIndicator } from '@/components/activity-indicator';
+import { BotList } from '@/components/bots/bot-list';
 import { RemoveWorktreeDialog } from '@/components/remove-worktree-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -221,15 +222,19 @@ function usePullToRefresh(onRefresh?: () => Promise<void> | void) {
 /**
  * The person's Sessions (ADR 0031, WVE-203): under their Projects, each saying which Host it's
  * on, and after them, under its Host, each one no Project has. A Host with none of those isn't a
- * heading. While the Dispatcher can't be reached, a banner says so, and the Sessions of the Hosts
+ * heading. Above them all, the Bots, from a Dispatcher that keeps them (WVE-178). While the Dispatcher can't be reached, a banner says so, and the Sessions of the Hosts
  * it last listed stay, greyed out unless their Host is still connected.
  */
-export function SessionList({ controller, sessions, selected, onOpen, onOpenHosts, onNewSession, onEndSession }: {
+export function SessionList({ controller, sessions, selected, selectedBot, onOpen, onOpenBot, onNewBot, onOpenHosts, onNewSession, onEndSession }: {
   controller: AppController;
   sessions: SessionSummary[];
   /** The Session on screen, by key. */
   selected?: string;
+  /** The Bot on screen, by id. */
+  selectedBot?: string;
   onOpen(key: string): void;
+  onOpenBot?(id: string): void;
+  onNewBot?(): void;
   onOpenHosts(): void;
   /** Starts a Session: a thread in a directory, a Project's or a Host's when one is named. */
   onNewSession(target?: NewThreadTarget): void;
@@ -241,6 +246,7 @@ export function SessionList({ controller, sessions, selected, onOpen, onOpenHost
   const pull = usePullToRefresh(actions.refresh);
   const view = sessionListView(sessions, model.hosts, model.projects, { query });
   const listed = view.projects.length > 0 || view.hosts.length > 0;
+  const canStart = model.hosts.some(({ status }) => status === 'connected');
   const { dispatcher } = model;
   const away = dispatcher !== undefined && dispatcher.status !== 'connected';
   // A Host still connected while the Dispatcher is away, as the Mac's own over its socket, isn't greyed out.
@@ -311,6 +317,10 @@ export function SessionList({ controller, sessions, selected, onOpen, onOpenHost
               <Button onClick={onOpenHosts}>Hosts</Button>
             </EmptyContent>
           </Empty>
+        )}
+        {model.bots && (
+          <BotList bots={model.bots} unread={model.unread} canAdd={Boolean(model.canAddBots && onNewBot)} canStart={canStart} query={query}
+            selected={selectedBot} onOpen={(id) => onOpenBot?.(id)} onNewBot={() => onNewBot?.()} />
         )}
         {view.projects.map(({ project, sessions: under }) => {
           const location = startIn(project);

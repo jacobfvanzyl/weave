@@ -3,12 +3,13 @@
 //! whose work goes on there in one thread at a time. Listing them, adding one, showing, changing
 //! and removing one, sending one a prompt, and starting its new thread.
 //!
-//! `weave bots add` makes the home of a Bot on this computer's Host before the Dispatcher adds
-//! it ([`home`]): the directory, a git repository and its first memory files. For a Bot on another
-//! computer's Host it can't, so it says what to run there.
+//! `weave bots add` has the Dispatcher add a Bot, which has the Bot's Host make its home first
+//! (WVE-178): the directory, a git repository of its own and its first memory files, on this
+//! computer's Host or another's alike. It says what that did ([`home`]).
 
 mod home;
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -21,6 +22,7 @@ use weave_dispatcher::client::DispatcherConnection;
 use weave_host_protocol::Empty;
 use weave_host_protocol::dispatcher::AddBotRequest;
 use weave_host_protocol::dispatcher::BOTS_FEATURE;
+use weave_host_protocol::dispatcher::BOTS_HOME_FEATURE;
 use weave_host_protocol::dispatcher::Bot;
 use weave_host_protocol::dispatcher::BotState;
 use weave_host_protocol::dispatcher::GetBotRequest;
@@ -60,8 +62,8 @@ pub struct BotsArgs {
 enum BotsCommand {
     /// The Bots, what each is doing, and its thread (the default).
     List(JsonArgs),
-    /// Add a Bot on one of your Hosts, making its home first when that's this computer's. It
-    /// has no thread until the first prompt you send it.
+    /// Add a Bot on one of your Hosts, which makes its home first. It has no thread until the
+    /// first prompt you send it.
     Add(Box<AddArgs>),
     /// A Bot: how it's set up, its threads and its schedules.
     Show(BotArgs),
@@ -106,11 +108,16 @@ struct AddArgs {
     #[arg(long, value_name = "HOST")]
     host: Option<String>,
 
-    /// Its home on that Host: the git repository its threads run in and its memory is kept
-    /// in, whole or under ~ there. ~/bots/<name> when omitted. On this computer's Host it's
-    /// made, with its first memory files, unless they're there.
+    /// Its home on that Host: the git repository of its own its threads run in and its memory
+    /// is kept in, whole or under ~ there; on this computer's Host, from this directory too.
+    /// ~/bots/<name> when omitted. The Host makes it, with its first memory files, unless one
+    /// of them is there.
     #[arg(long, value_name = "DIR")]
     home: Option<PathBuf>,
+
+    /// What it's for, in your words, which its first AGENTS.md says.
+    #[arg(long, value_name = "TEXT")]
+    job: Option<String>,
 
     /// Tool kinds its threads approve without asking you, comma-separated: read, edit, delete,
     /// move, search, execute, think, fetch, switch_mode, other; or all. It asks you about the
@@ -251,8 +258,11 @@ async fn show(dispatcher: &DispatcherConnection, args: BotArgs) -> anyhow::Resul
         println!("{}", serde_json::to_string_pretty(&bot)?);
         return Ok(());
     }
+    // A Dispatcher without `bots_home` lists them all, so they're filtered here too.
     let schedules: Vec<Schedule> = dispatcher
-        .send(ListSchedulesRequest {})
+        .send(ListSchedulesRequest {
+            bot: Some(bot.id.clone()),
+        })
         .await?
         .schedules
         .into_iter()
@@ -263,6 +273,7 @@ async fn show(dispatcher: &DispatcherConnection, args: BotArgs) -> anyhow::Resul
 }
 
 async fn add(dispatcher: &DispatcherConnection, args: AddArgs) -> anyhow::Result<()> {
+    dispatcher::require(dispatcher, BOTS_HOME_FEATURE, "making Bots' homes")?;
     let name = args.name.trim().to_owned();
     if name.is_empty() || name.chars().any(char::is_control) {
         bail!("a Bot's name is one line of text");
@@ -273,13 +284,6 @@ async fn add(dispatcher: &DispatcherConnection, args: AddArgs) -> anyhow::Result
     };
     if let Some(zone) = &args.zone {
         clock::zone(zone)?;
-    }
-    let taken = dispatcher.send(ListBotsRequest {}).await?.bots;
-    if let Some(taken) = taken
-        .iter()
-        .find(|bot| bot.name.to_lowercase() == name.to_lowercase())
-    {
-        bail!("there's a Bot called {} already", taken.name);
     }
     let hosts = dispatcher.send(ListHostsRequest {}).await?.hosts;
     let own = weave_host::own_id(&host::paths()?);
@@ -304,40 +308,34 @@ async fn add(dispatcher: &DispatcherConnection, args: AddArgs) -> anyhow::Result
             )?,
     };
     let here = own.as_deref() == Some(host.host_id.as_str());
-    let (home, made) = match (here, &args.home) {
-        (true, given) => {
-            let dir = match given {
-                Some(dir) => home::here(dir)?,
-                None => home::here(&home::default_home(&name)?)?,
-            };
-            let made = home::make(&dir, &name)?;
-            (made.path.clone(), Some(made))
-        }
-        (false, Some(dir)) => (directory_on(Some(dir), &host.name, "--home")?, None),
-        (false, None) => (home::default_home(&name)?, None),
+    let home = match &args.home {
+        None => None,
+        Some(dir) if here => Some(home_here(dir)?),
+        Some(dir) => Some(directory_on(Some(dir), &host.name, "--home")?),
     };
-    // What making the home did comes first; with --json, beside the Bot, on stderr.
-    let say = |line: &str| match args.json {
-        true => eprintln!("{line}"),
-        false => println!("{line}"),
-    };
-    if let Some(made) = &made {
-        say(&made.said(&name));
-    }
-    let bot = dispatcher
+    let added = dispatcher
         .send(AddBotRequest {
             name,
             host: host.host_id.clone(),
             agent_id: args.agent,
             home,
+            job: args.job,
             policy: Some(policy),
             mode: args.mode,
             new_thread_at: args.new_thread_at,
             zone: args.zone,
             pause_after: args.pause_after.map(millis),
         })
-        .await?
-        .bot;
+        .await?;
+    let bot = added.bot;
+    // What making the home did comes first; with --json, beside the Bot, on stderr.
+    if let Some(made) = &added.home {
+        let made = home::said(made, &bot.name);
+        match args.json {
+            true => eprintln!("{made}"),
+            false => println!("{made}"),
+        }
+    }
     if args.json {
         println!("{}", serde_json::to_string_pretty(&bot)?);
     } else {
@@ -351,31 +349,16 @@ async fn add(dispatcher: &DispatcherConnection, args: AddArgs) -> anyhow::Result
             shell_words(std::slice::from_ref(&bot.name))
         );
     }
-    if made.is_none() {
-        say(&elsewhere(&bot));
-    }
     Ok(())
 }
 
-/// What to do on another computer, for a Bot whose home weave can't make from here.
-fn elsewhere(bot: &Bot) -> String {
-    let host = host_name(bot);
-    let home = shell_path(&bot.home);
-    format!(
-        "Its home has to be a git repository on {host} by the time its first thread starts there, \
-         and weave can't make it from here. On {host}, run:\n  mkdir -p {home}\n  git -C {home} \
-         init\nRun on {host}, `weave bots add` makes a Bot's home itself, with its first memory \
-         files."
-    )
-}
-
-/// `path` for a shell on the Bot's Host, `~/` left for it to expand.
-fn shell_path(path: &std::path::Path) -> String {
-    match path.strip_prefix("~") {
-        Ok(under) if under.as_os_str().is_empty() => "~".to_owned(),
-        Ok(under) => format!("~/{}", shell_words(&[under.display().to_string()])),
-        Err(_) => shell_words(&[path.display().to_string()]),
+/// `home`, as given for a Bot on this computer's Host: `~/…` as it is, for the Host to put under
+/// its home, and a relative one from this directory.
+fn home_here(home: &Path) -> anyhow::Result<PathBuf> {
+    if home.starts_with("~") || home.is_absolute() {
+        return Ok(home.to_path_buf());
     }
+    std::path::absolute(home).with_context(|| format!("the directory {}", home.display()))
 }
 
 async fn update(dispatcher: &DispatcherConnection, args: UpdateArgs) -> anyhow::Result<()> {
@@ -586,7 +569,17 @@ fn host(bot: &Bot) -> String {
     }
 }
 
-/// A line for each Bot: "odin  working  claude on studio  thread 019a…".
+/// The Bot that made `bot`, if one did: by name, or by id once it's gone.
+fn made_by(bot: &Bot) -> Option<String> {
+    let id = bot.created_by.as_ref()?;
+    Some(match &bot.created_by_name {
+        Some(name) => name.clone(),
+        None => format!("the Bot {id}, since removed"),
+    })
+}
+
+/// A line for each Bot: "odin  working  claude on studio  thread 019a…", and "made by mimir"
+/// for one another Bot made.
 fn describe(bots: &[Bot]) -> String {
     if bots.is_empty() {
         return "You have no Bots; `weave bots add <name> --agent <id>` adds one.\n".to_owned();
@@ -602,8 +595,12 @@ fn describe(bots: &[Bot]) -> String {
                 Some(thread) => format!("thread {thread}"),
                 None => "no thread yet".to_owned(),
             };
+            let maker = match made_by(bot) {
+                Some(maker) => format!("  made by {maker}"),
+                None => String::new(),
+            };
             format!(
-                "{:width$}  {}  {} on {}  {thread}\n",
+                "{:width$}  {}  {} on {}  {thread}{maker}\n",
                 bot.name,
                 state(bot),
                 bot.agent_id,
@@ -664,7 +661,7 @@ fn describe_one(bot: &Bot, schedules: &[Schedule], now: u64) -> String {
             })
             .collect(),
     };
-    let fields: [(&str, Vec<String>); 11] = [
+    let mut fields: Vec<(&str, Vec<String>)> = vec![
         ("agent", vec![bot.agent_id.clone()]),
         ("host", vec![host(bot)]),
         ("home", vec![bot.home.display().to_string()]),
@@ -690,6 +687,9 @@ fn describe_one(bot: &Bot, schedules: &[Schedule], now: u64) -> String {
         ("schedules", schedules),
         ("id", vec![bot.id.clone()]),
     ];
+    if let Some(maker) = made_by(bot) {
+        fields.push(("made by", vec![maker]));
+    }
     let width = fields
         .iter()
         .map(|(label, _)| label.len())
@@ -736,6 +736,8 @@ mod tests {
             starting_thread: false,
             created_at: 0,
             updated_at: 0,
+            created_by: None,
+            created_by_name: None,
         }
     }
 
@@ -805,6 +807,35 @@ mod tests {
     }
 
     #[test]
+    fn a_bot_another_made_says_which() {
+        let scribe = Bot {
+            name: "scribe".to_owned(),
+            created_by: Some("b-1".to_owned()),
+            created_by_name: Some("odin".to_owned()),
+            ..odin()
+        };
+        assert_eq!(
+            describe(std::slice::from_ref(&scribe)),
+            "scribe  idle  claude on studio  no thread yet  made by odin\n"
+        );
+        assert!(
+            describe_one(&scribe, &[], 0)
+                .ends_with("  id             b-1\n  made by        odin\n"),
+            "{}",
+            describe_one(&scribe, &[], 0)
+        );
+        let orphan = Bot {
+            created_by_name: None,
+            ..scribe
+        };
+        assert_eq!(
+            made_by(&orphan).as_deref(),
+            Some("the Bot b-1, since removed")
+        );
+        assert_eq!(made_by(&odin()), None);
+    }
+
+    #[test]
     fn sending_says_where_the_prompt_goes() {
         assert_eq!(
             sent_to(&odin()),
@@ -826,22 +857,5 @@ mod tests {
             ..working
         };
         assert!(sent_to(&starting).contains("which is starting a new thread"));
-    }
-
-    #[test]
-    fn a_home_elsewhere_is_made_there() {
-        assert_eq!(
-            elsewhere(&Bot {
-                home: "~/bots/night owl".into(),
-                ..odin()
-            }),
-            "Its home has to be a git repository on studio by the time its first thread starts \
-             there, and weave can't make it from here. On studio, run:\n  \
-             mkdir -p ~/'bots/night owl'\n  \
-             git -C ~/'bots/night owl' init\n\
-             Run on studio, `weave bots add` makes a Bot's home itself, with its first memory \
-             files."
-        );
-        assert_eq!(shell_path(std::path::Path::new("/srv/odin")), "/srv/odin");
     }
 }

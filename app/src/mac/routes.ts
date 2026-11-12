@@ -6,7 +6,7 @@
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 import { ConnectError, type ConnectErrorKind, type Connector } from '@/host/connection';
 import type { DeviceKey } from '@/host/device-key';
-import { DispatcherConnection } from '@/host/dispatcher';
+import { DispatcherConnection, type DispatcherNotification } from '@/host/dispatcher';
 import type { DispatcherHello } from '@/host/protocol';
 import type { Routes } from '@/host/routes';
 import type { DispatcherRecord, PairingStorage } from '@/host/storage';
@@ -106,6 +106,7 @@ export const macRoutes = (core: Core = tauriCore): Routes => {
   const api = (open: (channel: Channel<Incoming>) => Promise<Opened>, options: {
     client: Parameters<Routes['dispatcher']>[0]['client'];
     onClosed(close: { code?: number; reason?: string }): void;
+    onNotification?(notification: DispatcherNotification): void;
     signal?: AbortSignal;
   }) => {
     let hello: DispatcherHello | undefined;
@@ -124,12 +125,13 @@ export const macRoutes = (core: Core = tauriCore): Routes => {
         },
       },
       onClosed: options.onClosed,
+      onNotification: options.onNotification,
       signal: options.signal,
     });
   };
   return {
-    dispatcher: ({ client, onClosed, signal }) => api((channel) => core.invoke('open_dispatcher', { channel }), { client, onClosed, signal }),
-    pair: ({ url, code, name, client, onClosed }) => api((channel) => core.invoke('pair_dispatcher', { url, code, name, channel }), { client, onClosed }),
+    dispatcher: ({ client, onClosed, onNotification, signal }) => api((channel) => core.invoke('open_dispatcher', { channel }), { client, onClosed, onNotification, signal }),
+    pair: ({ url, code, name, client, onClosed, onNotification }) => api((channel) => core.invoke('pair_dispatcher', { url, code, name, channel }), { client, onClosed, onNotification }),
     host: ({ hostId }) => relayed(core, (channel) => core.invoke('open_host', { host: hostId, channel })),
     local: {
       find: async () => (await core.invoke<{ hostId: string } | null>('local_host'))?.hostId,

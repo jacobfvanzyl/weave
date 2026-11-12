@@ -182,7 +182,10 @@ pub async fn command(args: SchedulesArgs) -> anyhow::Result<ExitCode> {
             .unwrap_or(SchedulesCommand::List(JsonArgs::default()))
         {
             SchedulesCommand::List(args) => {
-                let schedules = dispatcher.send(ListSchedulesRequest {}).await?.schedules;
+                let schedules = dispatcher
+                    .send(ListSchedulesRequest::default())
+                    .await?
+                    .schedules;
                 if args.json {
                     println!("{}", serde_json::to_string_pretty(&schedules)?);
                 } else {
@@ -266,7 +269,10 @@ async fn occurrences(
         println!("{}", serde_json::to_string_pretty(&occurrences)?);
         return Ok(());
     }
-    let schedules = dispatcher.send(ListSchedulesRequest {}).await?.schedules;
+    let schedules = dispatcher
+        .send(ListSchedulesRequest::default())
+        .await?
+        .schedules;
     print!(
         "{}",
         describe_occurrences(&occurrences, &schedules, now_ms())

@@ -56,6 +56,13 @@ export type TabProps = {
   inTab: number;
   /** Whether the Block with the keyboard is marked: when the tab shows others to tell it from. */
   marksFocus: boolean;
+  /**
+   * A Block that stays where it is, as a Bot's Thread Block (WVE-178): not dragged, floated,
+   * minimized or closed. Device-local things, focus and zoom, still work.
+   */
+  locked?: string;
+  /** Whether a Block may be dropped at a target; anywhere when not given. */
+  allows?(block: SessionBlock, target: Target): boolean;
 };
 
 /**
@@ -113,7 +120,7 @@ function dropAt(x: number, y: number, dragged: string): Drop | undefined {
  * Dragging a docked Block by its rail: past a few pixels it's being moved, a frame shows where it
  * would land, and letting go there moves it. A press that goes nowhere stays a click.
  */
-function useBlockDrag(move: BlockActions['move']) {
+function useBlockDrag(move: BlockActions['move'], allows?: TabProps['allows']) {
   const [drag, setDrag] = useState<{ block: SessionBlock; title: string; x: number; y: number; drop?: Drop }>();
   const start = (event: ReactPointerEvent, block: SessionBlock, title: string) => {
     if (event.button !== 0) return;
@@ -124,6 +131,8 @@ function useBlockDrag(move: BlockActions['move']) {
       if (!moving && Math.hypot(next.clientX - from.x, next.clientY - from.y) < DRAG_START) return;
       moving = true;
       latest = dropAt(next.clientX, next.clientY, block.id);
+      // A target refused, as one before a Bot's Thread Block, shows nothing and takes nothing.
+      if (latest && allows && !allows(block, latest.target)) latest = undefined;
       setDrag({ block, title, x: next.clientX, y: next.clientY, ...(latest ? { drop: latest } : {}) });
     };
     const done = (next: PointerEvent) => {
@@ -184,7 +193,8 @@ export function BlockRail({ block, among, floating = false, drag, onHandle, ...p
   const name = title(block);
   const own = props.menu(block);
   const zoomed = props.zoomedId === block.id;
-  const handle = Boolean(onHandle ?? drag);
+  const pinned = props.locked === block.id;
+  const handle = !pinned && Boolean(onHandle ?? drag);
   const arrange = !among;
   const [renaming, setRenaming] = useState<string>();
   /** A Block's name: typed over while it's being renamed, else what a double click renames. */
@@ -199,7 +209,7 @@ export function BlockRail({ block, among, floating = false, drag, onHandle, ...p
   return (
     <div data-slot='block-rail' className={cn('flex h-9 shrink-0 items-stretch gap-px border-b border-border bg-title-bar pr-1 text-xs', handle && 'cursor-grab touch-none')}
       onPointerDown={(event) => {
-        if (renaming) return;
+        if (renaming || pinned) return;
         if (onHandle) onHandle(event);
         else drag?.start(event, block, name);
       }}>
@@ -233,11 +243,11 @@ export function BlockRail({ block, among, floating = false, drag, onHandle, ...p
       <div className='flex shrink-0 items-center gap-0.5' onPointerDown={(event) => event.stopPropagation()}>
         {arrange && !floating && <RailButton label={`Split ${name} right`} hint='Split Right' icon={LayoutTwoColumnIcon} onClick={() => actions.split(block.id, 'right')} />}
         {arrange && !floating && <RailButton label={`Split ${name} down`} hint='Split Down' icon={LayoutTwoRowIcon} onClick={() => actions.split(block.id, 'down')} />}
-        {arrange && (
+        {arrange && !pinned && (
           <RailButton label={floating ? `Dock ${name}` : `Float ${name}`} hint={floating ? 'Dock' : 'Float'}
             icon={floating ? PictureInPictureExitIcon : PictureInPictureOnIcon} onClick={() => actions.float(block)} />
         )}
-        {arrange && floating && <RailButton label={`Minimize ${name}`} hint='Minimize' icon={MinusSignIcon} onClick={() => actions.minimize(block, true)} />}
+        {arrange && floating && !pinned && <RailButton label={`Minimize ${name}`} hint='Minimize' icon={MinusSignIcon} onClick={() => actions.minimize(block, true)} />}
         {arrange && (props.inTab > 1 || zoomed) && (
           <RailButton label={zoomed ? `Unzoom ${name}` : `Zoom ${name}`} hint={zoomed ? 'Unzoom' : 'Zoom'}
             icon={zoomed ? ArrowShrink01Icon : ArrowExpand01Icon} pressed={zoomed} onClick={() => actions.zoom(block.id)} />
@@ -254,7 +264,7 @@ export function BlockRail({ block, among, floating = false, drag, onHandle, ...p
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-        <RailButton label={`Close ${name}`} hint='Close' icon={Cancel01Icon} onClick={() => actions.close(block)} />
+        {!pinned && <RailButton label={`Close ${name}`} hint='Close' icon={Cancel01Icon} onClick={() => actions.close(block)} />}
       </div>
     </div>
   );
@@ -420,7 +430,7 @@ function MinimizedBlocks({ blocks, ...props }: TabProps & { blocks: SessionBlock
  */
 export function TabBlocks({ tab, empty, ...props }: TabProps & { tab: SessionTab; empty: ReactNode }) {
   const body = useRef<HTMLDivElement>(null);
-  const drag = useBlockDrag(props.actions.move);
+  const drag = useBlockDrag(props.actions.move, props.allows);
   const zoomed = props.zoomedId ? tabBlocks(tab).find(({ id }) => id === props.zoomedId) : undefined;
   const floating = tab.floating ?? [];
   return (

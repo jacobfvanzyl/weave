@@ -18,8 +18,13 @@
 //! - A Bot whose thread has waited on the person longer than its `pause_after` is paused, and
 //!   its schedules' occurrences skipped, until the thread no longer waits ([`consider`]).
 //!
-//! The Dispatcher never reads a Host's files, so it can't check a home is there: the first
-//! thread's Host says, by refusing it.
+//! - A Bot's home is made before the Bot is added ([`home`], WVE-178): its Host makes it with
+//!   `repos/init`, a git repository of its own with the Bot's first memory files, and the Bot
+//!   keeps the directory as the Host gives it. The Dispatcher never reads a Host's files itself.
+//! - Those watching the Bots are told of each change to how one lists ([`watch`]).
+
+mod home;
+mod watch;
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -28,6 +33,7 @@ use agent_client_protocol::Error;
 use agent_client_protocol::schema::v1::ContentBlock;
 use weave_host_client::HostHandle;
 use weave_host_protocol::dispatcher::AddBotRequest;
+use weave_host_protocol::dispatcher::AddBotResponse;
 use weave_host_protocol::dispatcher::Bot;
 use weave_host_protocol::dispatcher::BotState;
 use weave_host_protocol::dispatcher::BotThread;
@@ -44,6 +50,8 @@ use weave_host_protocol::threads::SetSuccessorRequest;
 use weave_host_protocol::threads::ThreadId;
 use weave_host_protocol::threads::TurnState;
 use weave_host_protocol::turns::MAX_KEY;
+use weave_host_protocol::worktrees::InitRepositoryResponse;
+use weave_host_protocol::worktrees::REPOS_INIT_FEATURE;
 
 use crate::Shared;
 use crate::internal;
@@ -60,6 +68,7 @@ use crate::store::BotError;
 use crate::store::BotPrompt;
 use crate::store::Delivery;
 use crate::store::DeliveryState;
+use crate::store::MOST_BOTS;
 use crate::store::NewBot;
 use crate::store::NewThread;
 use crate::store::Step;
@@ -67,6 +76,9 @@ use crate::store::StoredBot;
 use crate::store::StoredHost;
 use crate::store::Work;
 use crate::store::answered_thread;
+use crate::store::too_many;
+
+pub(crate) use self::watch::Watchers;
 
 /// How many continuations of an interrupted save turn are followed, at most.
 const MOST_CONTINUATIONS: usize = 64;
@@ -91,20 +103,33 @@ impl Shared {
         Ok(self.listed_bot(bot, &hosts))
     }
 
-    fn find_bot(&self, by: &str) -> Result<StoredBot, Error> {
+    pub(crate) fn find_bot(&self, by: &str) -> Result<StoredBot, Error> {
         self.store
             .find_bot(by)
             .map_err(internal)?
             .ok_or_else(|| invalid(format!("there's no Bot {by}")))
     }
 
-    pub(crate) fn add_bot(&self, request: AddBotRequest) -> Result<Bot, Error> {
+    /// Add the Bot `request` asks for, made by the Bot `created_by` names, by id, if one made it:
+    /// checked first, then its home made by its Host, then written down with the home as the
+    /// Host gave it. No Bot is added when its home can't be made, nor one a Bot makes once there
+    /// are [`MOST_BOTS`]. The API never names a maker; a Bot's own tools do.
+    pub(crate) async fn add_bot(
+        &self,
+        request: AddBotRequest,
+        created_by: Option<&str>,
+    ) -> Result<AddBotResponse, Error> {
+        let name = self.store.free_bot_name(&request.name).map_err(refused)?;
         let host = self.resolve_host(&request.host)?;
         let agent_id = request.agent_id.trim();
         if agent_id.is_empty() {
             return Err(invalid("a Bot needs an agent"));
         }
-        whole(&request.home)?;
+        let home = match request.home {
+            Some(home) => home,
+            None => home::default_home(&name).map_err(invalid)?,
+        };
+        whole(&home)?;
         let zone = request.zone.unwrap_or_else(scheduler::local_zone);
         scheduler::zone_named(&zone).map_err(invalid)?;
         let new_thread_at = request
@@ -113,24 +138,85 @@ impl Shared {
             .map(daily)
             .transpose()
             .map_err(invalid)?;
+        let created_by = match created_by {
+            Some(by) => Some(self.find_bot(by)?.id),
+            None => None,
+        };
+        if created_by.is_some() {
+            let had = self.store.bots().map_err(internal)?.len();
+            if had >= usize::try_from(MOST_BOTS).unwrap_or(usize::MAX) {
+                return Err(invalid(too_many(u32::try_from(had).unwrap_or(u32::MAX))));
+            }
+        }
+        let made = self
+            .make_home(&host, &home, &name, request.job.as_deref())
+            .await?;
         let new = NewBot {
-            name: request.name,
+            name,
             host_id: host.host_id,
             agent_id: agent_id.to_owned(),
-            home: request.home,
+            home: made.path.clone(),
             policy: request.policy.unwrap_or_default(),
             mode: request.mode,
             new_thread_at,
             zone,
             pause_after: request.pause_after.unwrap_or(DEFAULT_PAUSE_AFTER),
+            created_by,
         };
         let bot = self
             .store
             .add_bot(&new, self.config.clock.now())
             .map_err(refused)?;
-        tracing::info!(bot = %bot.name, host = %bot.host_id, "added a Bot");
+        tracing::info!(bot = %bot.name, host = %bot.host_id, home = %bot.home.display(), "added a Bot");
         self.schedules_changed.notify_one();
-        self.bot(&bot.id)
+        self.bots_changed();
+        Ok(AddBotResponse {
+            bot: self.bot(&bot.id)?,
+            home: Some(made),
+        })
+    }
+
+    /// Have `host` make the home of the Bot called `name` at `home`, as its Host gives it back.
+    async fn make_home(
+        &self,
+        host: &StoredHost,
+        home: &Path,
+        name: &str,
+        job: Option<&str>,
+    ) -> Result<InitRepositoryResponse, Error> {
+        let Some(handle) = self.handle(&host.host_id) else {
+            return Err(errors::host_unavailable(format!(
+                "{} isn't connected to the Dispatcher now, so it can't make {name}'s home; add \
+                 the Bot once it's back",
+                host.name
+            )));
+        };
+        if !handle
+            .hello()
+            .features
+            .iter()
+            .any(|feature| feature == REPOS_INIT_FEATURE)
+        {
+            return Err(invalid(format!(
+                "{}'s weave is too old to make {name}'s home: update weave there, and add the Bot \
+                 again",
+                host.name
+            )));
+        }
+        match handle.send(home::request(home, name, job)).await {
+            Ok(made) => Ok(made),
+            Err(error) if link::again(&error) => Err(errors::host_unavailable(format!(
+                "{} couldn't be asked to make {name}'s home now: {}",
+                host.name,
+                said(&error)
+            ))),
+            Err(error) => Err(invalid(format!(
+                "{} couldn't make {name}'s home at {}: {}",
+                host.name,
+                home.display(),
+                said(&error)
+            ))),
+        }
     }
 
     pub(crate) fn update_bot(&self, request: UpdateBotRequest) -> Result<Bot, Error> {
@@ -155,6 +241,7 @@ impl Shared {
             .map_err(refused)?;
         tracing::info!(bot = %bot.name, "changed a Bot");
         self.schedules_changed.notify_one();
+        self.bots_changed();
         self.bot(&bot.id)
     }
 
@@ -163,6 +250,7 @@ impl Shared {
         let bot = self.store.remove_bot(by).map_err(refused)?;
         tracing::info!(bot = %bot.name, "removed a Bot");
         self.schedules_changed.notify_one();
+        self.bots_changed();
         Ok(())
     }
 
@@ -207,6 +295,7 @@ impl Shared {
             .map_err(refused)?;
         tracing::info!(bot = %bot.name, "a Bot begins a new thread, as asked");
         self.wake(&bot.host_id);
+        self.bots_changed();
         self.bot(&bot.id)
     }
 
@@ -254,6 +343,8 @@ impl Shared {
             pause_after: bot.pause_after,
             created_at: bot.created_at,
             updated_at: bot.updated_at,
+            created_by: bot.created_by,
+            created_by_name: bot.created_by_name,
         }
     }
 }
@@ -262,6 +353,14 @@ fn refused(error: BotError) -> Error {
     match error {
         BotError::Refused(why) => invalid(why),
         BotError::Failed(why) => internal(why),
+    }
+}
+
+/// What a Host's `error` said: its message, and its data when that's words too.
+pub(crate) fn said(error: &Error) -> String {
+    match error.data.as_ref().and_then(serde_json::Value::as_str) {
+        Some(data) if !error.message.contains(data) => format!("{}: {data}", error.message),
+        _ => error.message.clone(),
     }
 }
 

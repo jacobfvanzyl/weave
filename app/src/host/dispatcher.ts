@@ -13,6 +13,8 @@ import {
   type ClientInfo,
   type DispatcherHello,
   type DispatcherMethod,
+  type DispatcherNotificationMethod,
+  type DispatcherNotifications,
   type DispatcherRequests,
   type HostUnavailable,
 } from './protocol';
@@ -66,7 +68,7 @@ type Waiting = { resolve(result: unknown): void; reject(error: HostError): void 
 
 /**
  * Requests and their answers over a transport. The Dispatcher sends no requests, so anything
- * else it sends is a notification.
+ * else it sends is a notification (`receive` says it answered none).
  */
 class Requests {
   #transport?: Transport;
@@ -180,12 +182,31 @@ export function dispatcherFailed(error: unknown): ConnectError {
   }
 }
 
+/** A notification the Dispatcher sent, such as `bots/updated`. */
+export type DispatcherNotification = {
+  [M in DispatcherNotificationMethod]: { method: M; params: DispatcherNotifications[M] };
+}[DispatcherNotificationMethod];
+
+/** What the Dispatcher sent that answers no request, as a notification, if it is one. */
+export function dispatcherNotification(text: string): DispatcherNotification | undefined {
+  let message: unknown;
+  try {
+    message = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isObject(message) || 'id' in message || typeof message.method !== 'string') return undefined;
+  return { method: message.method, params: message.params } as DispatcherNotification;
+}
+
 export type DispatcherConnectOptions = {
   connector: Connector;
   client: ClientInfo;
   credentials: DispatcherCredentials;
   /** The connection ended, with the WebSocket's close code when there was one. */
   onClosed?(close: { code?: number; reason?: string }): void;
+  /** What the Dispatcher tells the connection, as after `bots/watch`, in the order it's sent. */
+  onNotification?(notification: DispatcherNotification): void;
   /** Gives up on connecting: the transport closes, and `connect` rejects with the signal's reason. */
   signal?: AbortSignal;
 };
@@ -205,7 +226,11 @@ export class DispatcherConnection {
     const abandoned = () => new ConnectError('connection', describe(signal?.reason) || 'Gave up connecting to the Dispatcher.', signal?.reason);
     const connection = new DispatcherConnection();
     const events: TransportEvents = {
-      message: (text) => { connection.#requests.receive(text); },
+      message: (text) => {
+        if (connection.#requests.receive(text)) return;
+        const notification = dispatcherNotification(text);
+        if (notification) options.onNotification?.(notification);
+      },
       closed: (close) => connection.#ended(close),
     };
     try {

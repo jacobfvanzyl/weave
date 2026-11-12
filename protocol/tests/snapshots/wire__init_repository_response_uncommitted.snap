@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&InitRepositoryResponse\n{\n    path: \"/home/jaco/bots/odin\".into(), created: false, initialized: true,\n    files:\n    Some(FilesMade::Uncommitted\n    {\n        why:\n        \"git has no user.name and user.email to commit them as\".to_owned(),\n    }),\n})"
+---
+{
+  "path": "/home/jaco/bots/odin",
+  "initialized": true,
+  "files": {
+    "state": "uncommitted",
+    "why": "git has no user.name and user.email to commit them as"
+  }
+}

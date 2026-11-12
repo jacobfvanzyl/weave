@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&InitRepositoryResponse\n{\n    path: \"/home/jaco/bots/odin\".into(), created: false, initialized: false,\n    files: Some(FilesMade::Kept { file: \"AGENTS.md\".into(), }),\n})"
+---
+{
+  "path": "/home/jaco/bots/odin",
+  "files": {
+    "state": "kept",
+    "file": "AGENTS.md"
+  }
+}

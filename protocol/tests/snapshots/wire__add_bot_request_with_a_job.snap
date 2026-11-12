@@ -1,0 +1,13 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&AddBotRequest\n{\n    name: \"scribe\".to_owned(), host: \"homelab\".to_owned(), agent_id:\n    \"claude\".to_owned(), home: None, job:\n    Some(\"Keep the meeting notes in order.\".to_owned()), policy: None, mode:\n    None, new_thread_at: None, zone: None, pause_after: None,\n})"
+---
+{
+  "method": "bots/add",
+  "params": {
+    "name": "scribe",
+    "host": "homelab",
+    "agentId": "claude",
+    "job": "Keep the meeting notes in order."
+  }
+}

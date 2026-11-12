@@ -15,8 +15,9 @@
 //! - [`projects`]: the person's Projects (ADR 0031, WVE-189), each with at most one location on
 //!   each Host.
 //! - [`bots`]: the person's Bots (ADR 0028, WVE-118), whose work goes on in ordinary threads on
-//!   one Host each, and their new threads; and [`wakeups`], the service tools a Bot's thread
-//!   asks to be woken with, the first the Dispatcher declares on each Host (WVE-171).
+//!   one Host each, and their new threads; and [`tools`], the service tools the Dispatcher
+//!   declares on each Host (WVE-171), with which a Bot's thread asks to be woken, manages its
+//!   own schedules and makes another Bot (WVE-178).
 //! - [`api`]: what the `weave` CLI asks over its socket ([`socket`]), and over its WebSocket
 //!   from the person's other devices once one pairs ([`devices`], WVE-176), which
 //!   `weave-remote` serves as it does the Host's.
@@ -41,7 +42,7 @@ mod projects;
 mod scheduler;
 pub mod socket;
 mod store;
-mod wakeups;
+mod tools;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -57,6 +58,7 @@ use tokio_util::sync::CancellationToken;
 use weave_host_client::HostHandle;
 use weave_host_client::remote::DeviceKey;
 use weave_host_protocol::dispatcher::AddBotRequest;
+use weave_host_protocol::dispatcher::AddBotResponse;
 use weave_host_protocol::dispatcher::AddProjectRequest;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
 use weave_host_protocol::dispatcher::Bot;
@@ -161,6 +163,8 @@ pub(crate) struct Shared {
     pub(crate) links: Mutex<HashMap<String, Link>>,
     /// Rung when a schedule is added, changed or removed.
     schedules_changed: Notify,
+    /// The API's connections watching the Bots (`bots/watch`).
+    pub(crate) bot_watchers: bots::Watchers,
     scheduler: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -190,6 +194,7 @@ impl Dispatcher {
             stop: CancellationToken::new(),
             links: Mutex::new(HashMap::new()),
             schedules_changed: Notify::new(),
+            bot_watchers: bots::Watchers::default(),
             scheduler: Mutex::new(None),
         });
         let scheduler = tokio::spawn(scheduler::run(Arc::clone(&shared)));
@@ -268,7 +273,7 @@ impl Dispatcher {
     }
 
     pub fn schedules(&self) -> Result<Vec<Schedule>, Error> {
-        self.shared.schedules()
+        self.shared.schedules(None)
     }
 
     pub fn add_schedule(&self, request: AddScheduleRequest) -> Result<Schedule, Error> {
@@ -330,8 +335,19 @@ impl Dispatcher {
         self.shared.bot(by)
     }
 
-    pub fn add_bot(&self, request: AddBotRequest) -> Result<Bot, Error> {
-        self.shared.add_bot(request)
+    /// Add a Bot, once its Host has made its home.
+    pub async fn add_bot(&self, request: AddBotRequest) -> Result<AddBotResponse, Error> {
+        self.shared.add_bot(request, None).await
+    }
+
+    /// Add a Bot as `bots/add` does, made by the Bot `creator` names, by id or name, as a Bot's
+    /// own tools add one (WVE-178).
+    pub async fn add_bot_made_by(
+        &self,
+        request: AddBotRequest,
+        creator: &str,
+    ) -> Result<AddBotResponse, Error> {
+        self.shared.add_bot(request, Some(creator)).await
     }
 
     pub fn update_bot(&self, request: UpdateBotRequest) -> Result<Bot, Error> {
@@ -420,13 +436,19 @@ impl Shared {
             .ok_or_else(|| invalid(format!("there's no schedule {by}")))
     }
 
-    fn schedules(&self) -> Result<Vec<Schedule>, Error> {
+    /// The schedules, or only those that prompt the Bot `bot` names, by id or name.
+    fn schedules(&self, bot: Option<&str>) -> Result<Vec<Schedule>, Error> {
+        let bot_id = match bot {
+            Some(by) => Some(self.find_bot(by)?.id),
+            None => None,
+        };
         let schedules = self.store.schedules().map_err(internal)?;
         let hosts = self.store.hosts().map_err(internal)?;
         let bots = self.store.bots().map_err(internal)?;
         let now = self.config.clock.now();
         schedules
             .into_iter()
+            .filter(|schedule| bot_id.is_none() || schedule.bot_id == bot_id)
             .map(|schedule| self.listing(schedule, &hosts, &bots, now))
             .collect()
     }
@@ -502,6 +524,19 @@ impl Shared {
     }
 
     fn add_schedule(&self, request: AddScheduleRequest) -> Result<Schedule, Error> {
+        let schedule = self.new_schedule(request)?;
+        self.store.add_schedule(&schedule).map_err(invalid)?;
+        tracing::info!(schedule = %schedule.name, "added a schedule");
+        self.schedules_changed.notify_one();
+        self.schedule(&schedule.id)
+    }
+
+    /// The schedule `request` asks for, checked, as `schedules/add` and a Bot's `add_schedule`
+    /// tool write it down; its name is checked as it's written.
+    pub(crate) fn new_schedule(
+        &self,
+        request: AddScheduleRequest,
+    ) -> Result<StoredSchedule, Error> {
         let name = request.name.trim().to_owned();
         if name.is_empty() {
             return Err(invalid("a schedule needs a name".to_owned()));
@@ -598,7 +633,7 @@ impl Shared {
                 (host.host_id, run, None)
             }
         };
-        let schedule = StoredSchedule {
+        Ok(StoredSchedule {
             id: StoredSchedule::new_id(),
             name,
             cron,
@@ -614,11 +649,8 @@ impl Shared {
             paused: None,
             failures: 0,
             wake_call: None,
-        };
-        self.store.add_schedule(&schedule).map_err(invalid)?;
-        tracing::info!(schedule = %schedule.name, "added a schedule");
-        self.schedules_changed.notify_one();
-        self.schedule(&schedule.id)
+            made_call: None,
+        })
     }
 
     fn remove_schedule(&self, by: &str) -> Result<(), Error> {
@@ -738,6 +770,7 @@ impl Shared {
             link.stopped().await;
         }
         tracing::info!(host = %found.host_id, name = %found.name, "forgot a Host");
+        self.bots_changed();
         api::stop_if_unused(self).await;
         Ok(())
     }

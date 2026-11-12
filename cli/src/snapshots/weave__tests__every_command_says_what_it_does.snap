@@ -907,7 +907,7 @@ Usage: weave bots [COMMAND]
 
 Commands:
   list        The Bots, what each is doing, and its thread (the default)
-  add         Add a Bot on one of your Hosts, making its home first when that's this computer's. It has no thread until the first prompt you send it
+  add         Add a Bot on one of your Hosts, which makes its home first. It has no thread until the first prompt you send it
   show        A Bot: how it's set up, its threads and its schedules
   update      Change a Bot. A thread it has open keeps the approvals and mode it started with
   remove      Forget a Bot and its schedules. Its threads and its home stay
@@ -932,7 +932,7 @@ Options:
           Print help
 
 $ weave bots add --help
-Add a Bot on one of your Hosts, making its home first when that's this computer's. It has no thread until the first prompt you send it
+Add a Bot on one of your Hosts, which makes its home first. It has no thread until the first prompt you send it
 
 Usage: weave bots add [OPTIONS] --agent <AGENT> <NAME>
 
@@ -948,7 +948,10 @@ Options:
           The Host its threads run on, by its id or name as `weave hosts` lists them; this computer's when omitted, which has to have joined the Dispatcher
 
       --home <DIR>
-          Its home on that Host: the git repository its threads run in and its memory is kept in, whole or under ~ there. ~/bots/<name> when omitted. On this computer's Host it's made, with its first memory files, unless they're there
+          Its home on that Host: the git repository of its own its threads run in and its memory is kept in, whole or under ~ there; on this computer's Host, from this directory too. ~/bots/<name> when omitted. The Host makes it, with its first memory files, unless one of them is there
+
+      --job <TEXT>
+          What it's for, in your words, which its first AGENTS.md says
 
       --approve <KINDS>
           Tool kinds its threads approve without asking you, comma-separated: read, edit, delete, move, search, execute, think, fetch, switch_mode, other; or all. It asks you about the rest

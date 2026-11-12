@@ -5,6 +5,7 @@
 // the app says nothing of it.
 import {
   type AppModel,
+  type BotSummary,
   type HostSummary,
   type KnownSession,
   type ProjectSummary,
@@ -12,6 +13,7 @@ import {
   type ThreadSummary,
   sessionKey,
   sessionOfKey,
+  threadKey,
 } from '@/app/app-controller';
 
 /** A directory as a Session is keyed by it: without a slash at its end, which a thread's may have. */
@@ -36,6 +38,35 @@ export const sessionOfThread = (thread: Pick<ThreadSummary, 'hostId' | 'cwd' | '
 export const sessionWith = (sessions: readonly SessionSummary[], key: string) => sessions.find(({ threads }) => threads.includes(key));
 
 const recency = (thread: ThreadSummary) => thread.lastActivityAt ?? 0;
+
+/**
+ * The directory of a Bot's Session (WVE-178): its home, which its Dispatcher gives whole, as its
+ * Host names it. From a Dispatcher that gives it under `~`, the directory its threads run in, once
+ * one is listed. None until then.
+ */
+export function botDirectory(bot: Pick<BotSummary, 'hostId' | 'home' | 'thread' | 'threads'>, threads: readonly ThreadSummary[]): string | undefined {
+  if (bot.home.startsWith('/')) return plain(bot.home);
+  const ids = [...(bot.thread ? [bot.thread] : []), ...[...bot.threads].reverse().map(({ threadId }) => threadId)];
+  for (const id of ids) {
+    const listed = threads.find(({ key }) => key === threadKey(bot.hostId, id));
+    if (listed) return threadDirectory(listed);
+  }
+  return undefined;
+}
+
+/** A Bot's Session, by key, where its directory is known. */
+export const botSessionKey = (bot: Pick<BotSummary, 'hostId' | 'home' | 'thread' | 'threads'>, threads: readonly ThreadSummary[]) => {
+  const directory = botDirectory(bot, threads);
+  return directory === undefined ? undefined : sessionKey(bot.hostId, directory);
+};
+
+/** The Bots' Sessions, by key: listed under Bots, never under a Project or a Host. */
+export const botSessionKeys = (model: Pick<AppModel, 'bots' | 'threads'>) =>
+  new Set((model.bots ?? []).flatMap((bot) => botSessionKey(bot, model.threads) ?? []));
+
+/** The Bots' current threads, by key: the person's as much as any thread in a Session of theirs. */
+export const botThreadKeys = (model: Pick<AppModel, 'bots'>) =>
+  new Set((model.bots ?? []).flatMap((bot) => bot.thread ? [threadKey(bot.hostId, bot.thread)] : []));
 
 /** What places a thread in a Session: where it runs. */
 type Located = Pick<ThreadSummary, 'key' | 'hostId' | 'cwd' | 'git'>;
@@ -108,19 +139,24 @@ export function threadSessions(model: Pick<AppModel, 'threads' | 'known'>): Map<
   return placed;
 }
 
-/** The listed threads that are in a Session: the ones the app tells the person about. */
-export function ownThreads(model: Pick<AppModel, 'threads' | 'known'>): ThreadSummary[] {
+/**
+ * The listed threads that are in a Session, or are a Bot's current thread: the ones the app tells
+ * the person about. A Bot's Session is hidden from the list of Sessions, not its thread.
+ */
+export function ownThreads(model: Pick<AppModel, 'threads' | 'known' | 'bots'>): ThreadSummary[] {
   const placed = threadSessions(model);
-  return model.threads.filter(({ key }) => placed.has(key));
+  const bots = botThreadKeys(model);
+  return model.threads.filter(({ key }) => placed.has(key) || bots.has(key));
 }
 
 /**
  * The Sessions there are: those the Hosts keep, each with its own threads that are listed, the
  * most recently active first. A Session is its Host's, made when a client starts one, and the app
  * makes none up from the threads listed. `also` names one being started here, which shows before
- * its Host has made it: its first Block makes it.
+ * its Host has made it: its first Block makes it. A Bot's Session isn't here: it's listed as the
+ * Bot (WVE-178), and once the Bot is removed it's an ordinary Session again.
  */
-export function sessionSummaries(model: Pick<AppModel, 'threads' | 'known' | 'unread'>, options: { also?: string } = {}): SessionSummary[] {
+export function sessionSummaries(model: Pick<AppModel, 'threads' | 'known' | 'unread' | 'bots'>, options: { also?: string } = {}): SessionSummary[] {
   const sessions = new Map<string, SessionSummary & { members: ThreadSummary[] }>();
   const session = (hostId: string, directory: string) => {
     const key = sessionKey(hostId, directory);
@@ -151,6 +187,7 @@ export function sessionSummaries(model: Pick<AppModel, 'threads' | 'known' | 'un
       found.git = { repo: thread.git.repo, ...(thread.git.branch ? { branch: thread.git.branch } : {}) };
     }
   }
+  for (const key of botSessionKeys(model)) sessions.delete(key);
   return [...sessions.values()].map(({ members, ...found }) => {
     const live = members.filter(({ state }) => state !== 'closed');
     const latest = Math.max(found.lastActivityAt ?? 0, ...members.map(recency));

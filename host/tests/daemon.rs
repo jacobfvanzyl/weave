@@ -5466,6 +5466,322 @@ async fn a_signal_waits_for_running_turns_unless_a_client_drained_first() {
     );
 }
 
+/// `repos/init` (WVE-178): a repository of its own, with a client's first files committed alone.
+mod repos {
+    use pretty_assertions::assert_eq;
+    use weave_host_protocol::worktrees::FilesMade;
+    use weave_host_protocol::worktrees::InitRepositoryRequest;
+    use weave_host_protocol::worktrees::InitRepositoryResponse;
+    use weave_host_protocol::worktrees::REPOS_INIT_FEATURE;
+    use weave_host_protocol::worktrees::RepositoryFile;
+
+    use super::*;
+
+    /// A Bot's first memory files, as the Dispatcher asks for them.
+    fn init(path: &Path) -> InitRepositoryRequest {
+        InitRepositoryRequest {
+            path: path.to_path_buf(),
+            files: vec![
+                RepositoryFile {
+                    path: "AGENTS.md".into(),
+                    text: "# odin\n".to_owned(),
+                },
+                RepositoryFile {
+                    path: "CLAUDE.md".into(),
+                    text: "@AGENTS.md\n".to_owned(),
+                },
+            ],
+            message: "Start odin's home".to_owned(),
+        }
+    }
+
+    /// The files the latest commit in `dir` changed, and its message.
+    fn committed(dir: &Path) -> (String, String) {
+        (
+            git(dir, &["show", "--name-only", "--format=", "HEAD"]),
+            git(dir, &["log", "-1", "--format=%s"]),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_new_directory_becomes_a_repository_with_its_files_committed() {
+        let world = World::new();
+        let daemon = world.daemon(false, Duration::from_secs(60));
+        let client = world.client(&daemon).await;
+        assert!(
+            client
+                .connection
+                .hello()
+                .features
+                .iter()
+                .any(|feature| feature == REPOS_INIT_FEATURE)
+        );
+        let home = world.cwd().join("bots/odin");
+        let made = client
+            .connection
+            .send(init(&home))
+            .await
+            .expect("repos/init");
+        let path = home.canonicalize().expect("made");
+        assert_eq!(
+            made,
+            InitRepositoryResponse {
+                path: path.clone(),
+                created: true,
+                initialized: true,
+                files: Some(FilesMade::Committed),
+            }
+        );
+        assert_eq!(
+            committed(&path),
+            (
+                "AGENTS.md\nCLAUDE.md".to_owned(),
+                "Start odin's home".to_owned()
+            )
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join("CLAUDE.md")).expect("written"),
+            "@AGENTS.md\n"
+        );
+        assert_eq!(git(&path, &["status", "--porcelain"]), "");
+        assert_eq!(
+            git(&path, &["rev-parse", "--show-toplevel"]),
+            path.display().to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_directory_becomes_a_repository() {
+        let world = World::new();
+        let daemon = world.daemon(false, Duration::from_secs(60));
+        let client = world.client(&daemon).await;
+        let home = world.cwd().join("odin");
+        std::fs::create_dir_all(&home).expect("a directory");
+        let made = client
+            .connection
+            .send(init(&home))
+            .await
+            .expect("repos/init");
+        assert_eq!(
+            (made.created, made.initialized, made.files),
+            (false, true, Some(FilesMade::Committed))
+        );
+        // Without files, it's only made a repository, and there's nothing to say of them.
+        let bare = world.cwd().join("bare");
+        let made = client
+            .connection
+            .send(InitRepositoryRequest {
+                path: bare.clone(),
+                files: Vec::new(),
+                message: String::new(),
+            })
+            .await
+            .expect("repos/init");
+        assert_eq!(
+            (made.created, made.initialized, made.files),
+            (true, true, None)
+        );
+        assert!(bare.join(".git").is_dir());
+    }
+
+    /// The top of a repository is kept, and only the files are committed: what was staged or
+    /// untracked there stays so.
+    #[tokio::test]
+    async fn a_repository_is_kept_and_only_the_files_are_committed() {
+        let world = World::new();
+        let repo = world.repository();
+        let daemon = world.daemon(false, Duration::from_secs(60));
+        let client = world.client(&daemon).await;
+        std::fs::write(repo.join("README.md"), "changed\n").expect("a change");
+        git(&repo, &["add", "README.md"]);
+        std::fs::write(repo.join("scratch.txt"), "mine\n").expect("an untracked file");
+        let made = client
+            .connection
+            .send(init(&repo))
+            .await
+            .expect("repos/init");
+        assert_eq!(
+            made,
+            InitRepositoryResponse {
+                path: repo.clone(),
+                created: false,
+                initialized: false,
+                files: Some(FilesMade::Committed),
+            }
+        );
+        assert_eq!(committed(&repo).0, "AGENTS.md\nCLAUDE.md");
+        assert_eq!(
+            git(&repo, &["status", "--porcelain"]),
+            "M  README.md\n?? scratch.txt"
+        );
+    }
+
+    /// A directory inside another repository's work tree is refused, and one that isn't there
+    /// isn't made.
+    #[tokio::test]
+    async fn a_directory_inside_another_repository_is_refused() {
+        let world = World::new();
+        let repo = world.repository();
+        let daemon = world.daemon(false, Duration::from_secs(60));
+        let client = world.client(&daemon).await;
+        let inside = repo.join("bots/odin");
+        let refused = client
+            .connection
+            .send(init(&inside))
+            .await
+            .expect_err("refused");
+        assert!(
+            refused.message.contains("inside the repository at")
+                && refused.message.contains("a repository of its own"),
+            "{refused:?}"
+        );
+        assert!(!repo.join("bots").exists());
+        std::fs::create_dir_all(repo.join("docs")).expect("a directory");
+        client
+            .connection
+            .send(init(&repo.join("docs")))
+            .await
+            .expect_err("refused");
+        assert!(!repo.join("docs/AGENTS.md").exists());
+    }
+
+    /// One of the files there already: none is written, and nothing committed.
+    #[tokio::test]
+    async fn a_file_there_already_leaves_them_all_unwritten() {
+        let world = World::new();
+        let daemon = world.daemon(false, Duration::from_secs(60));
+        let client = world.client(&daemon).await;
+        let home = world.cwd().join("odin");
+        std::fs::create_dir_all(&home).expect("a directory");
+        std::fs::write(home.join("CLAUDE.md"), "my own\n").expect("a file");
+        let made = client
+            .connection
+            .send(init(&home))
+            .await
+            .expect("repos/init");
+        assert_eq!(
+            (made.initialized, made.files),
+            (
+                true,
+                Some(FilesMade::Kept {
+                    file: "CLAUDE.md".into()
+                })
+            )
+        );
+        assert!(!home.join("AGENTS.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(home.join("CLAUDE.md")).expect("kept"),
+            "my own\n"
+        );
+        let log = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&home)
+            .args(["rev-parse", "--verify", "HEAD"])
+            .envs(ISOLATED_GIT.iter().copied())
+            .output()
+            .expect("git runs");
+        assert!(!log.status.success(), "nothing committed");
+    }
+
+    /// Paths outside the directory, a relative directory and files without a message are
+    /// refused, and nothing is made.
+    #[tokio::test]
+    async fn what_isnt_within_the_directory_is_refused() {
+        let world = World::new();
+        let daemon = world.daemon(false, Duration::from_secs(60));
+        let client = world.client(&daemon).await;
+        let home = world.cwd().join("odin");
+        for wrong in [
+            "../escape.md",
+            "/tmp/escape.md",
+            "notes/../../escape.md",
+            ".git/config",
+        ] {
+            let mut request = init(&home);
+            request.files[1].path = wrong.into();
+            let refused = client.connection.send(request).await.expect_err("refused");
+            assert!(
+                refused.message.contains("within the directory"),
+                "{wrong}: {refused:?}"
+            );
+        }
+        let relative = client
+            .connection
+            .send(init(Path::new("bots/odin")))
+            .await
+            .expect_err("refused");
+        assert!(
+            relative.message.contains("isn't a whole path"),
+            "{relative:?}"
+        );
+        let silent = client
+            .connection
+            .send(InitRepositoryRequest {
+                message: " ".to_owned(),
+                ..init(&home)
+            })
+            .await
+            .expect_err("refused");
+        assert!(silent.message.contains("message"), "{silent:?}");
+        assert!(!home.exists());
+    }
+
+    /// `~` is the Host's home, as a client on another computer names a directory there.
+    #[tokio::test]
+    async fn a_tilde_is_under_the_hosts_home() {
+        let world = World::new();
+        let home = world.cwd().join("home");
+        std::fs::create_dir_all(&home).expect("a home");
+        let mut config = world.config(
+            false,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            false,
+        );
+        config.home = Some(home.clone());
+        let daemon = Daemon::new(config);
+        let client = world.client(&daemon).await;
+        let made = client
+            .connection
+            .send(init(Path::new("~/bots/odin")))
+            .await
+            .expect("repos/init");
+        assert_eq!(
+            made.path,
+            home.join("bots/odin").canonicalize().expect("made")
+        );
+        assert_eq!(made.files, Some(FilesMade::Committed));
+    }
+
+    /// Without a name and email for git to commit as, the files are written but not committed.
+    #[tokio::test]
+    async fn without_an_identity_the_files_stay_uncommitted() {
+        let world = World::new();
+        let mut config = world.config(
+            false,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            false,
+        );
+        config.environment.vars.retain(|name, _| {
+            !name.starts_with("GIT_AUTHOR") && !name.starts_with("GIT_COMMITTER")
+        });
+        let daemon = Daemon::new(config);
+        let client = world.client(&daemon).await;
+        let home = world.cwd().join("odin");
+        let made = client
+            .connection
+            .send(init(&home))
+            .await
+            .expect("repos/init");
+        let Some(FilesMade::Uncommitted { why }) = made.files else {
+            panic!("uncommitted: {made:?}");
+        };
+        assert!(why.contains("user.name"), "{why}");
+        assert!(home.join("AGENTS.md").is_file() && home.join("CLAUDE.md").is_file());
+    }
+}
+
 /// Sessions and their layouts (WVE-202).
 mod sessions {
     use pretty_assertions::assert_eq;

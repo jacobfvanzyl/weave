@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ArrowLeft01Icon, SidebarLeftIcon } from '@hugeicons/core-free-icons';
-import type { AppController, CreatedThread, OpenSession, SessionSummary } from '@/app/app-controller';
-import { sessionOfKey } from '@/app/app-controller';
+import type { AppController, BotSummary, CreatedThread, OpenSession, SessionSummary, ThreadSummary } from '@/app/app-controller';
+import { sessionKey, sessionOfKey } from '@/app/app-controller';
 import { useCommand, useCommandKeys } from '@/app/commands';
 import { useOpenThreadRequests } from '@/app/open-thread';
 import { platform } from '@/app/platform';
 import { usePhoneLayout } from '@/app/use-phone-layout';
+import { BotPage } from '@/components/bots/bot-page';
+import { BotView } from '@/components/bots/bot-view';
+import { NewBotDialog } from '@/components/bots/new-bot-dialog';
 import { CommandPalette } from '@/components/command-palette';
 import { EndSessionDialog } from '@/components/end-session-dialog';
 import { HostsDialog } from '@/components/hosts-dialog';
@@ -22,7 +25,8 @@ import { Button } from '@/components/ui/button';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import { Sidebar, SidebarInset, useSidebar } from '@/components/ui/sidebar';
 import { Spinner } from '@/components/ui/spinner';
-import { directoryName, sessionListView, sessionSummaries, sessionWith, waitingSessions } from '@/session/sessions';
+import { botOfThread, botSelection, selectedBot, waitingBots } from '@/session/bots';
+import { botSessionKey, directoryName, sessionListView, sessionSummaries, sessionWith, threadDirectories, threadDirectory, waitingSessions } from '@/session/sessions';
 import { loadLastSession, saveLastSession } from '@/session/view';
 import type { SurfaceLink } from '@/surface/surface-link';
 import { useSurface } from '@/surface/use-surface';
@@ -106,8 +110,15 @@ type ShellProps = {
   sessions: SessionSummary[];
   /** The Session on screen, once its Host has listed what's in it. */
   session?: OpenSession;
-  /** The Session to show, by key, and the thread in it to bring to the front. */
+  /** The Session to show, by key, or a Bot (`botSelection`), and the thread in it to bring to the front. */
   selected?: string;
+  /** The Bot on screen, and its Session once the store shows it. */
+  bot?: BotSummary;
+  botSession?: OpenSession;
+  /** How many Sessions and Bots other than the one on screen have something waiting on the person. */
+  waiting: number;
+  onOpenBotPage(): void;
+  onNewBot(): void;
   reveal?: string;
   onRevealed(): void;
   onOpenSession(key?: string): void;
@@ -119,7 +130,7 @@ type ShellProps = {
   onEndSession(session: SessionSummary): void;
 };
 
-function PhoneShell({ controller, sessions, session, selected, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onEndSession, surfaceLink }: ShellProps & {
+function PhoneShell({ controller, sessions, session, selected, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onEndSession, surfaceLink }: ShellProps & {
   surfaceLink?: SurfaceLink;
 }) {
   const { model } = controller;
@@ -129,8 +140,17 @@ function PhoneShell({ controller, sessions, session, selected, reveal, onReveale
   // With the thread on the Surface, the iPhone may turn for a bigger keyboard; elsewhere it stays upright.
   useEffect(() => surfaceLink?.setLandscape(surfaced), [surfaceLink, surfaced]);
   const back = () => onOpenSession(undefined);
-  const leading = <BackButton count={waitingSessions(sessions, selected)} onBack={back} />;
-  if (!selected) return <SessionList controller={controller} sessions={sessions} onOpen={onOpenSession} onOpenHosts={onOpenHosts} onNewSession={onNewSession} onEndSession={onEndSession} />;
+  const leading = <BackButton count={waiting} onBack={back} />;
+  if (!selected) {
+    return <SessionList controller={controller} sessions={sessions} onOpen={onOpenSession} onOpenBot={(id) => onOpenSession(botSelection(id))} onNewBot={onNewBot}
+      onOpenHosts={onOpenHosts} onNewSession={onNewSession} onEndSession={onEndSession} />;
+  }
+  if (bot) {
+    return (
+      <BotView controller={controller} bot={bot} session={botSession} phone leading={leading} reveal={reveal} onRevealed={onRevealed}
+        onOpenBot={onOpenBotPage} onOpenThread={onOpenThread} onCreated={onCreated} surface={surface} onBack={back} />
+    );
+  }
   if (!session) return <NoSession controller={controller} selected={selected} known={sessions.some(({ key }) => key === selected)} leading={leading} />;
   return (
     <SessionView key={session.key} controller={controller} session={session} members={membersOf(sessions, session.key)} phone leading={leading}
@@ -138,21 +158,25 @@ function PhoneShell({ controller, sessions, session, selected, reveal, onReveale
   );
 }
 
-function SplitShell({ controller, sessions, session, selected, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onEndSession }: ShellProps) {
+function SplitShell({ controller, sessions, session, selected, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onEndSession }: ShellProps) {
   const { setOpenMobile } = useSidebar();
-  const leading = <SidebarToggle waiting={waitingSessions(sessions, selected)} />;
+  const leading = <SidebarToggle waiting={waiting} />;
+  const open = (key: string) => {
+    onOpenSession(key);
+    setOpenMobile(false);
+  };
   return (
     <>
       <Sidebar collapsible='offcanvas'>
-        <SessionList controller={controller} sessions={sessions} selected={selected} onOpenHosts={onOpenHosts} onNewSession={onNewSession} onEndSession={onEndSession}
-          onOpen={(key) => {
-            onOpenSession(key);
-            setOpenMobile(false);
-          }} />
+        <SessionList controller={controller} sessions={sessions} selected={selected} selectedBot={selectedBot(selected)} onOpenHosts={onOpenHosts} onNewSession={onNewSession}
+          onEndSession={onEndSession} onOpen={open} onOpenBot={(id) => open(botSelection(id))} onNewBot={onNewBot} />
         <SidebarResizeHandle />
       </Sidebar>
       <SidebarInset className='min-h-0 min-w-0 overflow-hidden'>
-        {session
+        {bot
+          ? <BotView controller={controller} bot={bot} session={botSession} leading={leading} reveal={reveal} onRevealed={onRevealed}
+              onOpenBot={onOpenBotPage} onOpenThread={onOpenThread} onCreated={onCreated} />
+          : session
           ? <SessionView key={session.key} controller={controller} session={session} members={membersOf(sessions, session.key)} leading={leading}
               reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} />
           : <NoSession controller={controller} selected={selected} known={sessions.some(({ key }) => key === selected)} leading={leading} />}
@@ -183,7 +207,7 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
   // The Sessions the Hosts keep, and the one on screen before its Host has made it.
   // A Session being started here shows before its Host has it: its first Block makes it.
   const [starting, setStarting] = useState<string>();
-  const sessions = useMemo(() => sessionSummaries(model, { also: starting }), [model.threads, model.known, model.unread, starting]);
+  const sessions = useMemo(() => sessionSummaries(model, { also: starting }), [model.threads, model.known, model.unread, model.bots, starting]);
   const [reveal, setReveal] = useState<string>();
   // A thread asked for before its Host listed it, as by the link the app was opened with.
   const [wanted, setWanted] = useState<string>();
@@ -192,13 +216,23 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
   const [palette, setPalette] = useState(false);
   // The Session the person asked to end, until they confirm or don't.
   const [ending, setEnding] = useState<SessionSummary>();
+  const [botPage, setBotPage] = useState(false);
+  const [newBot, setNewBot] = useState(false);
   const openHosts = () => setHostsOpen(true);
   const unpaired = !model.starting && (!model.dispatcher || model.dispatcher.status === 'revoked');
+  // A Bot on screen is the Session at its home (WVE-178).
+  const botId = selectedBot(selected);
+  const bot = botId ? model.bots?.find(({ id }) => id === botId) : undefined;
+  const botSessionAt = bot ? botSessionKey(bot, model.threads) : undefined;
+  const showing = botId ? botSessionAt : selected;
 
+  useEffect(() => saveLastSession(selected), [selected]);
   useEffect(() => {
-    actions.selectSession?.(selected);
-    saveLastSession(selected);
-  }, [selected]);
+    actions.selectSession?.(showing);
+  }, [showing]);
+  useEffect(() => {
+    if (!botId) setBotPage(false);
+  }, [botId]);
 
   // Its Host names the Session's directory otherwise: the same Session, under that name.
   useEffect(() => {
@@ -208,16 +242,44 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
   const openThread = (key: string) => setWanted(key);
   useEffect(() => {
     if (!wanted) return;
+    // A Bot's thread opens the Bot, its Session being listed as the Bot.
+    const owner = botOfThread(model.bots, wanted);
+    if (owner) {
+      setSelected(botSelection(owner.id));
+      setWanted(undefined);
+      return;
+    }
     const session = sessionWith(sessions, wanted);
     if (!session) return;
     setSelected(session.key);
     setReveal(wanted);
     setWanted(undefined);
-  }, [wanted, sessions]);
+  }, [wanted, sessions, model.bots]);
   const created = (thread: CreatedThread) => {
     setStarting(thread.sessionKey);
     setSelected(thread.sessionKey);
     setReveal(thread.key);
+  };
+  /**
+   * A thread a Bot started elsewhere, given a Block in its directory's Session, which is made if
+   * there's none: the Host counts it the Session's, and the Session places it as any Block.
+   */
+  const bringIn = (thread: ThreadSummary) => {
+    setBotPage(false);
+    const listed = sessionWith(sessions, thread.key);
+    const key = listed?.key ?? sessionKey(thread.hostId, threadDirectories(model.threads, model.known ?? []).get(thread.key) ?? threadDirectory(thread));
+    if (!listed) {
+      actions.addToSession?.(key, { threads: [thread.threadId], terminals: [] });
+      setStarting(key);
+    }
+    setSelected(key);
+    setReveal(thread.key);
+  };
+  const removed = (gone: BotSummary) => {
+    setBotPage(false);
+    // Its Session is an ordinary one now, under its Host, if one was made.
+    const key = botSessionKey(gone, model.threads);
+    setSelected(key && model.known?.some((known) => sessionKey(known.hostId, known.directory) === key) ? key : undefined);
   };
   useOpenThreadRequests(openThread);
 
@@ -230,8 +292,12 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
   useCommandKeys(platform().keys === 'page' && !unpaired);
   const ordered = useMemo(() => {
     const view = sessionListView(sessions, model.hosts, model.projects);
-    return [...view.projects.flatMap(({ sessions: under }) => under.map(({ session }) => session.key)), ...view.hosts.flatMap(({ sessions: under }) => under.map(({ key }) => key))];
-  }, [sessions, model.hosts, model.projects]);
+    return [
+      ...(model.bots ?? []).map(({ id }) => botSelection(id)),
+      ...view.projects.flatMap(({ sessions: under }) => under.map(({ session }) => session.key)),
+      ...view.hosts.flatMap(({ sessions: under }) => under.map(({ key }) => key)),
+    ];
+  }, [sessions, model.hosts, model.projects, model.bots]);
   const step = (by: number) => {
     if (ordered.length === 0) return;
     const at = selected ? ordered.indexOf(selected) : -1;
@@ -248,7 +314,7 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
     && model.known?.some((known) => known.hostId === current.hostId && known.directory === current.directory));
   useCommand('session.end', () => setEnding(current), !unpaired && endable);
   // With a Session on screen, a new thread starts in it: the Session's own command.
-  useCommand('thread.new', () => setNewThread({}), !unpaired && canStart && model.session?.key !== selected);
+  useCommand('thread.new', () => setNewThread({}), !unpaired && canStart && model.session?.key !== showing);
   useCommand('palette.open', () => setPalette(true), !unpaired);
 
   if (unpaired) return <PairingScreen controller={controller} offer={pairingOffer} />;
@@ -259,6 +325,11 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
     sessions,
     session: shown,
     selected,
+    bot,
+    botSession: bot && botSessionAt && model.session?.key === botSessionAt ? model.session : undefined,
+    waiting: waitingSessions(sessions, selected) + waitingBots(model.bots, botId),
+    onOpenBotPage: () => setBotPage(true),
+    onNewBot: () => setNewBot(true),
     reveal: shown ? reveal : undefined,
     onRevealed: () => setReveal(undefined),
     onOpenSession: setSelected,
@@ -277,6 +348,8 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
       <EndSessionDialog controller={controller} session={ending} onClose={() => setEnding(undefined)}
         onEnded={(key) => { if (key === selected) setSelected(undefined); }} />
       <CommandPalette open={palette} onOpenChange={setPalette} />
+      <BotPage controller={controller} bot={bot} open={botPage && bot !== undefined} onOpenChange={setBotPage} phone={phone} onBringIn={bringIn} onRemoved={removed} />
+      <NewBotDialog controller={controller} open={newBot} onClose={() => setNewBot(false)} onAdded={(added) => setSelected(botSelection(added.id))} />
     </ResizableSidebarProvider>
   );
 }

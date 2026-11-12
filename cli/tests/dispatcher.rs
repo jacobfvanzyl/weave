@@ -5,8 +5,8 @@
 //! `weave hosts add` has it join, here, over SSH, or with a code (ADR 0030). With a Host on
 //! another computer that joined it, `weave run`, `weave threads` and the TUI reach that Host
 //! through the Dispatcher with `--host` (WVE-195). `weave projects` registers directories on
-//! both (WVE-189), and `weave bots` keeps Bots on both, making their homes on this computer's
-//! (WVE-118).
+//! both (WVE-189), and `weave bots` keeps Bots on both, whose Hosts make their homes (WVE-118,
+//! WVE-178).
 
 #![allow(clippy::expect_used)]
 
@@ -117,6 +117,7 @@ impl World {
         config.traces = dir.join("traces");
         config.launcher = fake_agent(dir.join("agent-state.json"));
         config.home = Some(dir.join("home"));
+        isolate_git(&mut config);
         config.dispatcher = Some(DispatcherSettings {
             secure_enclave: false,
             ..DispatcherSettings::in_dir(&paths)
@@ -169,6 +170,7 @@ impl World {
         config.traces = dir.join("traces");
         config.launcher = fake_agent(dir.join("agent-state.json"));
         config.home = Some(self.home());
+        isolate_git(&mut config);
         config.dispatcher = Some(DispatcherSettings {
             secure_enclave: false,
             ..DispatcherSettings::in_dir(&paths)
@@ -1075,6 +1077,24 @@ fn projects_name_directories_on_your_hosts() {
 /// `command` as the person runs it here: with `world`'s home directory as theirs, and git
 /// knowing them only from what's given here, as `identity` says, never from the computer's own
 /// configuration.
+/// A Host in the test runs git as the person would, away from the configuration of whoever runs
+/// the tests, as `Test`.
+fn isolate_git(config: &mut DaemonConfig) {
+    for (name, value) in [
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+        ("GIT_AUTHOR_NAME", "Test"),
+        ("GIT_AUTHOR_EMAIL", "test@example.com"),
+        ("GIT_COMMITTER_NAME", "Test"),
+        ("GIT_COMMITTER_EMAIL", "test@example.com"),
+    ] {
+        config
+            .environment
+            .vars
+            .insert(name.to_owned(), value.to_owned());
+    }
+}
+
 fn as_person(mut command: Command, home: &std::path::Path, identity: bool) -> Command {
     command
         .env("HOME", home)
@@ -1139,8 +1159,8 @@ fn bot_until(
 }
 
 /// `weave bots` (WVE-118) against a Dispatcher in the test, through this computer's pairing: a
-/// Bot on this computer's Host, whose home it makes, and one on another computer's, for which it
-/// says what to run there; listing, showing and changing them; the first prompt starting a
+/// Bot on this computer's Host and one on another computer's, whose Hosts make their homes
+/// (WVE-178); listing, showing and changing them; the first prompt starting a
 /// Bot's thread in its home, the next going into it, and a new thread taking over; schedules
 /// prompting a Bot, at a cron expression's times and once; and removing them.
 #[test]
@@ -1193,6 +1213,8 @@ fn bots_keep_a_home_and_work_in_one_thread_at_a_time() {
         "UTC",
         "--pause-after",
         "6h",
+        "--job",
+        "Keep an eye on the builds.",
         "--json",
     ]));
     let home = world.home().join("bots/odin");
@@ -1223,6 +1245,7 @@ fn bots_keep_a_home_and_work_in_one_thread_at_a_time() {
     let agents = std::fs::read_to_string(home.join("AGENTS.md")).expect("its AGENTS.md");
     assert!(
         agents.contains("This directory is the home of the Bot named odin")
+            && agents.contains("\n## Your job\n\nKeep an eye on the builds.\n")
             && agents.ends_with("## What I know\n"),
         "{agents}"
     );
@@ -1246,19 +1269,31 @@ fn bots_keep_a_home_and_work_in_one_thread_at_a_time() {
         said(&taken)
     );
 
-    // On another computer's Host, it says what to run there, and makes nothing here.
+    // On another computer's Host, that Host makes its home there, and nothing is made here.
     let mimir = weave(&[
         "bots", "add", "mimir", "--agent", "fake", "--host", "studio",
     ]);
     assert!(mimir.status.success(), "{}", said(&mimir));
+    let mimirs = world
+        .dir
+        .path()
+        .join("elsewhere/home/bots/mimir")
+        .canonicalize()
+        .expect("mimir's home, on studio");
     for words in [
-        "Added the Bot mimir, with fake on studio, at home in ~/bots/mimir.",
-        "has to be a git repository on studio",
-        "  mkdir -p ~/bots/mimir\n  git -C ~/bots/mimir init\n",
-        "`weave bots add` makes a Bot's home itself",
+        format!("Made mimir's home, {}, a git repository.", mimirs.display()),
+        "Its first memory files, AGENTS.md and CLAUDE.md, are committed there.".to_owned(),
+        format!(
+            "Added the Bot mimir, with fake on studio, at home in {}.",
+            mimirs.display()
+        ),
     ] {
-        assert!(said(&mimir).contains(words), "{words}: {}", said(&mimir));
+        assert!(said(&mimir).contains(&words), "{words}: {}", said(&mimir));
     }
+    assert_eq!(
+        git_says(&mimirs, &["log", "--format=%s"]),
+        "Start mimir's home\n"
+    );
     assert!(!world.home().join("bots/mimir").exists());
 
     // Listed and shown.
@@ -1539,10 +1574,10 @@ fn bots_keep_a_home_and_work_in_one_thread_at_a_time() {
     let removed = weave(&["bots", "remove", "mimir"]);
     assert!(removed.status.success(), "{}", said(&removed));
     assert!(
-        said(&removed).contains(
-            "Removed the Bot mimir and its schedules. Its home, ~/bots/mimir, stays on studio as \
-             it was."
-        ),
+        said(&removed).contains(&format!(
+            "Removed the Bot mimir and its schedules. Its home, {}, stays on studio as it was.",
+            mimirs.display()
+        )),
         "{}",
         said(&removed)
     );
@@ -1560,9 +1595,10 @@ fn bots_keep_a_home_and_work_in_one_thread_at_a_time() {
     );
 }
 
-/// A Bot's home on this computer keeps what was there: an `AGENTS.md` of the person's own, and a
-/// repository's commits and what's staged in it, committing only the memory files it writes;
-/// and with nobody git knows to commit as, it writes them and says it didn't commit them.
+/// A Bot's home keeps what was there: an `AGENTS.md` of the person's own, and a repository's
+/// commits and what's staged in it, committing only the memory files its Host writes; a home
+/// given relative to this directory is that directory; and one inside another repository is
+/// refused, adding no Bot. (Without anybody git knows to commit as, the Host's own tests check.)
 #[test]
 fn a_bots_home_keeps_what_was_there() {
     let mut world = World::new();
@@ -1620,7 +1656,7 @@ fn a_bots_home_keeps_what_was_there() {
     );
     assert!(added.status.success(), "{}", said(&added));
     assert!(
-        said(&added).contains("is in a git repository already. Its first memory files"),
+        said(&added).contains("is a git repository already. Its first memory files"),
         "{}",
         said(&added)
     );
@@ -1637,21 +1673,49 @@ fn a_bots_home_keeps_what_was_there() {
         "draft.md\n"
     );
 
-    // With nobody git knows to commit as, the files are there, uncommitted, and it says so.
-    let bare = weave(false, &["bots", "add", "bare", "--agent", "fake", "--json"]);
-    assert!(bare.status.success(), "{}", said(&bare));
-    let _: weave_host_protocol::dispatcher::Bot = parsed(&bare);
+    // Relative to this directory, on this computer's Host.
+    let relative = as_person(
+        world.command(&[
+            "bots", "add", "rel", "--agent", "fake", "--home", "rel-home", "--json",
+        ]),
+        &world.home(),
+        true,
+    )
+    .current_dir(world.home())
+    .output()
+    .expect("run weave");
+    let rel: weave_host_protocol::dispatcher::Bot = parsed(&relative);
     assert!(
-        String::from_utf8_lossy(&bare.stderr)
-            .contains("are there but not committed: git has no user.name and user.email"),
+        same_place(&rel.home, &world.home().join("rel-home")),
+        "{rel:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&relative.stderr).contains("Made rel's home, "),
         "{}",
-        said(&bare)
+        said(&relative)
     );
-    let bare = world.home().join("bots/bare");
-    assert!(bare.join("AGENTS.md").exists() && bare.join("CLAUDE.md").exists());
+
+    // Inside another repository: refused, with no Bot added.
+    let inside = notes.join("inner");
+    let refused = weave(
+        true,
+        &[
+            "bots",
+            "add",
+            "inner",
+            "--agent",
+            "fake",
+            "--home",
+            inside.to_str().expect("a path"),
+        ],
+    );
+    assert!(!refused.status.success());
     assert!(
-        !git_in(&bare, &["rev-parse", "--verify", "HEAD"])
-            .status
-            .success()
+        said(&refused).contains("a repository of its own"),
+        "{}",
+        said(&refused)
     );
+    assert!(!inside.exists());
+    let listed = weave(true, &["bots"]);
+    assert!(!said(&listed).contains("inner"), "{}", said(&listed));
 }

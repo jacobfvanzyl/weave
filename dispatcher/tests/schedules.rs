@@ -207,7 +207,7 @@ async fn a_schedule_starts_a_turn_at_its_time_naming_itself() {
         }
     );
     let listed = cli
-        .send(ListSchedulesRequest {})
+        .send(ListSchedulesRequest::default())
         .await
         .expect("schedules/list");
     assert_eq!(

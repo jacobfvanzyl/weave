@@ -1,4 +1,4 @@
-import type { CreateElicitationResponse, McpServerStatus, ProgramStatus, SessionLayout } from '@/host/protocol';
+import type { CreateElicitationResponse, McpServerStatus, PermissionPolicy, ProgramStatus, SessionLayout } from '@/host/protocol';
 import type { AcpTranscript } from '@/chat/acp-transcript';
 
 /**
@@ -296,6 +296,85 @@ export type OpenSession = {
 /** A change to a Session's layout, which may be made again on a newer one another device saved. */
 export type LayoutChange = (layout: SessionLayout) => SessionLayout;
 
+/** What a Bot's current thread is doing, as the Dispatcher last saw it on the Bot's Host. */
+export type BotState = 'working' | 'needsYou' | 'idle';
+
+/**
+ * A Bot (ADR 0028, WVE-118): a named assistant the Dispatcher keeps, whose work goes on in one
+ * thread at a time, in its home on the one Host it names. The app shows it as a Session of its
+ * own, at its home (WVE-178).
+ */
+export type BotSummary = {
+  id: string;
+  name: string;
+  agentId: string;
+  hostId: string;
+  /** What the Dispatcher calls its Host now. */
+  hostName: string;
+  /** Whether the Dispatcher is connected to its Host now. */
+  connected: boolean;
+  /** Its home on its Host: absolute there, or from an older Dispatcher maybe `~/…`. */
+  home: string;
+  policy: PermissionPolicy;
+  /** The mode its new threads start in; the agent's own when none. */
+  mode?: string;
+  /** `HH:MM` in `zone`: a new thread daily then, when set. */
+  newThreadAt?: string;
+  zone: string;
+  /** How long a request may wait for the person before its schedules pause, in milliseconds. */
+  pauseAfter: number;
+  /** Its current thread, by id on its Host; none until its first prompt starts one. */
+  thread?: string;
+  /** Every thread it has had, oldest first, the current one last. */
+  threads: { threadId: string; startedAt: number; endedAt?: number }[];
+  state: BotState;
+  waitingSince?: number;
+  /** Why its schedules are paused, while they are. */
+  paused?: string;
+  /** A new thread is being started. */
+  startingThread?: boolean;
+  /** The Bot that made it, when one did, and that Bot's name while it's there. */
+  createdBy?: string;
+  createdByName?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** What `updateBot` changes: what's given. `mode` and `newThreadAt` are cleared with `null`. */
+export type BotChange = {
+  name?: string;
+  policy?: PermissionPolicy;
+  mode?: string | null;
+  newThreadAt?: string | null;
+  zone?: string;
+  pauseAfter?: number;
+};
+
+/** One of a Bot's schedules, or a wake-up it asked for, as the Dispatcher lists it. */
+export type ScheduleSummary = {
+  id: string;
+  name: string;
+  /** The Bot asked for it itself (`wake_me`): a one-off. */
+  wakeUp: boolean;
+  /** Its cron expression; empty for a one-off. */
+  cron: string;
+  /** A one-off's time. */
+  at?: number;
+  zone: string;
+  /** What it prompts, as text. */
+  prompt: string;
+  /** Why it's paused, when it is. */
+  paused?: string;
+  /** When it next runs, as people read it, unless it's paused or done. */
+  next?: string;
+  nextAt?: number;
+  /** Its latest occurrence: how it stands, and why it was skipped or failed. */
+  last?: { state: string; outcome?: string; why?: string; at: number };
+};
+
+/** What can be done to a schedule from a Bot's page. */
+export type ScheduleAction = 'pause' | 'resume' | 'run' | 'remove';
+
 export type AppModel = {
   /** Loading the pairing, before anything is known. */
   starting?: boolean;
@@ -319,6 +398,13 @@ export type AppModel = {
   thread?: OpenThread;
   /** Threads whose turn ended since the person last looked at them, on this device. */
   unread: ReadonlySet<string>;
+  /**
+   * The person's Bots, by name, from a Dispatcher that keeps them (feature `bots`); none from one
+   * that doesn't, which the app says nothing of Bots for.
+   */
+  bots?: BotSummary[];
+  /** The Dispatcher makes a new Bot's home on its Host (`bots_home`), so the app can add Bots. */
+  canAddBots?: boolean;
   error?: string;
 };
 
@@ -411,6 +497,28 @@ export type AppActions = ThreadActions & {
   renameTerminal(id: string, label?: string): Promise<void>;
   /** A ticket for a terminal of the Session on screen's Host, and where its stream is. */
   attachTerminal(id: string): Promise<TerminalTicket>;
+  /**
+   * Shows the thread `key` to read only, beside what's on screen, or with no key stops: one that
+   * wasn't open before is closed again once nothing else needs it, as a Bot's earlier thread.
+   */
+  peekThread?(key?: string): void;
+  /**
+   * Adds a Bot (`bots/add`), its Dispatcher making its home on its Host with `job` in its
+   * `AGENTS.md`. Rejects saying why not, as for a name taken or a Host away.
+   */
+  addBot?(input: { name: string; hostId: string; agentId: string; job?: string }): Promise<BotSummary>;
+  /** Changes a Bot (`bots/update`); rejects saying why not. */
+  updateBot?(id: string, change: BotChange): Promise<void>;
+  /** Forgets a Bot (`bots/remove`): its home and threads stay on its Host. */
+  removeBot?(id: string): Promise<void>;
+  /** Has the Dispatcher start a Bot's new thread (`bots/newThread`), after the old one saves its notes. */
+  newBotThread?(id: string): Promise<void>;
+  /** A prompt for a Bot (`bots/send`), which starts its first thread when it has none. */
+  sendToBot?(id: string, text: string, images?: PromptImage[]): Promise<void>;
+  /** A Bot's schedules, its wake-ups among them (`schedules/list`). */
+  botSchedules?(id: string): Promise<ScheduleSummary[]>;
+  /** Pauses, resumes, runs now or removes a schedule. */
+  changeSchedule?(id: string, action: ScheduleAction): Promise<void>;
 };
 
 export type AppController = { model: AppModel; actions: AppActions };

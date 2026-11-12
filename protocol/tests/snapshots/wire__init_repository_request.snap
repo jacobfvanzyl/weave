@@ -1,0 +1,21 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&InitRepositoryRequest\n{\n    path: \"~/bots/odin\".into(), files:\n    vec![RepositoryFile\n    { path: \"AGENTS.md\".into(), text: \"# odin\\n\".to_owned(), }, RepositoryFile\n    { path: \"CLAUDE.md\".into(), text: \"@AGENTS.md\\n\".to_owned(), },], message:\n    \"Start odin's home\".to_owned(),\n})"
+---
+{
+  "method": "repos/init",
+  "params": {
+    "path": "~/bots/odin",
+    "files": [
+      {
+        "path": "AGENTS.md",
+        "text": "# odin\n"
+      },
+      {
+        "path": "CLAUDE.md",
+        "text": "@AGENTS.md\n"
+      }
+    ],
+    "message": "Start odin's home"
+  }
+}

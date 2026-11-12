@@ -13,7 +13,7 @@
 //! The cron expressions are croner's five fields, in the schedule's IANA time zone: a time in
 //! an hour a clock change skips runs at the first valid moment after it, and one in an hour it
 //! repeats runs once. A one-off has one time, considered as a cron expression's would be, and
-//! is kept, done, once it has come; but a Bot's own wake-up ([`crate::wakeups`]) is forgotten a
+//! is kept, done, once it has come; but a Bot's own wake-up ([`crate::tools`]) is forgotten a
 //! week after its time, once its occurrence is over.
 //!
 //! It considers the Bots too (WVE-118, [`crate::bots::consider`]): pausing one whose thread has
@@ -190,6 +190,7 @@ pub(crate) async fn run(shared: Arc<Shared>) {
         let now = shared.config.clock.now();
         // The Bots first, so an occurrence due as one pauses is skipped.
         let bots_next = bots::consider(&shared, now);
+        shared.bots_changed();
         let next = [consider_all(&shared, now), bots_next]
             .into_iter()
             .flatten()
@@ -295,14 +296,25 @@ pub(crate) fn fire(
     } else {
         format!("schedule/{}/{at}", schedule.id)
     };
-    // A Bot's own wake-up says so, by the Bot's name now; read before the store's transaction.
-    let wake_up = match (&schedule.wake_call, &schedule.bot_id) {
-        (Some(_), Some(bot_id)) => Some(shared.store.find_bot(bot_id).ok().flatten().map_or_else(
-            || "wake-up".to_owned(),
-            |bot| format!("wake-up {}", bot.name),
-        )),
-        _ => None,
+    // A Bot's own wake-up says so, as does a schedule it added itself, by the Bot's name now;
+    // read before the store's transaction.
+    let bot_name = || {
+        schedule
+            .bot_id
+            .as_deref()
+            .and_then(|bot_id| shared.store.find_bot(bot_id).ok().flatten())
+            .map(|bot| bot.name)
     };
+    let wake_up = schedule
+        .wake_call
+        .as_ref()
+        .map(|_| bot_name().map_or_else(|| "wake-up".to_owned(), |name| format!("wake-up {name}")));
+    let label = wake_up.clone().unwrap_or_else(|| {
+        match schedule.made_call.as_ref().and_then(|_| bot_name()) {
+            Some(name) => format!("schedule {} by {name}", schedule.name),
+            None => format!("schedule {}", schedule.name),
+        }
+    });
     let work = |occurrence: &str| {
         let run = &schedule.run;
         let mut prompt = run.prompt.clone();
@@ -322,9 +334,7 @@ pub(crate) fn fire(
             );
         }
         let origin = ServiceOrigin {
-            label: wake_up
-                .clone()
-                .unwrap_or_else(|| format!("schedule {}", schedule.name)),
+            label: label.clone(),
             id: occurrence.to_owned(),
         };
         // A Bot's goes into its thread, settled when first sent, and a thread it starts is the

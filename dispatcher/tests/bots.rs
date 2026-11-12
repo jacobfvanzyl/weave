@@ -3,7 +3,10 @@
 //! prompt starting its thread in its home, and the rest following it there; its state; a new
 //! thread, asked for and daily, across the Dispatcher's restarts at each step and the Host's;
 //! pausing while its thread waits on the person; a one-off schedule prompting it once; and its
-//! own wake-ups, which its agent asks for, lists and cancels with the Dispatcher's tools.
+//! own wake-ups, which its agent asks for, lists and cancels with the Dispatcher's tools. Its home,
+//! which its Host makes as it's added; a Bot another made; watching the Bots; listing one's
+//! schedules; and a Bot's own tools making another Bot and managing its schedules, refused to any
+//! other thread and held to their limits (WVE-178).
 
 #![allow(clippy::expect_used)]
 
@@ -33,6 +36,7 @@ use weave_dispatcher::Delivery;
 use weave_dispatcher::DeliveryState;
 use weave_dispatcher::Dispatcher;
 use weave_dispatcher::Work;
+use weave_dispatcher::client::BotChange;
 use weave_dispatcher::client::DispatcherConnection;
 use weave_dispatcher::socket;
 use weave_host_client::Credentials;
@@ -46,6 +50,8 @@ use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::dispatcher::AddBotRequest;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
 use weave_host_protocol::dispatcher::BOTS_FEATURE;
+use weave_host_protocol::dispatcher::BOTS_HOME_FEATURE;
+use weave_host_protocol::dispatcher::BOTS_WATCH_FEATURE;
 use weave_host_protocol::dispatcher::Bot;
 use weave_host_protocol::dispatcher::BotState;
 use weave_host_protocol::dispatcher::DEFAULT_PAUSE_AFTER;
@@ -65,7 +71,9 @@ use weave_host_protocol::dispatcher::RemoveBotRequest;
 use weave_host_protocol::dispatcher::RemoveHostRequest;
 use weave_host_protocol::dispatcher::SendToBotRequest;
 use weave_host_protocol::dispatcher::SentToBot;
+use weave_host_protocol::dispatcher::UnwatchBotsRequest;
 use weave_host_protocol::dispatcher::UpdateBotRequest;
+use weave_host_protocol::dispatcher::WatchBotsRequest;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::ThreadEvent;
 use weave_host_protocol::hello::ClientCapabilities;
@@ -80,6 +88,8 @@ use weave_host_protocol::threads::RunRequest;
 use weave_host_protocol::threads::ThreadId;
 use weave_host_protocol::threads::ThreadListing;
 use weave_host_protocol::threads::TurnOrigin;
+use weave_host_protocol::worktrees::FilesMade;
+use weave_host_protocol::worktrees::InitRepositoryResponse;
 use weave_remote::access::RemoteSettings;
 use weave_remote::access::Serve;
 use weave_remote::preamble;
@@ -201,8 +211,13 @@ impl Setup {
     }
 
     /// The Bot odin, in `~/odin` on studio, asking the person what its policy doesn't approve.
-    fn odin(&self) -> Bot {
-        self.dispatcher.add_bot(odin()).expect("bots/add")
+    async fn odin(&self) -> Bot {
+        self.dispatcher.add_bot(odin()).await.expect("bots/add").bot
+    }
+
+    /// Where studio made `name`'s home, as the Dispatcher keeps it: whole, symlinks resolved.
+    fn home(&self, name: &str) -> PathBuf {
+        home_on(&self.studio, name)
     }
 
     async fn send(&self, text: &str) -> SentToBot {
@@ -314,13 +329,23 @@ fn add(name: &str, home: &str) -> AddBotRequest {
         name: name.to_owned(),
         host: "studio".to_owned(),
         agent_id: "fake".to_owned(),
-        home: home.into(),
+        home: Some(home.into()),
+        job: None,
         policy: None,
         mode: None,
         new_thread_at: None,
         zone: Some("UTC".to_owned()),
         pause_after: None,
     }
+}
+
+/// `name` under `world`'s home, whole, symlinks resolved, as its Host gives a home it made.
+fn home_on(world: &World, name: &str) -> PathBuf {
+    world
+        .home()
+        .join(name)
+        .canonicalize()
+        .expect("the home is there")
 }
 
 fn prompt(text: &str) -> Vec<ContentBlock> {
@@ -523,7 +548,7 @@ fn service(label: &str, id: &str) -> TurnOrigin {
 }
 
 /// Add a Bot through `cli`, list, get, change and remove it, checking what's refused on the way.
-async fn a_bot_goes_through_its_life(cli: &DispatcherConnection, studio: &str) {
+async fn a_bot_goes_through_its_life(cli: &DispatcherConnection, studio: &World, host_id: &str) {
     assert!(cli.hello().offers(BOTS_FEATURE), "{:?}", cli.hello());
     let added = cli
         .send(AddBotRequest {
@@ -543,7 +568,7 @@ async fn a_bot_goes_through_its_life(cli: &DispatcherConnection, studio: &str) {
             added.agent_id.as_str(),
             added.home.clone(),
         ),
-        ("Odin", studio, "studio", "fake", PathBuf::from("~/odin"))
+        ("Odin", host_id, "studio", "fake", home_on(studio, "odin"))
     );
     // It approves nothing, so what isn't approved waits for the person.
     assert_eq!(
@@ -624,11 +649,7 @@ async fn a_bot_goes_through_its_life(cli: &DispatcherConnection, studio: &str) {
     assert_eq!(listed, vec![added.clone()]);
 
     // Changing it.
-    let thor = cli
-        .send(add("thor", "/srv/thor"))
-        .await
-        .expect("bots/add")
-        .bot;
+    let thor = cli.send(add("thor", "~/thor")).await.expect("bots/add").bot;
     let clash = cli
         .send(UpdateBotRequest {
             bot: thor.id.clone(),
@@ -734,7 +755,7 @@ async fn a_bot_goes_through_its_life(cli: &DispatcherConnection, studio: &str) {
 async fn a_bots_life_through_the_socket() {
     let setup = Setup::new("2026-11-04T08:00:00Z").await;
     let cli = ask(setup.dir.path()).await;
-    a_bot_goes_through_its_life(&cli, &setup.host_id).await;
+    a_bot_goes_through_its_life(&cli, &setup.studio, &setup.host_id).await;
     cli.shutdown().await;
     setup.dispatcher.stop().await;
 }
@@ -792,7 +813,7 @@ async fn a_bots_life_through_a_paired_device() {
     })
     .await;
     assert!(device.hello().device.is_some(), "a paired device");
-    a_bot_goes_through_its_life(&device, &host_id).await;
+    a_bot_goes_through_its_life(&device, &studio, &host_id).await;
     device.shutdown().await;
     dispatcher.stop().await;
 }
@@ -802,7 +823,7 @@ async fn a_bots_life_through_a_paired_device() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_hosts_own_connection_doesnt_reach_bots() {
     let setup = Setup::new("2026-11-04T08:00:00Z").await;
-    setup.odin();
+    setup.odin().await;
     let address =
         DispatcherAddress::Socket(dispatcher_config(setup.dir.path()).paths.hosts_socket());
     let Opened::Unix(mut socket) = open_dispatcher(&address, DISPATCHER_HOST_SUBPROTOCOL)
@@ -851,7 +872,7 @@ async fn a_hosts_own_connection_doesnt_reach_bots() {
 #[tokio::test(flavor = "multi_thread")]
 async fn removing_a_host_removes_its_bots_and_their_schedules() {
     let setup = Setup::new("2026-11-04T08:00:00Z").await;
-    setup.odin();
+    setup.odin().await;
     setup
         .dispatcher
         .add_schedule(schedule("tick", "odin", Some("0 9 * * *"), None, "tick"))
@@ -867,7 +888,7 @@ async fn removing_a_host_removes_its_bots_and_their_schedules() {
         Vec::new()
     );
     assert_eq!(
-        cli.send(ListSchedulesRequest {})
+        cli.send(ListSchedulesRequest::default())
             .await
             .expect("schedules/list")
             .schedules,
@@ -893,7 +914,9 @@ async fn the_first_prompt_starts_the_bots_thread_and_the_rest_follow_it() {
             policy: Some(policy.clone()),
             ..odin()
         })
-        .expect("bots/add");
+        .await
+        .expect("bots/add")
+        .bot;
 
     // Two prompts while its Host is away, and the first again under its key.
     setup.studio.relay.cut();
@@ -938,7 +961,7 @@ async fn the_first_prompt_starts_the_bots_thread_and_the_rest_follow_it() {
         listed.labels,
         ["dispatcher".to_owned(), format!("bot:{}", odin.id)]
     );
-    assert_eq!(listed.info.cwd, setup.studio.home().join("odin"));
+    assert_eq!(listed.info.cwd, setup.home("odin"));
 
     // A schedule naming it prompts the same thread.
     setup
@@ -999,7 +1022,7 @@ async fn the_first_prompt_starts_the_bots_thread_and_the_rest_follow_it() {
             Some(odin.id.as_str()),
             Some("odin"),
             "studio",
-            PathBuf::from("~/odin"),
+            setup.home("odin"),
             Some(&thread)
         )
     );
@@ -1011,7 +1034,7 @@ async fn the_first_prompt_starts_the_bots_thread_and_the_rest_follow_it() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bots_state_follows_its_thread() {
     let setup = Setup::new("2026-11-04T08:00:00Z").await;
-    setup.odin();
+    setup.odin().await;
     setup.send("slow 10").await;
     setup.odin_until(|bot| bot.state == BotState::Working).await;
     setup.odin_until(|bot| bot.state == BotState::Idle).await;
@@ -1045,7 +1068,7 @@ async fn a_bots_state_follows_its_thread() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_new_thread_saves_the_old_one_and_takes_over() {
     let mut setup = Setup::new("2026-11-04T08:00:00Z").await;
-    let odin = setup.odin();
+    let odin = setup.odin().await;
     setup
         .dispatcher
         .add_schedule(schedule("tick", "odin", Some("0 9 * * *"), None, "tick"))
@@ -1126,8 +1149,9 @@ async fn a_new_thread_saves_the_old_one_and_takes_over() {
         saved[2],
         format!(
             "This turn is the Bot odin's, before it starts a new thread. Save what's worth keeping \
-         from this thread to your memory files in ~/odin, write a note about this thread at \
-         {note} there, and commit."
+         from this thread to your memory files in {}, write a note about this thread at \
+         {note} there, and commit.",
+            setup.home("odin").display()
         )
     );
     assert_eq!(
@@ -1142,7 +1166,7 @@ async fn a_new_thread_saves_the_old_one_and_takes_over() {
         listed.labels,
         ["dispatcher".to_owned(), format!("bot:{}", odin.id)]
     );
-    assert_eq!(listed.info.cwd, setup.studio.home().join("odin"));
+    assert_eq!(listed.info.cwd, setup.home("odin"));
     let opened: Vec<String> = turns(&setup.studio, &new)
         .await
         .into_iter()
@@ -1153,8 +1177,9 @@ async fn a_new_thread_saves_the_old_one_and_takes_over() {
         vec![
             format!(
                 "This is the Bot odin's new thread, which takes over from the thread {old}. \
-                 That thread's note is at {note} in ~/odin. Read your memory files there before \
-                 you go on."
+                 That thread's note is at {note} in {}. Read your memory files there before \
+                 you go on.",
+                setup.home("odin").display()
             ),
             "during".to_owned(),
             "tick".to_owned(),
@@ -1189,7 +1214,7 @@ fn delivery_under(database: &rusqlite::Connection, key: &str) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_new_thread_survives_restarts_repeating_nothing() {
     let mut setup = Setup::with(World::with_journals().await, "2026-11-04T08:00:00Z").await;
-    let odin = setup.odin();
+    let odin = setup.odin().await;
     let first = setup.turn("hello").await;
     setup.odin_until(|bot| bot.state == BotState::Idle).await;
 
@@ -1365,6 +1390,7 @@ async fn a_daily_new_thread_comes_at_its_time() {
             new_thread_at: Some("09:00".to_owned()),
             ..odin()
         })
+        .await
         .expect("bots/add");
     let first = setup.turn("hello").await;
 
@@ -1415,6 +1441,7 @@ async fn a_bot_pauses_while_its_thread_waits_on_the_person() {
             pause_after: Some(60 * 60 * 1000),
             ..odin()
         })
+        .await
         .expect("bots/add");
     setup
         .dispatcher
@@ -1466,7 +1493,7 @@ async fn a_bot_pauses_while_its_thread_waits_on_the_person() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_one_off_prompts_a_bot_once_across_restarts() {
     let mut setup = Setup::new("2026-11-04T08:00:00Z").await;
-    let odin = setup.odin();
+    let odin = setup.odin().await;
     let refused = |request: AddScheduleRequest| {
         setup
             .dispatcher
@@ -1645,7 +1672,7 @@ async fn wake_up_turns(world: &World, thread: &ThreadId) -> Vec<(TurnOrigin, Str
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bots_thread_is_woken_once_at_the_time_it_asked_for() {
     let mut setup = Setup::new("2026-11-04T08:00:00Z").await;
-    let odin = setup.odin();
+    let odin = setup.odin().await;
     let thread = setup.turn("hello").await;
 
     let woken = setup
@@ -1676,7 +1703,7 @@ async fn a_bots_thread_is_woken_once_at_the_time_it_asked_for() {
     // It's among the schedules, as the Bot's own.
     let cli = ask(setup.dir.path()).await;
     let listed = cli
-        .send(ListSchedulesRequest {})
+        .send(ListSchedulesRequest::default())
         .await
         .expect("schedules/list")
         .schedules;
@@ -1798,11 +1825,12 @@ async fn a_bots_thread_is_woken_once_at_the_time_it_asked_for() {
 #[tokio::test(flavor = "multi_thread")]
 async fn wake_ups_are_a_bots_own_and_within_limits() {
     let setup = Setup::new("2026-11-04T08:00:00Z").await;
-    setup.odin();
+    setup.odin().await;
     std::fs::create_dir_all(setup.studio.home().join("thor")).expect("thor's home");
     setup
         .dispatcher
         .add_bot(add("thor", "~/thor"))
+        .await
         .expect("bots/add");
     setup.turn("hello").await;
 
@@ -2004,6 +2032,7 @@ async fn a_wake_up_due_while_its_bot_is_paused_is_skipped() {
             pause_after: Some(60 * 60 * 1000),
             ..odin()
         })
+        .await
         .expect("bots/add");
     setup.turn("hello").await;
     let woken = setup
@@ -2034,5 +2063,1049 @@ async fn a_wake_up_due_while_its_bot_is_paused_is_skipped() {
             "the Bot odin is paused: its thread has waited on the person since Wed 4 Nov 08:00 UTC"
         )
     );
+    setup.dispatcher.stop().await;
+}
+
+/// `git args…` in `dir`, away from the configuration of whoever runs the tests: what it printed.
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .envs(crate::common::ISOLATED_GIT.iter().copied())
+        .output()
+        .expect("git runs");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// `bots/add` has the Bot's Host make its home (WVE-178): `~/bots/<name>` by default, a
+/// repository of its own with its first memory files committed, saying its job; what's there is
+/// kept. What the Dispatcher refuses makes nothing, and no Bot is added when the Host is away or
+/// refuses.
+#[tokio::test(flavor = "multi_thread")]
+async fn bots_add_has_its_host_make_its_home() {
+    let setup = Setup::new("2026-11-04T08:00:00Z").await;
+    let cli = ask(setup.dir.path()).await;
+    assert!(
+        cli.hello().offers(BOTS_HOME_FEATURE) && cli.hello().offers(BOTS_WATCH_FEATURE),
+        "{:?}",
+        cli.hello()
+    );
+
+    // By default in ~/bots, saying what it's for.
+    let added = cli
+        .send(AddBotRequest {
+            home: None,
+            job: Some("Watch the night builds.".to_owned()),
+            ..add("Night Owl", "unused")
+        })
+        .await
+        .expect("bots/add");
+    let home = setup.home("bots/night-owl");
+    assert_eq!(added.bot.home, home);
+    assert_eq!(
+        added.home,
+        Some(InitRepositoryResponse {
+            path: home.clone(),
+            created: true,
+            initialized: true,
+            files: Some(FilesMade::Committed),
+        })
+    );
+    let agents = std::fs::read_to_string(home.join("AGENTS.md")).expect("its AGENTS.md");
+    assert!(
+        agents.starts_with("# Night Owl\n\nThis directory is the home of the Bot named Night Owl")
+            && agents.contains("\n## Your job\n\nWatch the night builds.\n\nSo keep"),
+        "{agents}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("CLAUDE.md")).expect("its CLAUDE.md"),
+        "@AGENTS.md\n"
+    );
+    assert_eq!(
+        git(&home, &["log", "--format=%s", "--name-only"]),
+        "Start Night Owl's home\n\nAGENTS.md\nCLAUDE.md"
+    );
+
+    // odin's directory is there, with a memory file of its own: kept, and nothing committed.
+    std::fs::write(setup.studio.home().join("odin/AGENTS.md"), "mine\n").expect("a file");
+    let odin = cli.send(odin()).await.expect("bots/add");
+    assert_eq!(
+        odin.home,
+        Some(InitRepositoryResponse {
+            path: setup.home("odin"),
+            created: false,
+            initialized: true,
+            files: Some(FilesMade::Kept {
+                file: "AGENTS.md".into()
+            }),
+        })
+    );
+    assert!(!setup.studio.home().join("odin/CLAUDE.md").exists());
+
+    // What the Dispatcher refuses makes nothing.
+    let taken = cli
+        .send(add("night owl", "~/elsewhere"))
+        .await
+        .expect_err("a name taken");
+    assert_eq!(taken.message, "there's a Bot called Night Owl already");
+    assert!(!setup.studio.home().join("elsewhere").exists());
+    let nameless = cli
+        .send(AddBotRequest {
+            home: None,
+            ..add("..", "unused")
+        })
+        .await
+        .expect_err("no directory name");
+    assert!(
+        nameless.message.contains("give one with home"),
+        "{nameless:?}"
+    );
+
+    // The Host refuses a home inside another repository, and says why; no Bot is added.
+    let code = setup.studio.home().join("code");
+    std::fs::create_dir_all(&code).expect("a directory");
+    git(&code, &["init", "-q"]);
+    let inside = cli
+        .send(add("loki", "~/code/loki"))
+        .await
+        .expect_err("refused by the Host");
+    assert!(
+        inside
+            .message
+            .starts_with("studio couldn't make loki's home at ~/code/loki: ")
+            && inside.message.contains("a repository of its own"),
+        "{inside:?}"
+    );
+    assert!(!code.join("loki").exists());
+
+    // Its Host away: nothing to make the home, and no Bot.
+    setup.studio.relay.cut();
+    host_until(&setup.dispatcher, &setup.host_id, |host| !host.connected).await;
+    let away = cli
+        .send(add("thor", "~/thor"))
+        .await
+        .expect_err("its Host away");
+    assert!(
+        errors::is(&away, errors::HOST_UNAVAILABLE) && away.message.contains("isn't connected"),
+        "{away:?}"
+    );
+    setup.studio.relay.resume();
+    host_until(&setup.dispatcher, &setup.host_id, |host| host.connected).await;
+    let names: Vec<String> = cli
+        .send(ListBotsRequest {})
+        .await
+        .expect("bots/list")
+        .bots
+        .into_iter()
+        .map(|bot| bot.name)
+        .collect();
+    assert_eq!(names, ["Night Owl", "odin"]);
+    assert!(!setup.studio.home().join("thor").exists());
+    cli.shutdown().await;
+    setup.dispatcher.stop().await;
+}
+
+/// A Bot another made names it, by name while it's there; the API never sets that itself.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bot_made_by_another_names_it() {
+    let setup = Setup::new("2026-11-04T08:00:00Z").await;
+    let odin = setup.odin().await;
+    assert_eq!(
+        (odin.created_by.clone(), odin.created_by_name.clone()),
+        (None, None)
+    );
+    let scribe = setup
+        .dispatcher
+        .add_bot_made_by(add("scribe", "~/scribe"), "odin")
+        .await
+        .expect("bots/add")
+        .bot;
+    assert_eq!(
+        (
+            scribe.created_by.as_deref(),
+            scribe.created_by_name.as_deref()
+        ),
+        (Some(odin.id.as_str()), Some("odin"))
+    );
+    let nobody = setup
+        .dispatcher
+        .add_bot_made_by(add("loki", "~/loki"), "nobody")
+        .await
+        .expect_err("no such maker");
+    assert_eq!(nobody.message, "there's no Bot nobody");
+    assert!(!setup.studio.home().join("loki").exists());
+    setup.dispatcher.remove_bot("odin").expect("bots/remove");
+    let scribe = setup.dispatcher.bot("scribe").expect("bots/get");
+    assert_eq!(
+        (scribe.created_by.as_deref(), scribe.created_by_name),
+        (Some(odin.id.as_str()), None)
+    );
+    setup.dispatcher.stop().await;
+}
+
+/// The next change to the Bots `cli` hears of, in time.
+async fn change(cli: &mut DispatcherConnection) -> BotChange {
+    tokio::time::timeout(WAIT, cli.bot_change())
+        .await
+        .expect("a change in time")
+        .expect("the connection open")
+}
+
+/// The changes `cli` hears of until one is as `wanted` says, which is the last.
+async fn changes_until(
+    cli: &mut DispatcherConnection,
+    wanted: impl Fn(&BotChange) -> bool,
+) -> Vec<BotChange> {
+    let mut changes = Vec::new();
+    loop {
+        let next = change(cli).await;
+        let done = wanted(&next);
+        changes.push(next);
+        if done {
+            return changes;
+        }
+    }
+}
+
+/// Whether `cli` hears of no change for a moment.
+async fn quiet(cli: &mut DispatcherConnection) -> bool {
+    tokio::time::timeout(Duration::from_millis(300), cli.bot_change())
+        .await
+        .is_err()
+}
+
+/// `bots/watch` (WVE-178): the Bots, then each change to how one lists, once, until unwatched.
+#[tokio::test(flavor = "multi_thread")]
+async fn watching_the_bots_hears_each_change() {
+    let setup = Setup::new("2026-11-04T08:00:00Z").await;
+    let mut cli = ask(setup.dir.path()).await;
+    let watched = cli.send(WatchBotsRequest {}).await.expect("bots/watch");
+    assert_eq!(watched.bots, Vec::new());
+
+    // Added.
+    let odin = setup.odin().await;
+    assert_eq!(
+        change(&mut cli).await,
+        BotChange::Updated(Box::new(odin.clone()))
+    );
+    assert!(quiet(&mut cli).await, "nothing more");
+
+    // A change that changes nothing says nothing; one that does, says it.
+    setup
+        .dispatcher
+        .update_bot(UpdateBotRequest {
+            bot: "odin".to_owned(),
+            zone: Some("UTC".to_owned()),
+            ..UpdateBotRequest::default()
+        })
+        .expect("bots/update");
+    assert!(quiet(&mut cli).await, "nothing changed");
+    let changed = setup
+        .dispatcher
+        .update_bot(UpdateBotRequest {
+            bot: "odin".to_owned(),
+            mode: Some(Some("plan".to_owned())),
+            ..UpdateBotRequest::default()
+        })
+        .expect("bots/update");
+    assert_eq!(
+        change(&mut cli).await,
+        BotChange::Updated(Box::new(changed))
+    );
+
+    // Its first thread, working and then idle.
+    setup.send("slow 10").await;
+    let heard = changes_until(&mut cli, |change| {
+        matches!(change, BotChange::Updated(bot) if bot.thread.is_some() && bot.state == BotState::Idle)
+    })
+    .await;
+    assert!(
+        heard.iter().any(
+            |change| matches!(change, BotChange::Updated(bot) if bot.state == BotState::Working)
+        ),
+        "{heard:#?}"
+    );
+    for pair in heard.windows(2) {
+        assert_ne!(pair[0], pair[1], "each change once");
+    }
+    assert!(quiet(&mut cli).await, "nothing more");
+
+    // Its Host going and coming back.
+    setup.studio.relay.cut();
+    changes_until(
+        &mut cli,
+        |change| matches!(change, BotChange::Updated(bot) if !bot.connected),
+    )
+    .await;
+    setup.studio.relay.resume();
+    changes_until(
+        &mut cli,
+        |change| matches!(change, BotChange::Updated(bot) if bot.connected),
+    )
+    .await;
+
+    // Removed.
+    setup.dispatcher.remove_bot("odin").expect("bots/remove");
+    changes_until(&mut cli, |change| {
+        *change == BotChange::Removed(odin.id.clone())
+    })
+    .await;
+
+    // Unwatched, it hears nothing more.
+    cli.send(UnwatchBotsRequest {}).await.expect("bots/unwatch");
+    setup
+        .dispatcher
+        .add_bot(add("thor", "~/thor"))
+        .await
+        .expect("bots/add");
+    assert!(quiet(&mut cli).await, "unwatched");
+    cli.shutdown().await;
+    setup.dispatcher.stop().await;
+}
+
+/// `schedules/list` with a Bot lists only the schedules that prompt it, its wake-ups too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bots_schedules_are_listed_alone() {
+    let setup = Setup::new("2026-11-04T08:00:00Z").await;
+    setup.odin().await;
+    setup
+        .dispatcher
+        .add_bot(add("thor", "~/thor"))
+        .await
+        .expect("bots/add");
+    for (name, bot) in [("tick", "odin"), ("tock", "thor")] {
+        setup
+            .dispatcher
+            .add_schedule(schedule(name, bot, Some("0 9 * * *"), None, name))
+            .expect("schedules/add");
+    }
+    setup.turn("hello").await;
+    setup
+        .calls("odin", "wake_me", json!({"prompt": "Nudge.", "in": 3600}))
+        .await
+        .expect("wake_me");
+    let cli = ask(setup.dir.path()).await;
+    let listed = |bot: Option<&str>| {
+        cli.send(ListSchedulesRequest {
+            bot: bot.map(str::to_owned),
+        })
+    };
+    let odins: Vec<(String, bool)> = listed(Some("ODIN"))
+        .await
+        .expect("schedules/list")
+        .schedules
+        .into_iter()
+        .map(|schedule| (schedule.name, schedule.wake_up))
+        .collect();
+    assert_eq!(odins.len(), 2, "{odins:?}");
+    assert!(odins.contains(&("tick".to_owned(), false)), "{odins:?}");
+    assert!(odins.iter().any(|(_, wake_up)| *wake_up), "{odins:?}");
+    assert_eq!(
+        listed(None).await.expect("schedules/list").schedules.len(),
+        3
+    );
+    let nobody = listed(Some("nobody")).await.expect_err("no such Bot");
+    assert_eq!(nobody.message, "there's no Bot nobody");
+    cli.shutdown().await;
+    setup.dispatcher.stop().await;
+}
+
+/// Have a thread on studio that no Bot has call each of the Dispatcher's `tools` in turn: why
+/// each was refused.
+async fn a_strangers_calls(setup: &Setup, tools: &[(&str, serde_json::Value)]) -> Vec<String> {
+    let local = setup.studio.local().await;
+    let ask_tool = |tool: &str, arguments: &serde_json::Value| {
+        prompt(&format!("tool {} {arguments}", dispatcher_tool(tool)))
+    };
+    let mut refused = Vec::new();
+    let mut stranger: Option<ThreadId> = None;
+    for (tool, arguments) in tools {
+        let (thread, turn) = match &stranger {
+            None => {
+                let ran = local
+                    .send(RunRequest {
+                        agent_id: "fake".to_owned(),
+                        cwd: setup.studio.home(),
+                        remote: None,
+                        thread_id: None,
+                        additional_directories: Vec::new(),
+                        mode: None,
+                        prompt: ask_tool(tool, arguments),
+                        policy: PermissionPolicy::ask(),
+                        attach: false,
+                        trace: false,
+                        key: None,
+                        caller: None,
+                        origin: None,
+                        labels: Vec::new(),
+                    })
+                    .await
+                    .expect("thread/run");
+                (ran.thread_id, ran.turn_id.expect("its turn"))
+            }
+            Some(thread) => {
+                let queued = local
+                    .send(AddQueuedRequest {
+                        thread_id: thread.clone(),
+                        prompt: ask_tool(tool, arguments),
+                        key: None,
+                        caller: None,
+                        origin: None,
+                    })
+                    .await
+                    .expect("queue/add")
+                    .queued_id;
+                (thread.clone(), queued)
+            }
+        };
+        let why = answered(&said(&setup.studio, &thread, &turn).await, tool)
+            .expect_err("a stranger refused");
+        refused.push(why);
+        stranger = Some(thread);
+    }
+    local.shutdown().await;
+    refused
+}
+
+/// A Bot's thread makes another Bot with `create_bot` (WVE-178): recorded with its maker, a home
+/// its Host made saying its job, the maker's agent and zone, and nothing else until the person
+/// prompts it; those watching the Bots hear of it, and `list_bots` lists both. What `bots/add`
+/// refuses comes back as the tool's error.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bot_makes_another_that_waits_for_the_person() {
+    let setup = Setup::new("2026-11-04T08:00:00Z").await;
+    let odin = setup.odin().await;
+    setup.turn("hello").await;
+    let mut cli = ask(setup.dir.path()).await;
+    cli.send(WatchBotsRequest {}).await.expect("bots/watch");
+
+    let made = setup
+        .calls(
+            "odin",
+            "create_bot",
+            json!({"name": " Scribe ", "job": "Keep the meeting notes in order."}),
+        )
+        .await
+        .expect("create_bot");
+    let home = setup.home("bots/scribe");
+    assert_eq!(
+        made,
+        json!({
+            "made": {
+                "name": "Scribe",
+                "agent": "fake",
+                "host": "studio",
+                "home": home.display().to_string(),
+                "state": "idle",
+                "madeBy": "odin",
+            },
+            "home": {
+                "path": home.display().to_string(),
+                "created": true,
+                "initialized": true,
+                "files": {"state": "committed"},
+            },
+            "next": format!(
+                "Scribe is made, with its home at {} on studio. It does nothing until the person \
+                 prompts it: it has no thread and no schedules yet, and no Bot can prompt or \
+                 schedule it. Tell the person it's there, and what it's for.",
+                home.display()
+            ),
+        })
+    );
+
+    // Recorded with its maker, the maker's agent, Host and zone, and nothing to do.
+    let scribe = setup.dispatcher.bot("scribe").expect("bots/get");
+    assert_eq!(
+        (
+            scribe.created_by.as_deref(),
+            scribe.created_by_name.as_deref(),
+            scribe.agent_id.as_str(),
+            scribe.host_id.as_str(),
+            scribe.zone.as_str(),
+            scribe.home.clone(),
+            scribe.thread.clone(),
+            scribe.policy.clone(),
+        ),
+        (
+            Some(odin.id.as_str()),
+            Some("odin"),
+            "fake",
+            setup.host_id.as_str(),
+            "UTC",
+            home.clone(),
+            None,
+            PermissionPolicy::default(),
+        )
+    );
+    let agents = std::fs::read_to_string(home.join("AGENTS.md")).expect("its AGENTS.md");
+    assert!(
+        agents.contains("\n## Your job\n\nKeep the meeting notes in order.\n"),
+        "{agents}"
+    );
+    assert!(setup.dispatcher.schedules().expect("schedules").is_empty());
+    assert_eq!(threads(&setup.studio).await.len(), 1, "odin's alone");
+
+    // Those watching hear of it.
+    let heard = changes_until(
+        &mut cli,
+        |change| matches!(change, BotChange::Updated(bot) if bot.name == "Scribe"),
+    )
+    .await;
+    assert_eq!(
+        heard.last(),
+        Some(&BotChange::Updated(Box::new(scribe.clone())))
+    );
+    cli.shutdown().await;
+
+    // Both listed, by name, saying which is the caller and which made which.
+    let mut listed = setup
+        .calls("odin", "list_bots", json!({}))
+        .await
+        .expect("list_bots");
+    // odin's own state is its turn calling the tool, as the watch has seen it by then.
+    let state = listed["bots"][0]
+        .as_object_mut()
+        .expect("odin")
+        .remove("state");
+    assert!(
+        matches!(
+            state.as_ref().and_then(|state| state.as_str()),
+            Some("working" | "idle")
+        ),
+        "{state:?}"
+    );
+    assert_eq!(
+        listed,
+        json!({"bots": [
+            {
+                "name": "odin",
+                "agent": "fake",
+                "host": "studio",
+                "home": setup.home("odin").display().to_string(),
+                "you": true,
+            },
+            {
+                "name": "Scribe",
+                "agent": "fake",
+                "host": "studio",
+                "home": home.display().to_string(),
+                "state": "idle",
+                "madeBy": "odin",
+            },
+        ]})
+    );
+
+    // What bots/add refuses, and what the tool does, come back as its error; nothing is made.
+    for (arguments, said) in [
+        (
+            json!({"name": "scribe", "job": "Again."}),
+            "Couldn't make scribe: there's a Bot called Scribe already.",
+        ),
+        (
+            json!({"name": "Loki", "job": "Mischief.", "host": "nowhere"}),
+            "Couldn't make Loki: no Host called nowhere has joined the Dispatcher.",
+        ),
+        (
+            json!({"name": "Loki", "job": " "}),
+            "A new Bot needs a job: what it's for, as the person put it, which its home's \
+             AGENTS.md starts with.",
+        ),
+        (
+            json!({"name": " ", "job": "Nothing."}),
+            "A new Bot needs a name.",
+        ),
+        (
+            json!({"name": "Loki", "job": "Mischief.", "policy": "allow"}),
+            "unknown field `policy`",
+        ),
+    ] {
+        let why = setup
+            .calls("odin", "create_bot", arguments.clone())
+            .await
+            .expect_err("refused");
+        assert!(why.contains(said), "{arguments}: {why}");
+    }
+    let names: Vec<String> = setup
+        .dispatcher
+        .bots()
+        .expect("bots")
+        .into_iter()
+        .map(|bot| bot.name)
+        .collect();
+    assert_eq!(names, ["odin", "Scribe"]);
+    assert!(!setup.studio.home().join("bots/loki").exists());
+
+    // Another agent, named.
+    let other = setup
+        .calls(
+            "odin",
+            "create_bot",
+            json!({"name": "Heimdall", "job": "Watch.", "agent": "other", "host": "STUDIO"}),
+        )
+        .await
+        .expect("create_bot");
+    assert_eq!(other["made"]["agent"], "other");
+    setup.dispatcher.stop().await;
+}
+
+/// A thread of the Host's that isn't a Bot's is refused by every one of WVE-178's tools, saying
+/// why.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_thread_that_isnt_a_bots_cant_manage_schedules_or_make_bots() {
+    let setup = Setup::new("2026-11-04T08:00:00Z").await;
+    setup.odin().await;
+    setup
+        .dispatcher
+        .add_schedule(schedule("tick", "odin", Some("0 9 * * *"), None, "tick"))
+        .expect("schedules/add");
+    let tools = [
+        (
+            "add_schedule",
+            json!({"name": "mine", "cron": "0 9 * * *", "prompt": "Mine."}),
+        ),
+        ("list_schedules", json!({})),
+        ("pause_schedule", json!({"id": "tick"})),
+        ("resume_schedule", json!({"id": "tick"})),
+        ("remove_schedule", json!({"id": "tick"})),
+        ("create_bot", json!({"name": "Loki", "job": "Mischief."})),
+        ("list_bots", json!({})),
+    ];
+    let refused = a_strangers_calls(&setup, &tools).await;
+    for ((tool, _), why) in tools.iter().zip(&refused) {
+        let can = match *tool {
+            "create_bot" | "list_bots" => "make another Bot or list the person's Bots",
+            _ => "add, list, pause, resume or remove its schedules",
+        };
+        assert_eq!(
+            why,
+            &format!(
+                "Only a Bot's own thread can {can}, and this thread isn't one of a Bot's: a Bot \
+                 is a named assistant the person's Dispatcher keeps, and its threads are those \
+                 the Dispatcher started for it."
+            ),
+            "{tool}"
+        );
+    }
+    // Nothing changed.
+    let schedules = setup.dispatcher.schedules().expect("schedules");
+    assert_eq!(
+        schedules
+            .iter()
+            .map(|schedule| (schedule.name.as_str(), schedule.paused.is_some()))
+            .collect::<Vec<_>>(),
+        [("tick", false)]
+    );
+    assert_eq!(setup.dispatcher.bots().expect("bots").len(), 1);
+    setup.dispatcher.stop().await;
+}
+
+/// A Bot makes another only while there are fewer than 20 Bots; the person adds one regardless.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bot_makes_another_only_while_there_are_fewer_than_twenty() {
+    let setup = Setup::new("2026-11-04T08:00:00Z").await;
+    setup.odin().await;
+    for n in 1..19 {
+        setup
+            .dispatcher
+            .add_bot(AddBotRequest {
+                home: None,
+                ..add(&format!("bot {n}"), "unused")
+            })
+            .await
+            .expect("bots/add");
+    }
+    setup
+        .calls(
+            "odin",
+            "create_bot",
+            json!({"name": "Twentieth", "job": "Count."}),
+        )
+        .await
+        .expect("the twentieth");
+    let full = "there are 20 Bots, the most there may be when a Bot makes one; the person can \
+                still add one themselves, or remove one";
+    let why = setup
+        .calls(
+            "odin",
+            "create_bot",
+            json!({"name": "Loki", "job": "Mischief."}),
+        )
+        .await
+        .expect_err("as many as there may be");
+    assert_eq!(why, format!("Couldn't make Loki: {full}."));
+    assert!(!setup.studio.home().join("bots/loki").exists());
+    let made_by = setup
+        .dispatcher
+        .add_bot_made_by(
+            AddBotRequest {
+                home: None,
+                ..add("Loki", "unused")
+            },
+            "odin",
+        )
+        .await
+        .expect_err("as many as there may be");
+    assert_eq!(made_by.message, full);
+    setup
+        .dispatcher
+        .add_bot(AddBotRequest {
+            home: None,
+            ..add("Loki", "unused")
+        })
+        .await
+        .expect("the person isn't held to it");
+    assert_eq!(setup.dispatcher.bots().expect("bots").len(), 21);
+    setup.dispatcher.stop().await;
+}
+
+/// The occurrences of the schedule `name` once its latest is finished, newest first.
+async fn finished(setup: &Setup, name: &str) -> Vec<Occurrence> {
+    setup
+        .occurrences_until(name, |all| {
+            all.first()
+                .is_some_and(|first| first.state == OccurrenceState::Finished)
+        })
+        .await
+}
+
+/// A Bot adds a schedule of its own, lists it with the person's for it but not its wake-ups or
+/// another Bot's, and it comes into the Bot's thread at its time, saying the Bot made it; it
+/// pauses, resumes and removes its own and the person's for it, by id or name, but no other
+/// Bot's, nor its wake-ups.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bot_manages_its_own_schedules() {
+    let setup = Setup::new("2026-11-04T08:00:00Z").await;
+    setup.odin().await;
+    std::fs::create_dir_all(setup.studio.home().join("thor")).expect("thor's home");
+    setup
+        .dispatcher
+        .add_bot(add("thor", "~/thor"))
+        .await
+        .expect("bots/add");
+    for (name, bot) in [("tick", "odin"), ("tock", "thor")] {
+        setup
+            .dispatcher
+            .add_schedule(schedule(name, bot, Some("30 9 * * *"), None, name))
+            .expect("schedules/add");
+    }
+    let thread = setup.turn("hello").await;
+    let woken = setup
+        .calls("odin", "wake_me", json!({"prompt": "Nudge.", "in": 7200}))
+        .await
+        .expect("wake_me");
+    let wake_up = woken["id"].as_str().expect("its id").to_owned();
+
+    let added = setup
+        .calls(
+            "odin",
+            "add_schedule",
+            json!({"name": "brief", "cron": "0 9 * * 1-5", "prompt": "Write the morning brief."}),
+        )
+        .await
+        .expect("add_schedule");
+    let id = added["id"].as_str().expect("its id").to_owned();
+    assert!(id.starts_with("sch-"), "{id}");
+    assert_eq!(
+        added,
+        json!({
+            "id": id,
+            "name": "brief",
+            "cron": "0 9 * * 1-5",
+            "zone": "UTC",
+            "prompt": "Write the morning brief.",
+            "next": {"at": "2026-11-04T09:00:00+00:00", "when": "Wed 4 Nov 09:00 UTC"},
+            "addedByYou": true,
+        })
+    );
+    // As schedules/add would have it: the Bot's, skipping overlaps, not a wake-up.
+    let stored = setup
+        .dispatcher
+        .schedules()
+        .expect("schedules")
+        .into_iter()
+        .find(|schedule| schedule.id == id)
+        .expect("listed");
+    assert_eq!(
+        (
+            stored.bot_name.as_deref(),
+            stored.wake_up,
+            stored.overlap,
+            stored.missed,
+            stored.run.cwd.clone()
+        ),
+        (
+            Some("odin"),
+            false,
+            Overlap::Skip,
+            Missed::Latest,
+            setup.home("odin")
+        )
+    );
+
+    // Its own and the person's for it, by name; not its wake-up, nor thor's.
+    let names = |listed: &serde_json::Value| -> Vec<String> {
+        listed["schedules"]
+            .as_array()
+            .expect("schedules")
+            .iter()
+            .map(|schedule| schedule["name"].as_str().expect("a name").to_owned())
+            .collect()
+    };
+    let listed = setup
+        .calls("odin", "list_schedules", json!({}))
+        .await
+        .expect("list_schedules");
+    assert_eq!(names(&listed), ["brief", "tick"]);
+    assert_eq!(listed["schedules"][0], added);
+    assert_eq!(
+        listed["schedules"][1]["addedByYou"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        names(
+            &setup
+                .calls("thor", "list_schedules", json!({}))
+                .await
+                .expect("list_schedules")
+        ),
+        ["tock"]
+    );
+
+    // At its time it comes into odin's thread, saying odin made it.
+    setup.clock.set("2026-11-04T09:00:00Z");
+    let came = finished(&setup, &id).await.remove(0);
+    assert_eq!(came.thread_id.as_ref(), Some(&thread));
+    let turns = turns(&setup.studio, &thread).await;
+    assert_eq!(
+        turns.last(),
+        Some(&(
+            service("schedule brief by odin", &came.id),
+            "Write the morning brief.".to_owned()
+        ))
+    );
+    let listed = setup
+        .calls("odin", "list_schedules", json!({}))
+        .await
+        .expect("list_schedules");
+    assert_eq!(
+        (
+            &listed["schedules"][0]["last"],
+            &listed["schedules"][0]["next"]["when"]
+        ),
+        (
+            &json!({
+                "at": "2026-11-04T09:00:00+00:00",
+                "when": "Wed 4 Nov 09:00 UTC",
+                "state": "finished",
+                "outcome": "ended",
+            }),
+            &json!("Thu 5 Nov 09:00 UTC")
+        )
+    );
+
+    // Paused by name, resumed by id.
+    let paused = setup
+        .calls("odin", "pause_schedule", json!({"id": "brief"}))
+        .await
+        .expect("pause_schedule");
+    assert_eq!(
+        (&paused["paused"], &paused["next"]),
+        (&json!("odin paused it"), &serde_json::Value::Null)
+    );
+    setup.clock.set("2026-11-05T09:00:00Z");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        setup
+            .dispatcher
+            .occurrences(Some(&id), None)
+            .expect("occurrences")
+            .len(),
+        1,
+        "not while paused"
+    );
+    let resumed = setup
+        .calls("odin", "resume_schedule", json!({"id": id}))
+        .await
+        .expect("resume_schedule");
+    assert_eq!(
+        (&resumed["paused"], &resumed["next"]["when"]),
+        (&serde_json::Value::Null, &json!("Fri 6 Nov 09:00 UTC")),
+        "what it missed while paused isn't caught up"
+    );
+
+    // The person's for it too.
+    let paused = setup
+        .calls("odin", "pause_schedule", json!({"id": "tick"}))
+        .await
+        .expect("pause_schedule");
+    assert_eq!(paused["paused"], "odin paused it");
+    let removed = setup
+        .calls("odin", "remove_schedule", json!({"id": "tick"}))
+        .await
+        .expect("remove_schedule");
+    assert_eq!(removed["removed"]["name"], "tick");
+    assert!(
+        setup.dispatcher.occurrences(Some("tick"), None).is_err(),
+        "gone"
+    );
+
+    // Not thor's, nor its wake-ups, nor one there isn't.
+    for tool in ["pause_schedule", "resume_schedule", "remove_schedule"] {
+        for (by, said) in [
+            (
+                "tock".to_owned(),
+                "The schedule tock isn't odin's: a Bot manages only the schedules that prompt \
+                 it, which list_schedules lists."
+                    .to_owned(),
+            ),
+            (
+                wake_up.clone(),
+                format!(
+                    "{wake_up} is one of odin's wake-ups, which these tools leave alone: \
+                     cancel_wakeup cancels it."
+                ),
+            ),
+            (
+                "nope".to_owned(),
+                "There's no schedule nope: list_schedules lists odin's.".to_owned(),
+            ),
+        ] {
+            let why = setup
+                .calls("odin", tool, json!({"id": by}))
+                .await
+                .expect_err("refused");
+            assert_eq!(why, said, "{tool} {by}");
+        }
+    }
+    let schedules = setup.dispatcher.schedules().expect("schedules");
+    let tock = schedules
+        .iter()
+        .find(|schedule| schedule.name == "tock")
+        .expect("thor's untouched");
+    assert_eq!(tock.paused, None);
+    assert!(schedules.iter().any(|schedule| schedule.id == wake_up));
+
+    // Its own, removed by id.
+    setup
+        .calls("odin", "remove_schedule", json!({"id": id}))
+        .await
+        .expect("remove_schedule");
+    assert_eq!(
+        names(
+            &setup
+                .calls("odin", "list_schedules", json!({}))
+                .await
+                .expect("list_schedules")
+        ),
+        [] as [String; 0]
+    );
+    setup.dispatcher.stop().await;
+}
+
+/// What a Bot's `add_schedule` refuses: what `schedules/add` would, one that comes more often
+/// than every five minutes, and one past 20 schedules, the person's counted but not its
+/// wake-ups.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bots_own_schedules_are_within_limits() {
+    let setup = Setup::new("2026-11-04T08:00:00Z").await;
+    setup.odin().await;
+    setup
+        .dispatcher
+        .add_schedule(schedule("tick", "odin", Some("30 9 * * *"), None, "tick"))
+        .expect("schedules/add");
+    setup.turn("hello").await;
+    setup
+        .calls("odin", "wake_me", json!({"prompt": "Nudge.", "in": 7200}))
+        .await
+        .expect("wake_me");
+    let add = |name: &str, cron: &str| json!({"name": name, "cron": cron, "prompt": "Go."});
+    for (arguments, said) in [
+        (
+            add("busy", "*/2 * * * *"),
+            "*/2 * * * * would come at Wed 4 Nov 08:02 UTC and again at Wed 4 Nov 08:04 UTC: a \
+             Bot's own schedule may come every 5 minutes at most.",
+        ),
+        (
+            add("twice", "0,3 9 * * *"),
+            "0,3 9 * * * would come at Wed 4 Nov 09:00 UTC and again at Wed 4 Nov 09:03 UTC",
+        ),
+        (
+            add("tick", "0 9 * * *"),
+            "There's a schedule called tick already.",
+        ),
+        (add("odd", "0 9 * *"), "The cron expression \"0 9 * *\""),
+        (
+            json!({"name": "far", "cron": "0 9 * * *", "prompt": "Go.", "zone": "Mars/Olympus"}),
+            "The time zone \"Mars/Olympus\"",
+        ),
+        (
+            json!({"name": "empty", "cron": "0 9 * * *", "prompt": " "}),
+            "A schedule needs a prompt: what to tell yourself each time.",
+        ),
+        (
+            json!({"name": "at", "cron": "0 9 * * *", "prompt": "Go.", "at": 1}),
+            "unknown field `at`",
+        ),
+    ] {
+        let why = setup
+            .calls("odin", "add_schedule", arguments.clone())
+            .await
+            .expect_err("refused");
+        assert!(why.contains(said), "{arguments}: {why}");
+    }
+
+    // Every five minutes is all right, and in a zone of its own.
+    let zoned = setup
+        .calls(
+            "odin",
+            "add_schedule",
+            json!({"name": "s-0", "cron": "*/5 * * * *", "prompt": "Go.", "zone": "Africa/Johannesburg"}),
+        )
+        .await
+        .expect("add_schedule");
+    assert_eq!(
+        (&zoned["zone"], &zoned["next"]["at"]),
+        (
+            &json!("Africa/Johannesburg"),
+            &json!("2026-11-04T10:05:00+02:00")
+        )
+    );
+
+    // Twenty with the person's, but not counting its wake-up.
+    for n in 1..19 {
+        setup
+            .calls("odin", "add_schedule", add(&format!("s-{n}"), "0 9 * * *"))
+            .await
+            .expect("add_schedule");
+    }
+    let full = setup
+        .calls("odin", "add_schedule", add("s-19", "0 9 * * *"))
+        .await
+        .expect_err("as many as it may have");
+    assert_eq!(
+        full,
+        "odin has 20 schedules, wake-ups aside, the most a Bot may have when it adds one: \
+         remove one with remove_schedule, if the person agrees, before adding another."
+    );
+    setup
+        .calls("odin", "remove_schedule", json!({"id": "s-0"}))
+        .await
+        .expect("remove_schedule");
+    setup
+        .calls("odin", "add_schedule", add("s-19", "0 9 * * *"))
+        .await
+        .expect("room for one more");
+    // The person isn't held to it.
+    setup
+        .dispatcher
+        .add_schedule(schedule("tock", "odin", Some("0 10 * * *"), None, "tock"))
+        .expect("schedules/add");
     setup.dispatcher.stop().await;
 }

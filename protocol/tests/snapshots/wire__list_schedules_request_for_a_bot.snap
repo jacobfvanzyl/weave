@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ListSchedulesRequest { bot: Some(\"odin\".to_owned()), })"
+---
+{
+  "method": "schedules/list",
+  "params": {
+    "bot": "odin"
+  }
+}

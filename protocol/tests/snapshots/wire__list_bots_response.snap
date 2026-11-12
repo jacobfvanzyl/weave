@@ -54,7 +54,9 @@ expression: "round_trip(&ListBotsResponse { bots: vec![odin.clone(), new], })"
       "threads": [],
       "state": "idle",
       "createdAt": 1760180000000,
-      "updatedAt": 1760180000000
+      "updatedAt": 1760180000000,
+      "createdBy": "b-5e1d0c9b8a7f6e5d4c3b",
+      "createdByName": "odin"
     }
   ]
 }

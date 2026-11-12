@@ -183,8 +183,11 @@ use weave_host_protocol::worktrees::CreateWorktreeRequest;
 use weave_host_protocol::worktrees::CreateWorktreeResponse;
 use weave_host_protocol::worktrees::FEATURE as WORKTREES_FEATURE;
 use weave_host_protocol::worktrees::GitLocation;
+use weave_host_protocol::worktrees::InitRepositoryRequest;
+use weave_host_protocol::worktrees::InitRepositoryResponse;
 use weave_host_protocol::worktrees::ListWorktreesRequest;
 use weave_host_protocol::worktrees::ListWorktreesResponse;
+use weave_host_protocol::worktrees::REPOS_INIT_FEATURE;
 use weave_host_protocol::worktrees::ReleaseWorktreeRequest;
 use weave_host_protocol::worktrees::ReleaseWorktreeResponse;
 use weave_host_protocol::worktrees::RemoveWorktreeRequest;
@@ -209,6 +212,7 @@ use crate::journal::now_ms;
 use crate::mcp::Servers;
 use crate::modes;
 use crate::queue::Queue;
+use crate::repos;
 use crate::service_tools;
 use crate::terminals;
 use crate::terminals::Terminals;
@@ -492,6 +496,10 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            answer!(connection, init_repository),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             answer!(connection, list_terminals),
             agent_client_protocol::on_receive_request!(),
         )
@@ -772,9 +780,10 @@ async fn handlers(
 
 /// The methods a service may ask (ADR 0027): its hello, and what starting headless turns,
 /// following threads, naming the ones it starts, serving tools and reaching the person's other
-/// Hosts for this Host's agents (ADR 0029) need; and carrying the person's devices'
-/// connections, which only the Dispatcher the Host joined may ask (ADR 0030).
-const FOR_SERVICES: [&str; 21] = [
+/// Hosts for this Host's agents (ADR 0029) need; carrying the person's devices' connections,
+/// which only the Dispatcher the Host joined may ask (ADR 0030); and making a Bot's home, a
+/// repository of its own (`repos/init`, WVE-178).
+const FOR_SERVICES: [&str; 22] = [
     "host/hello",
     "host/challenge",
     "host/status",
@@ -796,6 +805,7 @@ const FOR_SERVICES: [&str; 21] = [
     "turn/steer",
     "turn/cancel",
     "dispatcher/carry",
+    "repos/init",
 ];
 
 /// What in `request` a client allowed only `methods` may not ask, if anything: another method,
@@ -1091,6 +1101,7 @@ impl Connection {
                 CONTEXT_FEATURE.to_owned(),
                 SERVICE_TOOLS_FEATURE.to_owned(),
                 WORKTREES_FEATURE.to_owned(),
+                REPOS_INIT_FEATURE.to_owned(),
                 QUEUE_FEATURE.to_owned(),
                 REQUEST_KEYS_FEATURE.to_owned(),
                 GET_FEATURE.to_owned(),
@@ -1433,6 +1444,15 @@ impl Connection {
         // Whatever asked is about to remove it.
         self.shared.sessions.end_inside(&path);
         Ok(ReleaseWorktreeResponse { closed })
+    }
+
+    /// `repos/init`: a repository of its own, with the client's first files committed there.
+    async fn init_repository(
+        &self,
+        request: InitRepositoryRequest,
+    ) -> Result<InitRepositoryResponse, Error> {
+        self.hello_info()?;
+        repos::init(&self.shared, request).await
     }
 
     /// `sessions/list`: every Session, as the Host reads where each is again, but those whose

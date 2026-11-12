@@ -1,8 +1,9 @@
 //! Git through the `git` command (ADR 0019): where a thread's directory is in a repository,
 //! and a repository's worktrees, which the Host lists, makes beside it as worktrunk lays them
-//! out (`<repo>.<branch>`) and removes. Git runs with the agents' environment, so the person's
-//! configuration and hooks apply, never prompts, and reads without taking optional locks, so
-//! it doesn't get in the way of the person's own git.
+//! out (`<repo>.<branch>`) and removes; and making a repository of its own with its first
+//! files committed (`repos/init`, [`crate::repos`]). Git runs with the agents' environment, so
+//! the person's configuration and hooks apply, never prompts, and reads without taking optional
+//! locks, so it doesn't get in the way of the person's own git.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -405,6 +406,67 @@ impl Git {
         self.run(&repository.primary, &args, WRITE_TIMEOUT)
             .await
             .map(drop)
+    }
+
+    /// The top of the work tree `dir` is in, symlinks resolved; none outside one, as in a
+    /// repository's own `.git` directory.
+    pub(crate) async fn work_tree_top(&self, dir: &Path) -> Option<PathBuf> {
+        let inside = self
+            .read(dir, &["rev-parse", "--is-inside-work-tree"])
+            .await
+            .ok()?;
+        if inside.trim() != "true" {
+            return None;
+        }
+        let top = self
+            .read(dir, &["rev-parse", "--show-toplevel"])
+            .await
+            .ok()?;
+        Some(canonical(Path::new(top.trim())))
+    }
+
+    /// Make `dir` a repository (`git init`).
+    pub(crate) async fn init(&self, dir: &Path) -> Result<(), Error> {
+        self.run(dir, &["init", "--quiet"], READ_TIMEOUT)
+            .await
+            .map(drop)
+    }
+
+    /// Whether git knows who to commit as in `dir`, from its configuration or the environment,
+    /// rather than guessing from the computer.
+    pub(crate) async fn knows_who(&self, dir: &Path) -> bool {
+        let (author, committer) = tokio::join!(
+            self.holds(
+                dir,
+                &["-c", "user.useConfigOnly=true", "var", "GIT_AUTHOR_IDENT"]
+            ),
+            self.holds(
+                dir,
+                &[
+                    "-c",
+                    "user.useConfigOnly=true",
+                    "var",
+                    "GIT_COMMITTER_IDENT"
+                ]
+            ),
+        );
+        author && committer
+    }
+
+    /// Commit `files` in `dir`, relative to it, with `message`, and nothing else that's staged.
+    pub(crate) async fn commit_only(
+        &self,
+        dir: &Path,
+        files: &[&str],
+        message: &str,
+    ) -> Result<(), Error> {
+        let mut add = vec!["add", "--"];
+        add.extend(files);
+        self.run(dir, &add, READ_TIMEOUT).await?;
+        let mut commit = vec!["commit", "--quiet", "--message", message, "--only", "--"];
+        commit.extend(files);
+        // Hooks run, as the person's own commits run them.
+        self.run(dir, &commit, WRITE_TIMEOUT).await.map(drop)
     }
 
     /// Delete `branch` if git counts it merged, or regardless when `force`. Whether it went.

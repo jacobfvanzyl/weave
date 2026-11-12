@@ -576,7 +576,7 @@ describe('a thread that starts waiting off screen', () => {
     setIdiom('phone');
     render(<MockApp />);
     await act(() => new Promise((resolve) => setTimeout(resolve, 30)));
-    expect(screen.queryByText(/needs you$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/. needs you$/)).not.toBeInTheDocument();
   });
 });
 

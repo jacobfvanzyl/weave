@@ -12,10 +12,12 @@ mod schedules;
 
 pub(crate) use bots::BotChange;
 pub(crate) use bots::BotError;
+pub(crate) use bots::MOST_BOTS;
 pub(crate) use bots::NewBot;
 pub(crate) use bots::NewThread;
 pub(crate) use bots::Step;
 pub(crate) use bots::StoredBot;
+pub(crate) use bots::too_many;
 
 pub(crate) use calls::Call;
 pub(crate) use calls::Follow;
@@ -25,6 +27,7 @@ pub(crate) use devices::StoredDevice;
 pub(crate) use projects::Change;
 pub(crate) use projects::ProjectError;
 
+pub(crate) use schedules::BotSchedule;
 pub(crate) use schedules::Fired;
 pub(crate) use schedules::StoredSchedule;
 pub(crate) use schedules::WakeUp;
@@ -49,7 +52,7 @@ use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 8] = [
+const MIGRATIONS: [&str; 10] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -259,6 +262,17 @@ const MIGRATIONS: [&str; 8] = [
     CREATE UNIQUE INDEX schedules_by_wake_call ON schedules (bot_id, wake_call);
     ALTER TABLE deliveries ADD COLUMN bot_id TEXT REFERENCES bots (id) ON DELETE CASCADE;
     CREATE INDEX deliveries_by_bot ON deliveries (bot_id, state);
+",
+    // The Bot that made a Bot, when one did (WVE-178): its id, kept once that Bot is gone, so
+    // no foreign key.
+    "
+    ALTER TABLE bots ADD COLUMN created_by TEXT;
+",
+    // A schedule a Bot added itself with `add_schedule` (WVE-178): `made_call` is the Host's id
+    // for that tool call, once per Bot, as `wake_call` is for a wake-up.
+    "
+    ALTER TABLE schedules ADD COLUMN made_call TEXT;
+    CREATE UNIQUE INDEX schedules_by_made_call ON schedules (bot_id, made_call);
 ",
 ];
 

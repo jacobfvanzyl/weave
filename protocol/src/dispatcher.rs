@@ -22,6 +22,7 @@
 
 use std::path::PathBuf;
 
+use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
 use agent_client_protocol::schema::v1::ContentBlock;
@@ -39,6 +40,7 @@ use crate::policy::PermissionPolicy;
 use crate::threads::ThreadId;
 use crate::threads::TurnState;
 use crate::turns::TurnId;
+use crate::worktrees::InitRepositoryResponse;
 
 /// How the Dispatcher's last attempt to connect to a Host went.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +94,16 @@ pub const PROJECTS_FEATURE: &str = "projects";
 /// The [`DispatcherHello::features`] entry of a Dispatcher that keeps Bots (ADR 0028, WVE-118):
 /// it answers `bots/*`, and `schedules/add` takes `bot`, and `at` for a one-off.
 pub const BOTS_FEATURE: &str = "bots";
+
+/// The [`DispatcherHello::features`] entry of a Dispatcher that makes a Bot's home itself
+/// (WVE-178): `bots/add` asks the Bot's Host to make it with `repos/init`, takes no `home` for
+/// `~/bots/<name>`, takes `job`, and answers what making the home did ([`AddBotResponse`]); a
+/// Bot says which Bot made it, if one did; and `schedules/list` takes `bot`.
+pub const BOTS_HOME_FEATURE: &str = "bots_home";
+
+/// The [`DispatcherHello::features`] entry of a Dispatcher that answers `bots/watch` and
+/// `bots/unwatch` (WVE-178).
+pub const BOTS_WATCH_FEATURE: &str = "bots_watch";
 
 /// How long a pending request in a Bot's thread waits for the person before the Bot's schedules
 /// pause, unless the Bot says otherwise: 12 hours, in milliseconds.
@@ -587,11 +599,16 @@ pub struct Occurrence {
     pub ended_at: Option<Timestamp>,
 }
 
-/// `schedules/list`.
+/// `schedules/list`: every schedule, or with `bot` (feature `bots_home`) only the schedules
+/// that prompt that Bot, its wake-ups included.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "schedules/list", response = ListSchedulesResponse)]
-pub struct ListSchedulesRequest {}
+pub struct ListSchedulesRequest {
+    /// By id or name; invalid params for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -954,6 +971,13 @@ pub struct Bot {
     pub created_at: Timestamp,
     /// When it was last changed with `bots/update`.
     pub updated_at: Timestamp,
+    /// The Bot that made it, by id, when another Bot did (feature `bots_home`); absent for one
+    /// the person added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<String>,
+    /// That Bot's name now; absent once it's gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_name: Option<String>,
 }
 
 /// `bots/list`: the Bots, by name.
@@ -983,21 +1007,33 @@ pub struct BotResponse {
 }
 
 /// `bots/add`: a new Bot, with no thread yet: the first prompt that reaches it starts one in
-/// its home, which has to be a directory on its Host by then (the Dispatcher reads no Host's
-/// files). Invalid params, saying why, for an empty name or one of more than one line, a name
+/// its home. Invalid params, saying why, for an empty name or one of more than one line, a name
 /// another Bot has ignoring case, a Host that hasn't joined, an empty agent, a home that is
 /// neither whole nor under `~`, a time zone that doesn't parse, or a `newThreadAt` that isn't
 /// `HH:MM`.
+///
+/// With feature `bots_home` (WVE-178), once those pass the Dispatcher has the Bot's Host make
+/// the home with `repos/init`: a git repository of its own, with the Bot's first memory files,
+/// `AGENTS.md` and `CLAUDE.md`, committed unless one of them is there already. The Bot is added
+/// only once that's done, with the home as the Host gives it, whole, and the answer says what
+/// making it did. Refused with `host_unavailable` while the Host isn't connected, and as invalid
+/// params when the Host is too old to make one or refuses, saying why; no Bot is added then.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[request(method = "bots/add", response = BotResponse)]
+#[request(method = "bots/add", response = AddBotResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct AddBotRequest {
     pub name: String,
     /// The Host, by id or name.
     pub host: String,
     pub agent_id: AgentId,
-    pub home: PathBuf,
+    /// Whole on the Host, or under its home as `~/…`; `~/bots/<name>` when absent, the name
+    /// lowercased with a hyphen for each run of spaces or slash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<PathBuf>,
+    /// What the Bot is for, in the person's words: its first `AGENTS.md` says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
     /// Approving nothing, so what isn't approved waits for the person, when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<PermissionPolicy>,
@@ -1012,6 +1048,47 @@ pub struct AddBotRequest {
     /// [`DEFAULT_PAUSE_AFTER`] when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pause_after: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AddBotResponse {
+    pub bot: Bot,
+    /// What making its home on its Host did; absent from a Dispatcher without `bots_home`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<InitRepositoryResponse>,
+}
+
+/// `bots/watch`: the Bots, as `bots/list` gives them; then a [`BotUpdatedNotification`]
+/// whenever one is added or anything `bots/list` gives of it changes, and a
+/// [`BotRemovedNotification`] when one is removed, until the connection ends or the client
+/// sends `bots/unwatch` (feature `bots_watch`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "bots/watch", response = ListBotsResponse)]
+pub struct WatchBotsRequest {}
+
+/// `bots/unwatch`: stop what `bots/watch` sends.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "bots/unwatch", response = Empty)]
+pub struct UnwatchBotsRequest {}
+
+/// `bots/updated`, to clients watching the Bots: one was added, or changed, as it lists now.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[notification(method = "bots/updated")]
+pub struct BotUpdatedNotification {
+    pub bot: Bot,
+}
+
+/// `bots/removed`, to clients watching the Bots: the Bot `bot`, by id, was removed, or its
+/// Host was.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[notification(method = "bots/removed")]
+pub struct BotRemovedNotification {
+    pub bot: String,
 }
 
 /// `bots/update`: change what's given, all or none, checked as `bots/add` checks it. A policy

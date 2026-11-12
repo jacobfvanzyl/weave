@@ -6,7 +6,7 @@
 // (`src/mac/routes.ts`).
 import type { Connector, Credentials } from './connection';
 import type { DeviceKey } from './device-key';
-import { DISPATCHER, DispatcherConnection, type DispatcherPairing, type SocketOpener, carriedConnector } from './dispatcher';
+import { DISPATCHER, DispatcherConnection, type DispatcherNotification, type DispatcherPairing, type SocketOpener, carriedConnector } from './dispatcher';
 import type { ClientInfo } from './protocol';
 
 export type Routes = {
@@ -15,6 +15,8 @@ export type Routes = {
     pairing: DispatcherPairing;
     client: ClientInfo;
     onClosed(close: { code?: number; reason?: string }): void;
+    /** What it tells the connection, as after `bots/watch`. */
+    onNotification?(notification: DispatcherNotification): void;
     signal?: AbortSignal;
   }): Promise<DispatcherConnection>;
   /** Pairs with the Dispatcher at `url` with a code `weave pair` showed: its API, said hello to as the new device. */
@@ -25,6 +27,7 @@ export type Routes = {
     key: DeviceKey;
     client: ClientInfo;
     onClosed(close: { code?: number; reason?: string }): void;
+    onNotification?(notification: DispatcherNotification): void;
   }): Promise<DispatcherConnection>;
   /** A connection the Dispatcher carries to `hostId`, said hello to with `dispatcher`. */
   host(options: { pairing: DispatcherPairing; hostId: string; client: ClientInfo }): Connector;
@@ -51,18 +54,20 @@ export const hostCredentials = (local: boolean): Credentials => local ? { method
 
 /** The page's own WebSockets to the Dispatcher at its pairing's URL, proved with the device's key. */
 export const webRoutes = (socket: SocketOpener): Routes => ({
-  dispatcher: ({ pairing, client, onClosed, signal }) => DispatcherConnection.connect({
+  dispatcher: ({ pairing, client, onClosed, onNotification, signal }) => DispatcherConnection.connect({
     connector: socket(pairing.url, DISPATCHER.subprotocol),
     client,
     credentials: { method: 'device', dispatcherId: pairing.dispatcherId, deviceId: pairing.deviceId, key: pairing.key },
     onClosed,
+    onNotification,
     signal,
   }),
-  pair: ({ url, code, name, key, client, onClosed }) => DispatcherConnection.connect({
+  pair: ({ url, code, name, key, client, onClosed, onNotification }) => DispatcherConnection.connect({
     connector: socket(url, DISPATCHER.subprotocol),
     client,
     credentials: { method: 'pair', code, name, key },
     onClosed,
+    onNotification,
   }),
   host: ({ pairing, hostId, client }) => carriedConnector(socket, pairing, hostId, client),
 });

@@ -43,6 +43,7 @@ pub mod mcp;
 mod modes;
 pub mod paths;
 mod queue;
+mod repos;
 mod serve_entry;
 mod service_tools;
 mod sessions;

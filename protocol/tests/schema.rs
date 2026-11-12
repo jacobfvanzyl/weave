@@ -134,6 +134,7 @@ fn schema() -> Value {
         "worktrees/create" => worktrees::CreateWorktreeRequest,
         "worktrees/remove" => worktrees::RemoveWorktreeRequest,
         "worktrees/release" => worktrees::ReleaseWorktreeRequest,
+        "repos/init" => worktrees::InitRepositoryRequest,
         "terminals/list" => terminals::ListTerminalsRequest,
         "terminals/watch" => terminals::WatchTerminalsRequest,
         "terminals/unwatch" => terminals::UnwatchTerminalsRequest,
@@ -207,9 +208,13 @@ fn schema() -> Value {
         "bots/remove" => dispatcher::RemoveBotRequest,
         "bots/send" => dispatcher::SendToBotRequest,
         "bots/newThread" => dispatcher::NewBotThreadRequest,
+        "bots/watch" => dispatcher::WatchBotsRequest,
+        "bots/unwatch" => dispatcher::UnwatchBotsRequest,
     };
     let dispatcher_notifications = notifications! { generator, inlined;
         "devices/paired" => devices::DevicePairedNotification,
+        "bots/updated" => dispatcher::BotUpdatedNotification,
+        "bots/removed" => dispatcher::BotRemovedNotification,
     };
     // Why `hosts/open` answered `host_unavailable`, in its data.
     define::<dispatcher::HostUnavailable>(&mut generator, &mut inlined);
@@ -256,7 +261,12 @@ fn schema() -> Value {
                 "hostSubprotocol": dispatcher::DISPATCHER_HOST_SUBPROTOCOL,
                 "carrySubprotocol": dispatcher::DISPATCHER_CARRY_SUBPROTOCOL,
                 "authMessage": dispatcher::dispatcher_auth_message("{dispatcherId}", "{deviceId}", "{nonce}"),
-                "features": {"projects": dispatcher::PROJECTS_FEATURE, "bots": dispatcher::BOTS_FEATURE},
+                "features": {
+                    "projects": dispatcher::PROJECTS_FEATURE,
+                    "bots": dispatcher::BOTS_FEATURE,
+                    "botsHome": dispatcher::BOTS_HOME_FEATURE,
+                    "botsWatch": dispatcher::BOTS_WATCH_FEATURE,
+                },
                 "defaultPauseAfter": dispatcher::DEFAULT_PAUSE_AFTER,
             },
             "terminalStream": {
@@ -304,6 +314,7 @@ fn schema() -> Value {
                 "listFiles": files::LIST_FEATURE,
                 "rename": threads::RENAME_FEATURE,
                 "worktrees": worktrees::FEATURE,
+                "reposInit": worktrees::REPOS_INIT_FEATURE,
                 "queue": queue::FEATURE,
                 "getThread": threads::GET_FEATURE,
                 "requestKeys": turns::REQUEST_KEYS_FEATURE,

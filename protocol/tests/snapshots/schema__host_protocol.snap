@@ -176,6 +176,10 @@ expression: schema()
       "params": "ReleaseWorktreeRequest",
       "result": "ReleaseWorktreeResponse"
     },
+    "repos/init": {
+      "params": "InitRepositoryRequest",
+      "result": "InitRepositoryResponse"
+    },
     "terminals/list": {
       "params": "ListTerminalsRequest",
       "result": "TerminalsResponse"
@@ -383,7 +387,7 @@ expression: schema()
     },
     "bots/add": {
       "params": "AddBotRequest",
-      "result": "BotResponse"
+      "result": "AddBotResponse"
     },
     "bots/update": {
       "params": "UpdateBotRequest",
@@ -400,10 +404,20 @@ expression: schema()
     "bots/newThread": {
       "params": "NewBotThreadRequest",
       "result": "BotResponse"
+    },
+    "bots/watch": {
+      "params": "WatchBotsRequest",
+      "result": "ListBotsResponse"
+    },
+    "bots/unwatch": {
+      "params": "UnwatchBotsRequest",
+      "result": "Empty"
     }
   },
   "x-weave-dispatcher-notifications": {
-    "devices/paired": "DevicePairedNotification"
+    "devices/paired": "DevicePairedNotification",
+    "bots/updated": "BotUpdatedNotification",
+    "bots/removed": "BotRemovedNotification"
   },
   "x-weave-constants": {
     "protocol": {
@@ -425,7 +439,9 @@ expression: schema()
       "authMessage": "weave-dispatcher-auth/1 {dispatcherId} {deviceId} {nonce}",
       "features": {
         "projects": "projects",
-        "bots": "bots"
+        "bots": "bots",
+        "botsHome": "bots_home",
+        "botsWatch": "bots_watch"
       },
       "defaultPauseAfter": 43200000
     },
@@ -474,6 +490,7 @@ expression: schema()
       "listFiles": "files/list",
       "rename": "thread/rename",
       "worktrees": "worktrees",
+      "reposInit": "repos_init",
       "queue": "queue",
       "getThread": "threads/get",
       "requestKeys": "requestKeys",
@@ -7187,6 +7204,129 @@ expression: schema()
         }
       }
     },
+    "InitRepositoryRequest": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Absolute on the Host's computer, or under its user's home as `~/…`."
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RepositoryFile"
+          },
+          "description": "Relative to the directory, within it: no `..`, no `.git`, each once."
+        },
+        "message": {
+          "type": "string",
+          "description": "The commit message for `files`, which needs one."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "description": "`repos/init`: a directory on the Host's computer that is a git repository of its own, with\n`files` written and committed in it. The directory, and its parents, are made if they aren't\nthere, and `git init` makes it a repository unless it's the top of one already; one inside\nanother repository's work tree is refused, as a repository of its own is asked for. If any\nof `files` is there already, as a file, a directory or a link, none is written and nothing is\ncommitted. Otherwise each is written, never over anything, and those files alone are\ncommitted with `message`, as the user git's configuration names; without a `user.name` and\n`user.email` there, they're left written but uncommitted, and the answer says so. Nothing\nelse in the directory is touched or committed."
+    },
+    "RepositoryFile": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "text"
+      ],
+      "description": "A file [`InitRepositoryRequest`] writes, as UTF-8 text."
+    },
+    "InitRepositoryResponse": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The directory, absolute, with symlinks resolved."
+        },
+        "created": {
+          "type": "boolean",
+          "description": "It wasn't there, and was made."
+        },
+        "initialized": {
+          "type": "boolean",
+          "description": "It wasn't the top of a repository, and is one now."
+        },
+        "files": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FilesMade"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What became of the files; absent when none were named."
+        }
+      },
+      "required": [
+        "path"
+      ]
+    },
+    "FilesMade": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "const": "kept"
+            }
+          },
+          "required": [
+            "state",
+            "file"
+          ],
+          "description": "This one of them was there already, so none was written."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "committed"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "description": "Written, and committed on their own."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "why": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "const": "uncommitted"
+            }
+          },
+          "required": [
+            "state",
+            "why"
+          ],
+          "description": "Written, but not committed, for this reason."
+        }
+      ],
+      "description": "What became of the files [`InitRepositoryRequest`] named."
+    },
     "ListTerminalsRequest": {
       "type": "object",
       "properties": {
@@ -11093,7 +11233,16 @@ expression: schema()
     },
     "ListSchedulesRequest": {
       "type": "object",
-      "description": "`schedules/list`."
+      "properties": {
+        "bot": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "By id or name; invalid params for none."
+        }
+      },
+      "description": "`schedules/list`: every schedule, or with `bot` (feature `bots_home`) only the schedules\nthat prompt that Bot, its wake-ups included."
     },
     "ListSchedulesResponse": {
       "type": "object",
@@ -11962,6 +12111,20 @@ expression: schema()
           "format": "uint64",
           "minimum": 0,
           "description": "When it was last changed with `bots/update`."
+        },
+        "createdBy": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The Bot that made it, by id, when another Bot did (feature `bots_home`); absent for one\nthe person added."
+        },
+        "createdByName": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "That Bot's name now; absent once it's gone."
         }
       },
       "required": [
@@ -12066,7 +12229,18 @@ expression: schema()
           "type": "string"
         },
         "home": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Whole on the Host, or under its home as `~/…`; `~/bots/<name>` when absent, the name\nlowercased with a hyphen for each run of spaces or slash."
+        },
+        "job": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What the Bot is for, in the person's words: its first `AGENTS.md` says so."
         },
         "policy": {
           "anyOf": [
@@ -12112,10 +12286,31 @@ expression: schema()
       "required": [
         "name",
         "host",
-        "agentId",
-        "home"
+        "agentId"
       ],
-      "description": "`bots/add`: a new Bot, with no thread yet: the first prompt that reaches it starts one in\nits home, which has to be a directory on its Host by then (the Dispatcher reads no Host's\nfiles). Invalid params, saying why, for an empty name or one of more than one line, a name\nanother Bot has ignoring case, a Host that hasn't joined, an empty agent, a home that is\nneither whole nor under `~`, a time zone that doesn't parse, or a `newThreadAt` that isn't\n`HH:MM`."
+      "description": "`bots/add`: a new Bot, with no thread yet: the first prompt that reaches it starts one in\nits home. Invalid params, saying why, for an empty name or one of more than one line, a name\nanother Bot has ignoring case, a Host that hasn't joined, an empty agent, a home that is\nneither whole nor under `~`, a time zone that doesn't parse, or a `newThreadAt` that isn't\n`HH:MM`.\n\nWith feature `bots_home` (WVE-178), once those pass the Dispatcher has the Bot's Host make\nthe home with `repos/init`: a git repository of its own, with the Bot's first memory files,\n`AGENTS.md` and `CLAUDE.md`, committed unless one of them is there already. The Bot is added\nonly once that's done, with the home as the Host gives it, whole, and the answer says what\nmaking it did. Refused with `host_unavailable` while the Host isn't connected, and as invalid\nparams when the Host is too old to make one or refuses, saying why; no Bot is added then."
+    },
+    "AddBotResponse": {
+      "type": "object",
+      "properties": {
+        "bot": {
+          "$ref": "#/$defs/Bot"
+        },
+        "home": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InitRepositoryResponse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What making its home on its Host did; absent from a Dispatcher without `bots_home`."
+        }
+      },
+      "required": [
+        "bot"
+      ]
     },
     "UpdateBotRequest": {
       "type": "object",
@@ -12239,6 +12434,14 @@ expression: schema()
       ],
       "description": "`bots/newThread`: start a Bot's new thread, by id or name. Prompts for it wait from now on;\nonce its current thread is idle, that thread is asked to save what's worth keeping to the\nBot's memory files, note itself in `threads/` in the home and commit; then a new thread\nstarts in the home, the old one names it as its successor, and the prompts that waited go\ninto it. Invalid params, saying why, for a Bot with no thread yet or one starting one\nalready."
     },
+    "WatchBotsRequest": {
+      "type": "object",
+      "description": "`bots/watch`: the Bots, as `bots/list` gives them; then a [`BotUpdatedNotification`]\nwhenever one is added or anything `bots/list` gives of it changes, and a\n[`BotRemovedNotification`] when one is removed, until the connection ends or the client\nsends `bots/unwatch` (feature `bots_watch`)."
+    },
+    "UnwatchBotsRequest": {
+      "type": "object",
+      "description": "`bots/unwatch`: stop what `bots/watch` sends."
+    },
     "DevicePairedNotification": {
       "type": "object",
       "properties": {
@@ -12250,6 +12453,30 @@ expression: schema()
         "device"
       ],
       "description": "`devices/paired`: a device took the offer this connection made."
+    },
+    "BotUpdatedNotification": {
+      "type": "object",
+      "properties": {
+        "bot": {
+          "$ref": "#/$defs/Bot"
+        }
+      },
+      "required": [
+        "bot"
+      ],
+      "description": "`bots/updated`, to clients watching the Bots: one was added, or changed, as it lists now."
+    },
+    "BotRemovedNotification": {
+      "type": "object",
+      "properties": {
+        "bot": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bot"
+      ],
+      "description": "`bots/removed`, to clients watching the Bots: the Bot `bot`, by id, was removed, or its\nHost was."
     },
     "HostUnavailable": {
       "type": "object",

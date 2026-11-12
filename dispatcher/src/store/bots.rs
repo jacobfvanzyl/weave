@@ -25,6 +25,10 @@ use super::random_id;
 use super::to_sql;
 use crate::now_ms;
 
+/// How many Bots there may be at most when a Bot makes one (WVE-178). The person adding one
+/// isn't held to it.
+pub(crate) const MOST_BOTS: u32 = 20;
+
 /// Why a change to the Bots didn't happen.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum BotError {
@@ -70,6 +74,10 @@ pub(crate) struct StoredBot {
     pub(crate) new_threads: u64,
     pub(crate) created_at: u64,
     pub(crate) updated_at: u64,
+    /// The Bot that made it, by id, if one did.
+    pub(crate) created_by: Option<String>,
+    /// That Bot's name, while it's there.
+    pub(crate) created_by_name: Option<String>,
     /// Oldest first, the current one last.
     pub(crate) threads: Vec<StoredThread>,
     /// The new thread being started.
@@ -151,6 +159,8 @@ pub(crate) struct NewBot {
     pub(crate) new_thread_at: Option<String>,
     pub(crate) zone: String,
     pub(crate) pause_after: u64,
+    /// The Bot that makes it, by id, if one does.
+    pub(crate) created_by: Option<String>,
 }
 
 /// What `bots/update` changes, checked but for the name.
@@ -175,18 +185,31 @@ impl Store {
         find(&self.lock(), by).map_err(failed)
     }
 
-    /// A new Bot, with no thread yet, its daily new thread considered from `now`.
+    /// `name`, trimmed, if no Bot has it, ignoring case; checked again when the Bot is added.
+    pub(crate) fn free_bot_name(&self, name: &str) -> Result<String, BotError> {
+        free_name(&self.lock(), name, None)
+    }
+
+    /// A new Bot, with no thread yet, its daily new thread considered from `now`. One a Bot
+    /// makes is refused once there are [`MOST_BOTS`].
     pub(crate) fn add_bot(&self, new: &NewBot, now: u64) -> Result<StoredBot, BotError> {
         let mut connection = self.lock();
         let transaction = connection.transaction()?;
         let name = free_name(&transaction, &new.name, None)?;
+        if new.created_by.is_some() {
+            let had: u32 =
+                transaction.query_row("SELECT count(*) FROM bots", [], |row| row.get(0))?;
+            if had >= MOST_BOTS {
+                return Err(BotError::Refused(too_many(had)));
+            }
+        }
         joined(&transaction, &new.host_id)?;
         let id = format!("b-{}", random_id());
         let created = now_ms();
         transaction.execute(
             "INSERT INTO bots (id, name, agent_id, host_id, home, policy, mode, new_thread_at, \
-             zone, pause_after, new_thread_considered, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+             zone, pause_after, new_thread_considered, created_at, updated_at, created_by) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13)",
             params![
                 id,
                 name,
@@ -199,7 +222,8 @@ impl Store {
                 new.zone,
                 to_sql(new.pause_after),
                 to_sql(now),
-                to_sql(created)
+                to_sql(created),
+                new.created_by
             ],
         )?;
         let bot = find(&transaction, &id)?.ok_or_else(|| missing(&id))?;
@@ -657,6 +681,14 @@ fn free_name(
     }
 }
 
+/// Why a Bot can't make another when there are `had` already.
+pub(crate) fn too_many(had: u32) -> String {
+    format!(
+        "there are {had} Bots, the most there may be when a Bot makes one; the person can still \
+         add one themselves, or remove one"
+    )
+}
+
 fn to_json(policy: &PermissionPolicy) -> Result<String, BotError> {
     serde_json::to_string(policy).map_err(|error| BotError::Failed(error.to_string()))
 }
@@ -670,7 +702,9 @@ fn all(connection: &Connection) -> rusqlite::Result<Vec<StoredBot>> {
     let mut statement = connection.prepare(
         "SELECT id, name, agent_id, host_id, home, policy, mode, new_thread_at, zone, \
          pause_after, thread_id, paused, waiting_since, new_thread_considered, new_thread_due, \
-         new_threads, created_at, updated_at FROM bots ORDER BY name COLLATE NOCASE, id",
+         new_threads, created_at, updated_at, created_by, \
+         (SELECT maker.name FROM bots AS maker WHERE maker.id = bots.created_by) \
+         FROM bots ORDER BY name COLLATE NOCASE, id",
     )?;
     let mut bots: Vec<StoredBot> = statement
         .query_map([], |row| {
@@ -693,6 +727,8 @@ fn all(connection: &Connection) -> rusqlite::Result<Vec<StoredBot>> {
                 new_threads: from_sql(row.get(15)?),
                 created_at: from_sql(row.get(16)?),
                 updated_at: from_sql(row.get(17)?),
+                created_by: row.get(18)?,
+                created_by_name: row.get(19)?,
                 threads: Vec::new(),
                 new_thread: None,
             })
@@ -797,6 +833,7 @@ mod tests {
             new_thread_at: None,
             zone: "UTC".to_owned(),
             pause_after: 1000,
+            created_by: None,
         }
     }
 
@@ -873,6 +910,43 @@ mod tests {
         );
         assert!(store.remove_host("h-lab").expect("removed"));
         assert_eq!(store.bots().expect("bots"), Vec::new());
+    }
+
+    /// A Bot made by another names it, by name while it's there and by id after.
+    #[test]
+    fn a_bot_made_by_another_names_it() {
+        let store = store();
+        let odin = store.add_bot(&new("odin"), 1).expect("added");
+        assert_eq!(
+            store.free_bot_name(" ODIN "),
+            Err(BotError::Refused(
+                "there's a Bot called odin already".to_owned()
+            ))
+        );
+        assert_eq!(store.free_bot_name(" scribe "), Ok("scribe".to_owned()));
+        let scribe = store
+            .add_bot(
+                &NewBot {
+                    created_by: Some(odin.id.clone()),
+                    ..new("scribe")
+                },
+                1,
+            )
+            .expect("added");
+        assert_eq!(
+            (
+                scribe.created_by.as_deref(),
+                scribe.created_by_name.as_deref()
+            ),
+            (Some(odin.id.as_str()), Some("odin"))
+        );
+        assert_eq!((odin.created_by, odin.created_by_name), (None, None));
+        store.remove_bot("odin").expect("removed");
+        let scribe = store.find_bot("scribe").expect("found").expect("there");
+        assert_eq!(
+            (scribe.created_by.as_deref(), scribe.created_by_name),
+            (Some(odin.id.as_str()), None)
+        );
     }
 
     #[test]

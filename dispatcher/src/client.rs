@@ -1,5 +1,6 @@
 //! A client of the Dispatcher's API, as the `weave` CLI is: connect to its socket, or to its
-//! WebSocket as a paired device ([`DispatcherConnection::connect_with`]), say hello, and ask.
+//! WebSocket as a paired device ([`DispatcherConnection::connect_with`]), say hello, and ask;
+//! and after `bots/watch`, hear of each change to the Bots ([`DispatcherConnection::bot_change`]).
 
 use agent_client_protocol::ConnectTo;
 use agent_client_protocol::ConnectionTo;
@@ -15,6 +16,9 @@ use weave_host_protocol::DispatcherClient;
 use weave_host_protocol::devices::Device;
 use weave_host_protocol::devices::DevicePairedNotification;
 use weave_host_protocol::devices::NewDevice;
+use weave_host_protocol::dispatcher::Bot;
+use weave_host_protocol::dispatcher::BotRemovedNotification;
+use weave_host_protocol::dispatcher::BotUpdatedNotification;
 use weave_host_protocol::dispatcher::DISPATCHER_PROTOCOL;
 use weave_host_protocol::dispatcher::DispatcherChallengeRequest;
 use weave_host_protocol::dispatcher::DispatcherHello;
@@ -29,8 +33,19 @@ pub struct DispatcherConnection {
     hello: DispatcherHello,
     /// The devices that took this connection's pairing offers.
     paired: mpsc::UnboundedReceiver<Device>,
+    /// What `bots/watch` tells it, in order.
+    bots: mpsc::UnboundedReceiver<BotChange>,
     shutdown: oneshot::Sender<()>,
     driver: JoinHandle<()>,
+}
+
+/// A change to the Bots, as a connection watching them hears it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BotChange {
+    /// One was added, or changed: as it lists now.
+    Updated(Box<Bot>),
+    /// The one with this id was removed.
+    Removed(String),
 }
 
 impl DispatcherConnection {
@@ -54,6 +69,8 @@ impl DispatcherConnection {
         let (shutdown, shutdown_rx) = oneshot::channel::<()>();
         let (ended_tx, ended_rx) = oneshot::channel();
         let (paired_tx, paired) = mpsc::unbounded_channel();
+        let (bots_tx, bots) = mpsc::unbounded_channel();
+        let removed_tx = bots_tx.clone();
         let driver = tokio::spawn(async move {
             let result = DispatcherClient
                 .builder()
@@ -61,6 +78,20 @@ impl DispatcherConnection {
                 .on_receive_notification(
                     async move |notification: DevicePairedNotification, _cx| {
                         let _ = paired_tx.send(notification.device);
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .on_receive_notification(
+                    async move |notification: BotUpdatedNotification, _cx| {
+                        let _ = bots_tx.send(BotChange::Updated(Box::new(notification.bot)));
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .on_receive_notification(
+                    async move |notification: BotRemovedNotification, _cx| {
+                        let _ = removed_tx.send(BotChange::Removed(notification.bot));
                         Ok(())
                     },
                     agent_client_protocol::on_receive_notification!(),
@@ -108,6 +139,7 @@ impl DispatcherConnection {
             cx,
             hello,
             paired,
+            bots,
             shutdown,
             driver,
         })
@@ -121,6 +153,12 @@ impl DispatcherConnection {
     /// connection ends.
     pub async fn paired(&mut self) -> Option<Device> {
         self.paired.recv().await
+    }
+
+    /// The next change to the Bots, once this connection watches them (`bots/watch`); none once
+    /// the connection ends.
+    pub async fn bot_change(&mut self) -> Option<BotChange> {
+        self.bots.recv().await
     }
 
     /// Any request, answered when the Dispatcher answers.

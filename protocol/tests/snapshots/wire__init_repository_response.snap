@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&InitRepositoryResponse\n{\n    path: \"/home/jaco/bots/odin\".into(), created: true, initialized: true,\n    files: Some(FilesMade::Committed),\n})"
+---
+{
+  "path": "/home/jaco/bots/odin",
+  "created": true,
+  "initialized": true,
+  "files": {
+    "state": "committed"
+  }
+}

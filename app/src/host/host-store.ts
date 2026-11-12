@@ -10,6 +10,10 @@ import type {
   AgentChoice,
   AgentUpdateNotice,
   AppActions,
+  BotChange,
+  BotSummary,
+  ScheduleAction,
+  ScheduleSummary,
   CreatedThread,
   DirectoryListing,
   AppModel,
@@ -35,7 +39,7 @@ import { ThreadReadState } from '@/app/thread-read-state';
 import { type ClientTool, toolError } from './client-tools';
 import { CONNECTION_CLOSED, ConnectError, HostConnection, HostError, type HostEvent, type OpenedThread } from './connection';
 import type { DeviceKey } from './device-key';
-import type { DispatcherConnection, SocketOpener } from './dispatcher';
+import type { DispatcherConnection, DispatcherNotification, SocketOpener } from './dispatcher';
 import { JournalFollower, originLabel, transcriptEvents } from './journal';
 import { type Routes, hostCredentials, webRoutes } from './routes';
 import { HostSessions } from './sessions';
@@ -43,6 +47,7 @@ import {
   HOST_PROTOCOL,
   type AgentSummary,
   type AnswerPendingRequest,
+  type Bot,
   type ClientCapabilities,
   type ClientInfo,
   type ContentBlock,
@@ -52,6 +57,7 @@ import {
   type PendingRequest,
   type PendingResolvedNotification,
   type QueuedPrompt as HostQueuedPrompt,
+  type Schedule,
   type ThreadEventNotification,
   type ThreadListing,
   type ThreadState,
@@ -114,6 +120,8 @@ type DispatcherEntry = {
   relists: number;
   /** No more tries until the person asks: it refused or revoked this device, or speaks another version. */
   stopped: boolean;
+  /** What `bots/watch` told before its answer came, to make again on what the answer lists. */
+  botsEarly?: DispatcherNotification[];
 };
 
 /** One of the person's Hosts, as the Dispatcher lists it, and its connection through the Dispatcher. */
@@ -269,6 +277,64 @@ const hostAway = (host: DispatcherHost) => {
   }
 };
 
+/** A Bot as the app keeps it, with nothing the wire leaves empty. */
+const botSummary = (bot: Bot): BotSummary => ({
+  id: bot.id,
+  name: bot.name,
+  agentId: bot.agentId,
+  hostId: bot.hostId,
+  hostName: bot.hostName,
+  connected: bot.connected,
+  home: bot.home,
+  policy: bot.policy,
+  ...(bot.mode ? { mode: bot.mode } : {}),
+  ...(bot.newThreadAt ? { newThreadAt: bot.newThreadAt } : {}),
+  zone: bot.zone,
+  pauseAfter: bot.pauseAfter,
+  ...(bot.thread ? { thread: bot.thread } : {}),
+  threads: (bot.threads ?? []).map(({ threadId, startedAt, endedAt }) => ({ threadId, startedAt, ...(endedAt !== undefined && endedAt !== null ? { endedAt } : {}) })),
+  state: bot.state,
+  ...(bot.waitingSince !== undefined && bot.waitingSince !== null ? { waitingSince: bot.waitingSince } : {}),
+  ...(bot.paused ? { paused: bot.paused } : {}),
+  ...(bot.startingThread ? { startingThread: true } : {}),
+  ...(bot.createdBy ? { createdBy: bot.createdBy } : {}),
+  ...(bot.createdByName ? { createdByName: bot.createdByName } : {}),
+  createdAt: bot.createdAt,
+  updatedAt: bot.updatedAt,
+});
+
+/** A schedule as a Bot's page lists it. */
+const scheduleSummary = (schedule: Schedule): ScheduleSummary => ({
+  id: schedule.id,
+  name: schedule.name,
+  wakeUp: schedule.wakeUp === true,
+  cron: schedule.cron,
+  ...(schedule.at !== undefined && schedule.at !== null ? { at: schedule.at } : {}),
+  zone: schedule.zone,
+  prompt: schedule.prompt.flatMap((block) => block.type === 'text' ? [block.text] : []).join(' '),
+  ...(schedule.paused ? { paused: schedule.paused } : {}),
+  ...(schedule.next ? { next: schedule.next } : {}),
+  ...(schedule.nextAt !== undefined && schedule.nextAt !== null ? { nextAt: schedule.nextAt } : {}),
+  ...(schedule.last
+    ? {
+        last: {
+          state: schedule.last.state,
+          ...(schedule.last.outcome ? { outcome: schedule.last.outcome } : {}),
+          ...(schedule.last.why ? { why: schedule.last.why } : {}),
+          at: schedule.last.scheduledAt,
+        },
+      }
+    : {}),
+});
+
+/** What the Dispatcher refused, as the person should read it: its message says why. */
+const refused = (what: string | undefined, error: unknown) => {
+  const why = error instanceof HostError
+    ? error.code === CONNECTION_CLOSED ? "The Dispatcher can't be reached now." : error.message
+    : describe(error);
+  return new Error(what ? `${what}: ${why}` : why);
+};
+
 const meta = (value: unknown, ...path: string[]): unknown =>
   path.reduce<unknown>((current, key) => typeof current === 'object' && current !== null ? (current as Record<string, unknown>)[key] : undefined, value);
 
@@ -294,6 +360,14 @@ export class HostStore {
   readonly #sessions: HostSessions;
   #session?: ShownSession;
   #projects: ProjectSummary[] = [];
+  /** The Bots, by id, from a Dispatcher that keeps them (`bots`); none from one that doesn't. */
+  #bots?: Map<string, Bot>;
+  /** The Dispatcher makes a new Bot's home (`bots_home`). */
+  #canAddBots = false;
+  /** A thread shown to read only (`peekThread`), beside the threads on screen. */
+  #peeked?: string;
+  /** Threads opened only to be read, which close again once nothing needs them. */
+  readonly #closeWhenLeft = new Set<string>();
   readonly #perThread = new Map<string, ThreadActions>();
   readonly #creating = new Map<number, Creating>();
   /** Client tool calls running on this device, by pending id. */
@@ -409,6 +483,7 @@ export class HostStore {
     }
     dispatcher.relists = 0;
     void this.#listProjects(dispatcher);
+    if (!dispatcher.connection?.hello.features?.includes(HOST_PROTOCOL.dispatcher.features.botsWatch)) void this.#watchBots(dispatcher);
     await Promise.all([this.#wakeDispatcher(dispatcher), ...[...this.#hosts.values()].map((entry) => this.#wake(entry))]);
   }
 
@@ -524,7 +599,156 @@ export class HostStore {
       }
     },
     attachTerminal: (id) => this.#attachTerminal(id),
+    peekThread: (key) => this.#peek(key),
+    addBot: async ({ name, hostId, agentId, job }) => {
+      try {
+        const { bot } = await this.#dispatcherApi().request('bots/add', { name, host: hostId, agentId, ...(job?.trim() ? { job: job.trim() } : {}) });
+        this.#botUpdated(bot);
+        return botSummary(bot);
+      } catch (error) {
+        throw refused(undefined, error);
+      }
+    },
+    updateBot: async (id, change: BotChange) => {
+      try {
+        const { bot } = await this.#dispatcherApi().request('bots/update', { bot: id, ...change });
+        this.#botUpdated(bot);
+      } catch (error) {
+        throw refused("Couldn't change the Bot", error);
+      }
+    },
+    removeBot: async (id) => {
+      try {
+        await this.#dispatcherApi().request('bots/remove', { bot: id });
+      } catch (error) {
+        throw refused("Couldn't remove the Bot", error);
+      }
+      this.#bots?.delete(id);
+      this.#changed();
+    },
+    newBotThread: async (id) => {
+      try {
+        const { bot } = await this.#dispatcherApi().request('bots/newThread', { bot: id });
+        this.#botUpdated(bot);
+      } catch (error) {
+        throw refused("Couldn't start a new thread", error);
+      }
+    },
+    sendToBot: async (id, text, images) => {
+      try {
+        const { bot } = await this.#dispatcherApi().request('bots/send', { bot: id, prompt: promptBlocks(text, images) });
+        this.#botUpdated(bot);
+      } catch (error) {
+        throw refused("Couldn't send it", error);
+      }
+    },
+    botSchedules: async (id) => {
+      try {
+        const { schedules } = await this.#dispatcherApi().request('schedules/list', { bot: id });
+        return schedules.map(scheduleSummary);
+      } catch (error) {
+        throw refused("Couldn't list its schedules", error);
+      }
+    },
+    changeSchedule: async (id, action: ScheduleAction) => {
+      const connection = this.#dispatcherApi();
+      try {
+        switch (action) {
+          case 'pause': await connection.request('schedules/pause', { schedule: id }); break;
+          case 'resume': await connection.request('schedules/resume', { schedule: id }); break;
+          case 'run': await connection.request('schedules/run', { schedule: id }); break;
+          case 'remove': await connection.request('schedules/remove', { schedule: id }); break;
+        }
+      } catch (error) {
+        throw refused(`Couldn't ${action === 'run' ? 'run' : action} it`, error);
+      }
+    },
   };
+
+  /** The Dispatcher's API, for a request the person waits on, or why there's none. */
+  #dispatcherApi(): DispatcherConnection {
+    const connection = this.#dispatcher?.connection;
+    if (!connection || connection.closed) throw new Error(`The Dispatcher${this.#dispatcher ? ` on ${this.#dispatcher.record.name}` : ''} can't be reached now.`);
+    return connection;
+  }
+
+  /**
+   * The Bots, from a Dispatcher that keeps them: watched, so they stay up to date (`bots/watch`),
+   * or listed (`bots/list`) from one that can't, again as the list is refreshed. What the watch
+   * tells before its answer is newer than the answer, and is made again on it.
+   */
+  async #watchBots(dispatcher: DispatcherEntry) {
+    const connection = dispatcher.connection;
+    if (!connection || connection.closed) return;
+    const features = connection.hello.features ?? [];
+    const { bots, botsHome, botsWatch } = HOST_PROTOCOL.dispatcher.features;
+    this.#canAddBots = features.includes(botsHome);
+    if (!features.includes(bots) && !features.includes(botsWatch)) {
+      this.#bots = undefined;
+      this.#changed();
+      return;
+    }
+    const watch = features.includes(botsWatch);
+    if (watch) dispatcher.botsEarly = [];
+    try {
+      const { bots: listed } = watch ? await connection.request('bots/watch', {}) : await connection.request('bots/list', {});
+      if (dispatcher.connection !== connection || this.#dispatcher !== dispatcher) return;
+      this.#bots = new Map(listed.map((bot) => [bot.id, bot]));
+      const early = dispatcher.botsEarly ?? [];
+      dispatcher.botsEarly = undefined;
+      for (const notification of early) this.#botNotified(notification);
+      this.#changed();
+    } catch {
+      // The Bots stay as last listed; reconnecting watches them again.
+      if (dispatcher.connection === connection) dispatcher.botsEarly = undefined;
+    }
+  }
+
+  /** What the Dispatcher told this connection. */
+  #dispatcherNotified(dispatcher: DispatcherEntry, connection: DispatcherConnection, notification: DispatcherNotification) {
+    if (dispatcher.connection !== connection || this.#dispatcher !== dispatcher) return;
+    if (dispatcher.botsEarly) {
+      dispatcher.botsEarly.push(notification);
+      return;
+    }
+    this.#botNotified(notification);
+  }
+
+  #botNotified(notification: DispatcherNotification) {
+    switch (notification.method) {
+      case 'bots/updated':
+        this.#botUpdated(notification.params.bot);
+        return;
+      case 'bots/removed':
+        this.#bots?.delete(notification.params.bot);
+        this.#changed();
+        return;
+      default:
+        return;
+    }
+  }
+
+  #botUpdated(bot: Bot) {
+    this.#bots ??= new Map();
+    this.#bots.set(bot.id, bot);
+    this.#changed();
+  }
+
+  /**
+   * Shows a thread to read only, beside the threads on screen, or none. One that wasn't open is
+   * opened in its agent to be read, and closes again once nothing needs it.
+   */
+  #peek(key?: string) {
+    if (this.#peeked === key) return;
+    const previous = this.#peeked;
+    this.#peeked = key;
+    if (key) {
+      const [hostId, ...rest] = key.split('/');
+      const listing = this.#hosts.get(hostId)?.threads.find(({ info }) => info.sessionId === rest.join('/'));
+      if (!this.#shown.has(key) && listing?.state !== 'open') this.#closeWhenLeft.add(key);
+    }
+    this.#show([...this.#shown].filter((shown) => shown !== previous), this.#selectedKey, false);
+  }
 
   /** What's done in one thread, in the one `pick` gives when it's done. */
   #threadActions(pick: () => Followed | undefined): ThreadActions {
@@ -668,6 +892,7 @@ export class HostStore {
         pairing: { url: record.url, dispatcherId: record.dispatcherId, deviceId: record.deviceId, key },
         client: this.#options.client,
         onClosed: (close) => { if (connection) this.#dispatcherClosed(dispatcher, connection, close); },
+        onNotification: (notification) => { if (connection) this.#dispatcherNotified(dispatcher, connection, notification); },
         signal: connecting.signal,
       });
     } catch (error) {
@@ -695,6 +920,7 @@ export class HostStore {
     dispatcher.relists = 0;
     this.#changed();
     void this.#listProjects(dispatcher);
+    void this.#watchBots(dispatcher);
     await this.#listHosts();
   }
 
@@ -1310,6 +1536,7 @@ export class HostStore {
   #show(keys: string[], front: string | undefined, exactly: boolean) {
     const wanted = new Set(keys);
     if (front) wanted.add(front);
+    if (this.#peeked) wanted.add(this.#peeked);
     for (const key of this.#fresh) {
       if (exactly || wanted.has(key)) this.#fresh.delete(key);
       else wanted.add(key);
@@ -1361,9 +1588,12 @@ export class HostStore {
   /** Stops receiving a thread. One nobody has prompted closes, as the TUI leaves it. */
   #leave(followed: Followed) {
     const connection = this.#hosts.get(followed.hostId)?.connection;
+    const key = threadKey(followed.hostId, followed.threadId);
     const blank = followed.state?.blank ?? false;
-    void connection?.request('thread/detach', { threadId: followed.threadId, close: blank ? 'ifUnused' : 'never' }).catch(() => {});
-    if (blank) this.#followed.delete(threadKey(followed.hostId, followed.threadId));
+    // One opened only to be read closes again, unless another client needs it.
+    const peeked = this.#closeWhenLeft.delete(key);
+    void connection?.request('thread/detach', { threadId: followed.threadId, close: blank || peeked ? 'ifUnused' : 'never' }).catch(() => {});
+    if (blank || peeked) this.#followed.delete(key);
   }
 
   #attach(followed: Followed) {
@@ -1987,6 +2217,7 @@ export class HostStore {
         key,
         client: this.#options.client,
         onClosed: (close) => { if (adopted && connection) this.#dispatcherClosed(adopted, connection, close); },
+        onNotification: (notification) => { if (adopted && connection) this.#dispatcherNotified(adopted, connection, notification); },
       });
     } catch (error) {
       await key.forget().catch(() => {});
@@ -2037,6 +2268,10 @@ export class HostStore {
     this.#selectedKey = undefined;
     this.#session = undefined;
     this.#projects = [];
+    this.#bots = undefined;
+    this.#canAddBots = false;
+    this.#peeked = undefined;
+    this.#closeWhenLeft.clear();
   }
 
   /** Forgets the pairing: the Dispatcher lists this device until it's revoked there. */
@@ -2178,6 +2413,8 @@ export class HostStore {
       selectedKey: this.#selectedKey,
       thread: selected && this.#selectedKey ? open[this.#selectedKey] ?? this.#openThread(this.#selectedKey, selected) : undefined,
       unread: this.#read.unread(),
+      ...(this.#bots ? { bots: [...this.#bots.values()].map(botSummary).sort((left, right) => left.name.localeCompare(right.name)) } : {}),
+      ...(this.#bots && this.#canAddBots ? { canAddBots: true } : {}),
       ...(this.#error ? { error: this.#error } : {}),
     };
   }

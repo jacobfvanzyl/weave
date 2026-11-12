@@ -9,6 +9,7 @@ import {
   type AgentChoice,
   type AppController,
   type AppModel,
+  type BotSummary,
   type DispatcherSummary,
   type HostSummary,
   type KnownSession,
@@ -17,6 +18,7 @@ import {
   type PromptImage,
   type QueuedPrompt,
   type RepositoryListing,
+  type ScheduleSummary,
   type TerminalSummary,
   type ThreadActions,
   type ThreadGit,
@@ -184,6 +186,106 @@ const threads = (now: number): ThreadSummary[] => [
   summary(SERVER, 'upload-failures', '/srv/odin', 'Diagnose upload failures', 'codex', 45, now),
 ];
 
+const HOUR = 60 * MINUTE;
+/** A Bot's home on the Mac, a repository of its own. */
+const botHome = (name: string, hostId = MAC) => `${HOMES[hostId]}/bots/${name}`;
+const inHome = (home: string): Partial<ThreadSummary> => ({ git: { repo: home, worktree: home, branch: 'main' } });
+
+/**
+ * The Bots (WVE-178), one for each way a row shows: needing you, working, unread, idle, its Host
+ * away, no thread yet, made by another Bot, its schedules paused, and starting a new thread.
+ */
+const bots = (now: number): BotSummary[] => {
+  const bot = (id: string, name: string, change: Partial<BotSummary> = {}): BotSummary => ({
+    id,
+    name,
+    agentId: 'claude',
+    hostId: MAC,
+    hostName: 'mac',
+    connected: true,
+    home: botHome(name.toLowerCase()),
+    policy: { otherwise: 'ask' },
+    zone: 'Africa/Johannesburg',
+    pauseAfter: 12 * HOUR,
+    thread: `${id}-now`,
+    threads: [{ threadId: `${id}-now`, startedAt: now - 30 * HOUR }],
+    state: 'idle',
+    createdAt: now - 20 * 24 * HOUR,
+    updatedAt: now - 2 * 24 * HOUR,
+    ...change,
+  });
+  return [
+    bot('b-scout', 'Scout', { state: 'needsYou', waitingSince: now - 4 * MINUTE }),
+    bot('b-builder', 'Builder', { state: 'working', agentId: 'codex' }),
+    bot('b-reader', 'Reader'),
+    bot('b-gardener', 'Gardener', {
+      newThreadAt: '07:00',
+      createdBy: 'b-scout',
+      createdByName: 'Scout',
+      threads: [
+        { threadId: 'b-gardener-1', startedAt: now - 72 * HOUR, endedAt: now - 48 * HOUR },
+        { threadId: 'b-gardener-2', startedAt: now - 48 * HOUR, endedAt: now - 24 * HOUR },
+        { threadId: 'b-gardener-now', startedAt: now - 24 * HOUR },
+      ],
+    }),
+    bot('b-archivist', 'Archivist', { hostId: SERVER, hostName: 'build', home: botHome('archivist', SERVER), connected: false }),
+    bot('b-newcomer', 'Newcomer', { thread: undefined, threads: [], createdAt: now - 5 * MINUTE }),
+    bot('b-sentinel', 'Sentinel', {
+      state: 'needsYou',
+      waitingSince: now - 14 * HOUR,
+      pauseAfter: 12 * HOUR,
+      paused: `a request in its thread has waited for you since ${new Date(now - 14 * HOUR).toLocaleTimeString()}, longer than 12 hours`,
+    }),
+    bot('b-courier', 'Courier', { state: 'working', startingThread: true }),
+  ];
+};
+
+/** The Bots' threads, in their homes, and those Scout started elsewhere. */
+const botThreads = (now: number): ThreadSummary[] => [
+  summary(MAC, 'b-scout-now', botHome('scout'), 'Morning sweep of the issue tracker', 'claude', 4, now, {
+    ...inHome(botHome('scout')),
+    activity: 'waiting',
+    waitingOn: 'Permission to run gh issue list',
+    headless: true,
+  }),
+  summary(MAC, 'b-builder-now', botHome('builder'), 'Watching the nightly builds', 'codex', 1, now, { ...inHome(botHome('builder')), activity: 'running', headless: true }),
+  summary(MAC, 'b-reader-now', botHome('reader'), 'Papers to read this week', 'claude', 12, now, { ...inHome(botHome('reader')), headless: true }),
+  summary(MAC, 'b-gardener-1', botHome('gardener'), 'Pruning stale branches', 'claude', 48 * 60, now, { ...inHome(botHome('gardener')), state: 'closed', activity: undefined }),
+  summary(MAC, 'b-gardener-2', botHome('gardener'), 'Dependency updates', 'claude', 24 * 60, now, { ...inHome(botHome('gardener')), state: 'closed', activity: undefined }),
+  summary(MAC, 'b-gardener-now', botHome('gardener'), 'Tidying the docs', 'claude', 90, now, { ...inHome(botHome('gardener')), headless: true }),
+  summary(MAC, 'b-sentinel-now', botHome('sentinel'), 'Disk space watch', 'claude', 14 * 60, now, {
+    ...inHome(botHome('sentinel')),
+    activity: 'waiting',
+    waitingOn: 'Permission to delete old logs',
+    headless: true,
+  }),
+  summary(MAC, 'b-courier-now', botHome('courier'), 'Shipping notes', 'claude', 6, now, { ...inHome(botHome('courier')), activity: 'running', headless: true }),
+  // What Scout's threads started elsewhere: one in a worktree of weave, one in a directory on build.
+  summary(MAC, 'scout-docs-link', `${WEAVE}.docs-link`, 'Fix the broken docs link', 'claude', 25, now, {
+    git: { repo: WEAVE, worktree: `${WEAVE}.docs-link`, branch: 'docs-link' },
+    startedBy: { key: threadKey(MAC, 'b-scout-now'), label: '' },
+    headless: true,
+  }),
+  summary(SERVER, 'scout-uploads', '/srv/odin/uploads', 'Check the upload quota', 'codex', 50, now, {
+    startedBy: { key: threadKey(MAC, 'b-scout-now'), label: '' },
+    headless: true,
+  }),
+];
+
+/** The Bots' schedules and wake-ups, by Bot. */
+const botSchedules = (now: number): Record<string, ScheduleSummary[]> => ({
+  'b-scout': [
+    { id: 's-morning', name: 'morning-sweep', wakeUp: false, cron: '0 8 * * 1-5', zone: 'Africa/Johannesburg', prompt: 'Go through the new issues and tell me which need me.', next: 'Thu 12 Nov 08:00 SAST', nextAt: now + 11 * HOUR },
+    { id: 's-wake', name: 'wake-up-1a2b3c4d5e6f', wakeUp: true, cron: '', at: now + 3 * HOUR, zone: 'Africa/Johannesburg', prompt: 'Check whether the flaky reconnect test passed on main.' },
+  ],
+  'b-sentinel': [
+    { id: 's-disk', name: 'disk-watch', wakeUp: false, cron: '0 * * * *', zone: 'Africa/Johannesburg', prompt: 'Check free disk space on every Host.', paused: 'paused by you' },
+  ],
+  'b-gardener': [
+    { id: 's-weekly', name: 'weekly-prune', wakeUp: false, cron: '0 9 * * 1', zone: 'Africa/Johannesburg', prompt: 'Prune merged branches.', next: 'Mon 16 Nov 09:00 SAST', nextAt: now + 4 * 24 * HOUR },
+  ],
+});
+
 /** The Sessions the Hosts keep: where something was prompted or started since they kept any. */
 const kept = (): KnownSession[] => [
   { hostId: MAC, directory: WEAVE, git: { repo: WEAVE, branch: 'main' }, threads: [] },
@@ -264,6 +366,10 @@ type MockState = {
   saved: string[];
   /** The threads on screen, by key. */
   shown: string[];
+  /** A thread shown to read only, beside them. */
+  peeked?: string;
+  /** The Bots' schedules, by Bot. */
+  schedules: Record<string, ScheduleSummary[]>;
 };
 
 /** The person's Projects: weave, on the Mac. */
@@ -313,14 +419,16 @@ const transcriptFor = (thread: ThreadSummary): AcpTranscript => {
 
 const initialState = (scenario: MockScenario, now: number): MockState => {
   if (scenario === 'unpaired') {
-    return { model: { hosts: [], threads: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {}, terminals: {}, layouts: {}, saved: [], shown: [] };
+    return { model: { hosts: [], threads: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {}, terminals: {}, layouts: {}, saved: [], shown: [], schedules: {} };
   }
   if (scenario === 'empty') {
-    return { model: { dispatcher: DISPATCHER, hosts: [], threads: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {}, terminals: {}, layouts: {}, saved: [], shown: [] };
+    return { model: { dispatcher: DISPATCHER, hosts: [], threads: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {}, terminals: {}, layouts: {}, saved: [], shown: [], schedules: {} };
   }
-  const list = scenario === 'markdown'
-    ? [summary(MAC, MARKDOWN, WEAVE, 'Render rich Markdown', 'claude', 0, now, { git: onMain }), ...threads(now)]
-    : threads(now);
+  const list = [
+    ...(scenario === 'markdown' ? [summary(MAC, MARKDOWN, WEAVE, 'Render rich Markdown', 'claude', 0, now, { git: onMain })] : []),
+    ...threads(now),
+    ...botThreads(now),
+  ];
   const selectedKey = scenario === 'thread'
     ? threadKey(MAC, 'fix-reconnect')
     : scenario === 'running'
@@ -344,6 +452,8 @@ const initialState = (scenario: MockScenario, now: number): MockState => {
       known: kept(),
       selectedKey,
       unread: new Set(),
+      bots: bots(now),
+      canAddBots: true,
     },
     ...(selected ? { sessionKey: sessionOfThread(selected) } : {}),
     layouts: scenario === 'session' ? { [main]: arranged() } : {},
@@ -353,8 +463,17 @@ const initialState = (scenario: MockScenario, now: number): MockState => {
     queued: scenario === 'running' ? { [threadKey(MAC, 'protocol-spec')]: [{ id: 'q1', text: 'Then regenerate the fixtures.' }] } : {},
     repositories: repositories(),
     terminals: { [MAC]: terminals(now) },
+    schedules: botSchedules(now),
   };
 };
+
+/** A Bot's state as its Dispatcher says it, from its current thread's activity as listed. */
+const withBotStates = (model: AppModel): BotSummary[] | undefined => model.bots?.map((bot) => {
+  const thread = bot.thread ? model.threads.find(({ key }) => key === threadKey(bot.hostId, bot.thread ?? '')) : undefined;
+  if (!thread || !bot.connected) return bot;
+  const state = thread.activity === 'waiting' ? 'needsYou' : thread.activity === 'running' ? 'working' : 'idle';
+  return state === bot.state ? bot : { ...bot, state };
+});
 
 /** The fixture repository `path` is in on a Host, by its primary worktree. */
 /**
@@ -392,7 +511,17 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
   const { turnMs = 1500, bannerMs = 2500 } = options;
   const state = useRef<MockState>(undefined as unknown as MockState);
   state.current ??= initialState(scenario, Date.now());
-  const readState = useRef(new ThreadReadState());
+  const readState = useRef<ThreadReadState>(undefined as unknown as ThreadReadState);
+  if (!readState.current) {
+    readState.current = new ThreadReadState();
+    // Reader's thread ended a turn the person hasn't seen on this device.
+    const reader = threadKey(MAC, 'b-reader-now');
+    if (state.current.model.threads.some(({ key }) => key === reader)) {
+      readState.current.observe(reader, 'running');
+      readState.current.observe(reader, 'idle');
+      state.current = { ...state.current, model: { ...state.current.model, unread: readState.current.unread() } };
+    }
+  }
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const [, render] = useReducer((value: number) => value + 1, 0);
 
@@ -488,7 +617,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
     };
   };
   const open: Record<string, OpenThread> = {};
-  for (const key of new Set([...state.current.shown, ...(model.selectedKey ? [model.selectedKey] : [])])) {
+  for (const key of new Set([...state.current.shown, ...(model.selectedKey ? [model.selectedKey] : []), ...(state.current.peeked ? [state.current.peeked] : [])])) {
     const thread = openThread(key);
     if (thread) open[key] = thread;
   }
@@ -591,6 +720,11 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
     const keep = (current: MockState, key: string): MockState =>
       current.layouts[key] ? current : { ...current, layouts: { ...current.layouts, [key]: layoutOf(current, key) } };
     const perThread = new Map<string, ThreadActions>();
+    const setBots = (change: (list: BotSummary[]) => BotSummary[]) => update((current) => ({
+      ...current,
+      model: { ...current.model, bots: change(current.model.bots ?? []) },
+    }));
+    const setBot = (id: string, change: (bot: BotSummary) => BotSummary) => setBots((list) => list.map((bot) => bot.id === id ? change(bot) : bot));
     return {
       selectThread,
       selectSession(key) {
@@ -755,13 +889,16 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
             ...current.model,
             dispatcher: { ...DISPATCHER, name: parsed.hostname.split('.')[0], url },
             hosts: hosts(now, 'list'),
-            threads: threads(now),
+            threads: [...threads(now), ...botThreads(now)],
             agents: { [MAC]: AGENTS, [SERVER]: AGENTS },
             projects: PROJECTS,
             known: kept(),
+            bots: bots(now),
+            canAddBots: true,
           },
           repositories: repositories(),
           terminals: { [MAC]: terminals(now) },
+          schedules: botSchedules(now),
         }));
       },
       forgetDispatcher() {
@@ -769,7 +906,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           ...current,
           sessionKey: undefined,
           shown: [],
-          model: { ...current.model, dispatcher: undefined, hosts: [], threads: [], agents: {}, known: [], selectedKey: undefined },
+          model: { ...current.model, dispatcher: undefined, hosts: [], threads: [], agents: {}, known: [], selectedKey: undefined, bots: undefined, canAddBots: undefined },
         }));
       },
       reconnectDispatcher() {
@@ -792,6 +929,128 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         }));
       },
       ...threadActions(selectedKey),
+      peekThread(key) {
+        update((current) => ({ ...current, peeked: key }));
+      },
+      async addBot({ name, hostId, agentId }) {
+        const named = name.trim();
+        if (!named) throw new Error('A Bot needs a name.');
+        if (state.current.model.bots?.some((bot) => bot.name.toLowerCase() === named.toLowerCase())) throw new Error(`There's a Bot called ${named} already.`);
+        const host = state.current.model.hosts.find(({ id }) => id === hostId);
+        if (!host || host.status !== 'connected') {
+          throw new Error(`${host?.name ?? 'That Host'} isn't connected to the Dispatcher now, so it can't make ${named}'s home; add the Bot once it's back`);
+        }
+        const now = Date.now();
+        const made: BotSummary = {
+          id: localId('b'),
+          name: named,
+          agentId,
+          hostId,
+          hostName: host.name,
+          connected: true,
+          home: `${HOMES[hostId] ?? '/home'}/bots/${named.toLowerCase().replaceAll(/[\s/]+/g, '-')}`,
+          policy: { otherwise: 'ask' },
+          zone: 'Africa/Johannesburg',
+          pauseAfter: 12 * HOUR,
+          threads: [],
+          state: 'idle',
+          createdAt: now,
+          updatedAt: now,
+        };
+        setBots((list) => [...list, made].sort((left, right) => left.name.localeCompare(right.name)));
+        return made;
+      },
+      async updateBot(id, change) {
+        if (change.name !== undefined && state.current.model.bots?.some((bot) => bot.id !== id && bot.name.toLowerCase() === change.name?.toLowerCase())) {
+          throw new Error(`There's a Bot called ${change.name} already.`);
+        }
+        if (change.newThreadAt && !/^\d{2}:\d{2}$/.test(change.newThreadAt)) throw new Error(`"${change.newThreadAt}" isn't a time of day, HH:MM.`);
+        setBot(id, (bot) => {
+          const { mode: _mode, newThreadAt: _at, ...rest } = bot;
+          const mode = change.mode === undefined ? bot.mode : change.mode ?? undefined;
+          const newThreadAt = change.newThreadAt === undefined ? bot.newThreadAt : change.newThreadAt ?? undefined;
+          return {
+            ...rest,
+            ...(change.name ? { name: change.name } : {}),
+            ...(change.zone ? { zone: change.zone } : {}),
+            ...(change.pauseAfter ? { pauseAfter: change.pauseAfter } : {}),
+            ...(change.policy ? { policy: change.policy } : {}),
+            ...(mode ? { mode } : {}),
+            ...(newThreadAt ? { newThreadAt } : {}),
+            updatedAt: Date.now(),
+          };
+        });
+      },
+      async removeBot(id) {
+        setBots((list) => list.filter((bot) => bot.id !== id));
+      },
+      async newBotThread(id) {
+        const bot = state.current.model.bots?.find((listed) => listed.id === id);
+        if (!bot?.thread) throw new Error(`${bot?.name ?? 'The Bot'} has no thread yet.`);
+        if (bot.startingThread) throw new Error(`${bot.name} is starting a new thread already.`);
+        setBot(id, (current) => ({ ...current, startingThread: true }));
+        later(turnMs, () => {
+          const current = state.current.model.bots?.find((listed) => listed.id === id);
+          if (!current?.thread) return;
+          const threadId = localId(`${id}-thread`);
+          const old = threadKey(current.hostId, current.thread);
+          const made = summary(current.hostId, threadId, current.home, `${current.name}, carrying on`, current.agentId, 0, Date.now(), { ...inHome(current.home), headless: true });
+          const now = Date.now();
+          update((latest) => ({
+            ...latest,
+            transcripts: { ...latest.transcripts, [made.key]: createTranscript(threadId) },
+            model: {
+              ...latest.model,
+              threads: [made, ...latest.model.threads.map((thread) => thread.key === old ? { ...thread, continuedIn: { key: made.key, label: `“${made.title}”` } } : thread)],
+            },
+          }));
+          setBot(id, ({ startingThread: _starting, ...rest }) => ({
+            ...rest,
+            thread: threadId,
+            threads: [...rest.threads.map((thread) => thread.threadId === current.thread ? { ...thread, endedAt: now } : thread), { threadId, startedAt: now }],
+          }));
+        });
+      },
+      async sendToBot(id, text, images) {
+        const bot = state.current.model.bots?.find((listed) => listed.id === id);
+        if (!bot) throw new Error('That Bot is gone.');
+        if (bot.thread) {
+          startTurn(threadKey(bot.hostId, bot.thread), text, images);
+          return;
+        }
+        // Its first prompt starts its first thread, in its home, a moment later.
+        const threadId = localId(`${id}-thread`);
+        later(600, () => {
+          const made = summary(bot.hostId, threadId, bot.home, text.slice(0, 60) || 'First thread', bot.agentId, 0, Date.now(), { ...inHome(bot.home), headless: true });
+          update((latest) => ({
+            ...latest,
+            transcripts: { ...latest.transcripts, [made.key]: createTranscript(threadId) },
+            model: { ...latest.model, threads: [made, ...latest.model.threads] },
+          }));
+          setBot(id, (current) => ({ ...current, thread: threadId, threads: [{ threadId, startedAt: Date.now() }] }));
+          startTurn(made.key, text, images);
+        });
+      },
+      async botSchedules(id) {
+        return state.current.schedules[id] ?? [];
+      },
+      async changeSchedule(id, action) {
+        update((current) => ({
+          ...current,
+          schedules: Object.fromEntries(Object.entries(current.schedules).map(([botId, list]) => [botId, list.flatMap((schedule): ScheduleSummary[] => {
+            if (schedule.id !== id) return [schedule];
+            switch (action) {
+              case 'remove': return [];
+              case 'pause': return [{ ...schedule, paused: 'paused by you' }];
+              case 'resume': {
+                const { paused: _paused, ...rest } = schedule;
+                return [rest];
+              }
+              case 'run': return [{ ...schedule, last: { state: 'started', at: Date.now() } }];
+            }
+          })])),
+        }));
+      },
       async newTerminal() {
         const shown = shownHost();
         if (!shown) throw new Error('No Session is open.');
@@ -827,5 +1086,6 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
     // The actions read the latest state through refs, so they never change.
   }, []);
 
-  return { model: { ...model, thread, open, ...(session ? { session } : {}) }, actions };
+  const botList = withBotStates(model);
+  return { model: { ...model, thread, open, ...(session ? { session } : {}), ...(botList ? { bots: botList } : {}) }, actions };
 }

@@ -8,6 +8,10 @@
 //! as `<repo>.<branch>`, so worktrunk in a terminal manages the same ones. The Host never
 //! removes a worktree on its own. Paths are absolute on the Host's computer and compared with
 //! symlinks resolved.
+//!
+//! A client that isn't on the Host's computer makes a repository of its own there with
+//! [`InitRepositoryRequest`], with its first files committed, as the Dispatcher makes a Bot's
+//! home (WVE-178). The Host knows nothing of what the repository is for.
 
 use std::path::PathBuf;
 
@@ -20,6 +24,9 @@ use crate::threads::ThreadId;
 
 /// The Host offers the `worktrees/*` methods, in `features`.
 pub const FEATURE: &str = "worktrees";
+
+/// The Host offers [`InitRepositoryRequest`], in `features`.
+pub const REPOS_INIT_FEATURE: &str = "repos_init";
 
 /// Where in a git repository a thread's directory is, as the Host last read it: when the
 /// thread opened, and again after each of its turns.
@@ -201,4 +208,67 @@ pub struct ReleaseWorktreeResponse {
     /// The threads that were open in it, now closed.
     #[serde(default)]
     pub closed: Vec<ThreadId>,
+}
+
+/// `repos/init`: a directory on the Host's computer that is a git repository of its own, with
+/// `files` written and committed in it. The directory, and its parents, are made if they aren't
+/// there, and `git init` makes it a repository unless it's the top of one already; one inside
+/// another repository's work tree is refused, as a repository of its own is asked for. If any
+/// of `files` is there already, as a file, a directory or a link, none is written and nothing is
+/// committed. Otherwise each is written, never over anything, and those files alone are
+/// committed with `message`, as the user git's configuration names; without a `user.name` and
+/// `user.email` there, they're left written but uncommitted, and the answer says so. Nothing
+/// else in the directory is touched or committed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "repos/init", response = InitRepositoryResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct InitRepositoryRequest {
+    /// Absolute on the Host's computer, or under its user's home as `~/…`.
+    pub path: PathBuf,
+    /// Relative to the directory, within it: no `..`, no `.git`, each once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<RepositoryFile>,
+    /// The commit message for `files`, which needs one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub message: String,
+}
+
+/// A file [`InitRepositoryRequest`] writes, as UTF-8 text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryFile {
+    pub path: PathBuf,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct InitRepositoryResponse {
+    /// The directory, absolute, with symlinks resolved.
+    pub path: PathBuf,
+    /// It wasn't there, and was made.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub created: bool,
+    /// It wasn't the top of a repository, and is one now.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub initialized: bool,
+    /// What became of the files; absent when none were named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<FilesMade>,
+}
+
+/// What became of the files [`InitRepositoryRequest`] named.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum FilesMade {
+    /// This one of them was there already, so none was written.
+    Kept { file: PathBuf },
+    /// Written, and committed on their own.
+    Committed,
+    /// Written, but not committed, for this reason.
+    Uncommitted { why: String },
 }

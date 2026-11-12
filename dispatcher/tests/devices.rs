@@ -266,7 +266,7 @@ async fn a_device_pairs_once_then_proves_its_key_and_asks_the_dispatcher() {
         .expect_err("only the Dispatcher's computer gets its socket");
     assert!(errors::is(&here, errors::FORBIDDEN), "{here}");
     let schedules = remote
-        .send(ListSchedulesRequest {})
+        .send(ListSchedulesRequest::default())
         .await
         .expect("schedules/list");
     assert!(schedules.schedules.is_empty());

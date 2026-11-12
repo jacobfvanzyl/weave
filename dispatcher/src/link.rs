@@ -7,9 +7,10 @@
 //! for that ([`crate::calls`]), and follows the turns other Hosts' calls began there
 //! ([`crate::follows`]). It settles the prompts for the Bots on the Host as it sends them, and
 //! carries their new threads on as the watch says their threads go idle or wait
-//! ([`crate::bots`]); it declares the Dispatcher's own tools there, a Bot's wake-ups, and
-//! answers their calls ([`crate::wakeups`]). A Host that leaves isn't taken up again until it
-//! joins again.
+//! ([`crate::bots`]); it declares the Dispatcher's own tools there, a Bot's, and answers their
+//! calls ([`crate::tools`]). As it connects, hears from the Host and goes, it
+//! has those watching the Bots told of any change to them (`Shared::bots_changed`). A Host
+//! that leaves isn't taken up again until it joins again.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -52,7 +53,7 @@ use crate::lock;
 use crate::now_ms;
 use crate::store::StoredHost;
 use crate::store::Work;
-use crate::wakeups;
+use crate::tools;
 
 pub(crate) struct Link {
     /// Rung when work is written down for the Host.
@@ -283,11 +284,11 @@ async fn follow(
     closer: &websocket::Link,
 ) -> Ended {
     let handle = connection.handle();
-    // The Host offers its threads the Dispatcher's own tools, a Bot's wake-ups, and passes the
+    // The Host offers its threads the Dispatcher's own tools, a Bot's, and passes the
     // Dispatcher its agents' calls naming another Host, from now on.
     let declared = connection
         .send(DeclareToolsRequest {
-            tools: wakeups::tools(),
+            tools: tools::tools(),
             hosts: true,
         })
         .await;
@@ -320,6 +321,7 @@ async fn follow(
     if bots::advance(shared, host, &handle, seen, None).await {
         wake.notify_one();
     }
+    shared.bots_changed();
     let ended = loop {
         tokio::select! {
             event = events.recv() => match event {
@@ -338,15 +340,17 @@ async fn follow(
                     if bots::advance(shared, host, &handle, seen, Some(&thread_id)).await {
                         wake.notify_one();
                     }
+                    shared.bots_changed();
                 }
                 Some(HostEvent::HostCall(call)) => {
                     tokio::spawn(calls::answer(Arc::clone(shared), host.clone(), handle.clone(), *call));
                 }
                 Some(HostEvent::ToolCall(call)) => {
-                    tokio::spawn(wakeups::answer(Arc::clone(shared), host.clone(), handle.clone(), *call));
+                    tokio::spawn(tools::answer(Arc::clone(shared), host.clone(), handle.clone(), *call));
                 }
                 Some(HostEvent::ThreadRemoved(removed)) => {
                     lock(seen).threads.remove(&removed.thread_id);
+                    shared.bots_changed();
                 }
                 Some(HostEvent::Disconnected(_)) | None => break None,
                 Some(_) => {}
@@ -358,6 +362,7 @@ async fn follow(
                 if bots::advance(shared, host, &handle, seen, None).await {
                     wake.notify_one();
                 }
+                shared.bots_changed();
             }
             () = stop.cancelled() => break Some(Ended::Stopped),
         }
@@ -369,6 +374,7 @@ async fn follow(
         seen.handle = None;
         seen.threads.clear();
     }
+    shared.bots_changed();
     match ended {
         Some(ended) => ended,
         None if closer.peer_closed() == Some(CLOSE_REVOKED) => Ended::Revoked,

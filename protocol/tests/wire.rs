@@ -70,13 +70,16 @@ use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::OfferDeviceResponse;
 use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::dispatcher::AddBotRequest;
+use weave_host_protocol::dispatcher::AddBotResponse;
 use weave_host_protocol::dispatcher::AddProjectRequest;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
 use weave_host_protocol::dispatcher::BOTS_FEATURE;
 use weave_host_protocol::dispatcher::Bot;
+use weave_host_protocol::dispatcher::BotRemovedNotification;
 use weave_host_protocol::dispatcher::BotResponse;
 use weave_host_protocol::dispatcher::BotState;
 use weave_host_protocol::dispatcher::BotThread;
+use weave_host_protocol::dispatcher::BotUpdatedNotification;
 use weave_host_protocol::dispatcher::CARRY_FEATURE;
 use weave_host_protocol::dispatcher::CarriedStream;
 use weave_host_protocol::dispatcher::CarryRequest;
@@ -95,6 +98,7 @@ use weave_host_protocol::dispatcher::ListBotsRequest;
 use weave_host_protocol::dispatcher::ListBotsResponse;
 use weave_host_protocol::dispatcher::ListProjectsRequest;
 use weave_host_protocol::dispatcher::ListProjectsResponse;
+use weave_host_protocol::dispatcher::ListSchedulesRequest;
 use weave_host_protocol::dispatcher::Missed;
 use weave_host_protocol::dispatcher::NewBotThreadRequest;
 use weave_host_protocol::dispatcher::NewLocation;
@@ -115,8 +119,10 @@ use weave_host_protocol::dispatcher::Schedule;
 use weave_host_protocol::dispatcher::ScheduledRun;
 use weave_host_protocol::dispatcher::SendToBotRequest;
 use weave_host_protocol::dispatcher::SentToBot;
+use weave_host_protocol::dispatcher::UnwatchBotsRequest;
 use weave_host_protocol::dispatcher::UpdateBotRequest;
 use weave_host_protocol::dispatcher::UpdateProjectRequest;
+use weave_host_protocol::dispatcher::WatchBotsRequest;
 use weave_host_protocol::dispatcher::carry_message;
 use weave_host_protocol::events::ElicitationCompletedNotification;
 use weave_host_protocol::events::ThreadChangedNotification;
@@ -228,13 +234,17 @@ use weave_host_protocol::turns::SteerTurnResponse;
 use weave_host_protocol::worktrees::CreateWorktreeRequest;
 use weave_host_protocol::worktrees::CreateWorktreeResponse;
 use weave_host_protocol::worktrees::Divergence;
+use weave_host_protocol::worktrees::FilesMade;
 use weave_host_protocol::worktrees::GitLocation;
+use weave_host_protocol::worktrees::InitRepositoryRequest;
+use weave_host_protocol::worktrees::InitRepositoryResponse;
 use weave_host_protocol::worktrees::ListWorktreesRequest;
 use weave_host_protocol::worktrees::ListWorktreesResponse;
 use weave_host_protocol::worktrees::ReleaseWorktreeRequest;
 use weave_host_protocol::worktrees::ReleaseWorktreeResponse;
 use weave_host_protocol::worktrees::RemoveWorktreeRequest;
 use weave_host_protocol::worktrees::RemoveWorktreeResponse;
+use weave_host_protocol::worktrees::RepositoryFile;
 use weave_host_protocol::worktrees::Upstream;
 use weave_host_protocol::worktrees::Worktree;
 
@@ -1195,6 +1205,54 @@ fn worktrees() {
             path: "/Users/jaco/Projects/weave.feature-auth".into(),
             branch: "feature/auth".to_owned(),
             created_branch: true,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "init_repository_request",
+        message(&InitRepositoryRequest {
+            path: "~/bots/odin".into(),
+            files: vec![
+                RepositoryFile {
+                    path: "AGENTS.md".into(),
+                    text: "# odin\n".to_owned(),
+                },
+                RepositoryFile {
+                    path: "CLAUDE.md".into(),
+                    text: "@AGENTS.md\n".to_owned(),
+                },
+            ],
+            message: "Start odin's home".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "init_repository_response",
+        round_trip(&InitRepositoryResponse {
+            path: "/home/jaco/bots/odin".into(),
+            created: true,
+            initialized: true,
+            files: Some(FilesMade::Committed),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "init_repository_response_kept",
+        round_trip(&InitRepositoryResponse {
+            path: "/home/jaco/bots/odin".into(),
+            created: false,
+            initialized: false,
+            files: Some(FilesMade::Kept {
+                file: "AGENTS.md".into(),
+            }),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "init_repository_response_uncommitted",
+        round_trip(&InitRepositoryResponse {
+            path: "/home/jaco/bots/odin".into(),
+            created: false,
+            initialized: true,
+            files: Some(FilesMade::Uncommitted {
+                why: "git has no user.name and user.email to commit them as".to_owned(),
+            }),
         })
     );
     insta::assert_json_snapshot!(
@@ -2326,7 +2384,10 @@ fn bots() {
         starting_thread: false,
         created_at: 1_760_180_000_000,
         updated_at: 1_760_180_000_000,
+        created_by: None,
+        created_by_name: None,
     };
+    // Made by odin, which another Bot can do (WVE-178).
     let new = Bot {
         id: "b-0a1b2c3d4e5f60718293".to_owned(),
         name: "scribe".to_owned(),
@@ -2338,6 +2399,8 @@ fn bots() {
         state: BotState::Idle,
         waiting_since: None,
         connected: false,
+        created_by: Some(odin.id.clone()),
+        created_by_name: Some(odin.name.clone()),
         ..odin.clone()
     };
     insta::assert_json_snapshot!("list_bots_request", message(&ListBotsRequest {}));
@@ -2371,12 +2434,66 @@ fn bots() {
             name: "odin".to_owned(),
             host: "homelab".to_owned(),
             agent_id: "claude".to_owned(),
-            home: "~/bots/odin".into(),
+            home: Some("~/bots/odin".into()),
+            job: None,
             policy: None,
             mode: None,
             new_thread_at: Some("04:00".to_owned()),
             zone: None,
             pause_after: None,
+        })
+    );
+    // Its home `~/bots/<name>`, with what it's for (WVE-178).
+    insta::assert_json_snapshot!(
+        "add_bot_request_with_a_job",
+        message(&AddBotRequest {
+            name: "scribe".to_owned(),
+            host: "homelab".to_owned(),
+            agent_id: "claude".to_owned(),
+            home: None,
+            job: Some("Keep the meeting notes in order.".to_owned()),
+            policy: None,
+            mode: None,
+            new_thread_at: None,
+            zone: None,
+            pause_after: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "add_bot_response",
+        round_trip(&AddBotResponse {
+            bot: Bot {
+                home: "/home/jaco/bots/odin".into(),
+                thread: None,
+                threads: Vec::new(),
+                state: BotState::Idle,
+                waiting_since: None,
+                ..odin.clone()
+            },
+            home: Some(InitRepositoryResponse {
+                path: "/home/jaco/bots/odin".into(),
+                created: true,
+                initialized: true,
+                files: Some(FilesMade::Committed),
+            }),
+        })
+    );
+    insta::assert_json_snapshot!("watch_bots_request", message(&WatchBotsRequest {}));
+    insta::assert_json_snapshot!("unwatch_bots_request", message(&UnwatchBotsRequest {}));
+    insta::assert_json_snapshot!(
+        "bot_updated_notification",
+        message(&BotUpdatedNotification { bot: odin.clone() })
+    );
+    insta::assert_json_snapshot!(
+        "bot_removed_notification",
+        message(&BotRemovedNotification {
+            bot: "b-0a1b2c3d4e5f60718293".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "list_schedules_request_for_a_bot",
+        message(&ListSchedulesRequest {
+            bot: Some("odin".to_owned()),
         })
     );
     insta::assert_json_snapshot!(

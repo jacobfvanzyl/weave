@@ -1,6 +1,7 @@
 //! What the `weave` CLI asks the Dispatcher: its status, the Hosts that joined it and codes
 //! to join with, its schedules and their occurrences, the person's Projects and Bots, and its
-//! devices. Each connection says
+//! devices; and `bots/watch`, after which a connection is told of every change to the Bots until
+//! it ends or unwatches. Each connection says
 //! hello first, with the API's version. On the Unix socket the CLI is the Dispatcher's own
 //! user; on the WebSocket (WVE-176), which `weave-remote` serves while a device is paired or a
 //! Host joined over it, every connection proves a paired device at hello, by signing its
@@ -48,6 +49,8 @@ use weave_host_protocol::dispatcher::AddBotRequest;
 use weave_host_protocol::dispatcher::AddProjectRequest;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
 use weave_host_protocol::dispatcher::BOTS_FEATURE;
+use weave_host_protocol::dispatcher::BOTS_HOME_FEATURE;
+use weave_host_protocol::dispatcher::BOTS_WATCH_FEATURE;
 use weave_host_protocol::dispatcher::BotResponse;
 use weave_host_protocol::dispatcher::DISPATCHER_CARRY_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_HOST_SUBPROTOCOL;
@@ -87,8 +90,10 @@ use weave_host_protocol::dispatcher::ResumeScheduleRequest;
 use weave_host_protocol::dispatcher::RunScheduleRequest;
 use weave_host_protocol::dispatcher::ScheduleResponse;
 use weave_host_protocol::dispatcher::SendToBotRequest;
+use weave_host_protocol::dispatcher::UnwatchBotsRequest;
 use weave_host_protocol::dispatcher::UpdateBotRequest;
 use weave_host_protocol::dispatcher::UpdateProjectRequest;
+use weave_host_protocol::dispatcher::WatchBotsRequest;
 use weave_host_protocol::errors;
 use weave_host_protocol::hello::Auth;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
@@ -205,7 +210,12 @@ fn local_hello(shared: &Shared, request: DispatcherHelloRequest) -> Result<Dispa
 
 /// The optional parts of the API this Dispatcher answers, which its hello names.
 pub(crate) fn features() -> Vec<String> {
-    vec![PROJECTS_FEATURE.to_owned(), BOTS_FEATURE.to_owned()]
+    vec![
+        PROJECTS_FEATURE.to_owned(),
+        BOTS_FEATURE.to_owned(),
+        BOTS_HOME_FEATURE.to_owned(),
+        BOTS_WATCH_FEATURE.to_owned(),
+    ]
 }
 
 /// What a hello on the socket may say: nothing, which is the Dispatcher's own user.
@@ -563,6 +573,7 @@ async fn answer(
         device: Mutex::new(None),
     });
     let result = handlers(&connection, transport).await;
+    shared.unwatch_bots(connection.id);
     if let Some(device) = lock(&connection.device).take() {
         shared.devices.disconnected(&device.id, connection.id);
     }
@@ -580,6 +591,8 @@ async fn handlers(
     let on_list = Arc::clone(connection);
     let on_revoke = Arc::clone(connection);
     let on_offer_host = Arc::clone(connection);
+    let on_watch_bots = Arc::clone(connection);
+    let on_unwatch_bots = Arc::clone(connection);
     let builder = Dispatcher
         .builder()
         .name("weave-dispatcher")
@@ -641,14 +654,44 @@ async fn handlers(
                 })
             },
             agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: WatchBotsRequest,
+                        responder: Responder<_>,
+                        cx: ConnectionTo<DispatcherClient>| {
+                let connection = Arc::clone(&on_watch_bots);
+                let to = cx.clone();
+                cx.spawn(async move {
+                    let watched = connection.greeted_first().and_then(|()| {
+                        connection
+                            .shared
+                            .watch_bots(connection.id, to)
+                            .map(|bots| ListBotsResponse { bots })
+                    });
+                    responder.respond_with_result(watched)
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: UnwatchBotsRequest, responder: Responder<_>, _cx| {
+                let unwatched = on_unwatch_bots.greeted_first().map(|()| {
+                    on_unwatch_bots.shared.unwatch_bots(on_unwatch_bots.id);
+                    Empty {}
+                });
+                responder.respond_with_result(unwatched)
+            },
+            agent_client_protocol::on_receive_request!(),
         );
     handle!(builder, connection, shared, _request: DispatcherStatusRequest => shared.status());
     handle!(builder, connection, shared, _request: ListHostsRequest =>
         shared.hosts().map(|hosts| ListHostsResponse { hosts }));
     handle!(builder, connection, shared, request: RemoveHostRequest =>
         shared.remove_host(&request.host).await.map(|()| Empty {}));
-    handle!(builder, connection, shared, _request: ListSchedulesRequest =>
-        shared.schedules().map(|schedules| ListSchedulesResponse { schedules }));
+    handle!(builder, connection, shared, request: ListSchedulesRequest =>
+        shared
+            .schedules(request.bot.as_deref())
+            .map(|schedules| ListSchedulesResponse { schedules }));
     handle!(builder, connection, shared, request: AddScheduleRequest =>
         shared.add_schedule(request).map(|schedule| ScheduleResponse { schedule }));
     handle!(builder, connection, shared, request: RemoveScheduleRequest =>
@@ -678,7 +721,7 @@ async fn handlers(
     handle!(builder, connection, shared, request: GetBotRequest =>
         shared.bot(&request.bot).map(|bot| BotResponse { bot }));
     handle!(builder, connection, shared, request: AddBotRequest =>
-        shared.add_bot(request).map(|bot| BotResponse { bot }));
+        shared.add_bot(request, None).await);
     handle!(builder, connection, shared, request: UpdateBotRequest =>
         shared.update_bot(request).map(|bot| BotResponse { bot }));
     handle!(builder, connection, shared, request: RemoveBotRequest =>

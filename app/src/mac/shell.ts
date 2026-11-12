@@ -52,9 +52,9 @@ function useMenu() {
 function useNotifications(controller: AppController) {
   const before = useRef<readonly ThreadSummary[]>([]);
   const allowed = useRef<boolean | undefined>(undefined);
-  // Only of threads in a Session: the app says nothing of one started elsewhere.
-  const { threads: listed, known } = controller.model;
-  const threads = useMemo(() => ownThreads({ threads: listed, known }), [listed, known]);
+  // Only of threads in a Session, or a Bot's: the app says nothing of one started elsewhere.
+  const { threads: listed, known, bots } = controller.model;
+  const threads = useMemo(() => ownThreads({ threads: listed, known, bots }), [listed, known, bots]);
   useEffect(() => {
     if (!onMac()) return;
     const listening = onAction(({ actionId, notification }) => {

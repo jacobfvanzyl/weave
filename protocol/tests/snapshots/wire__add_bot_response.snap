@@ -1,0 +1,36 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&AddBotResponse\n{\n    bot: Bot\n    {\n        home: \"/home/jaco/bots/odin\".into(), thread: None, threads:\n        Vec::new(), state: BotState::Idle, waiting_since: None, ..odin.clone()\n    }, home:\n    Some(InitRepositoryResponse\n    {\n        path: \"/home/jaco/bots/odin\".into(), created: true, initialized: true,\n        files: Some(FilesMade::Committed),\n    }),\n})"
+---
+{
+  "bot": {
+    "id": "b-5e1d0c9b8a7f6e5d4c3b",
+    "name": "odin",
+    "agentId": "claude",
+    "hostId": "Lw4nB7cR2tY9uI0oP5aS3d",
+    "hostName": "homelab",
+    "connected": true,
+    "home": "/home/jaco/bots/odin",
+    "policy": {
+      "approve": [
+        "read"
+      ],
+      "otherwise": "ask"
+    },
+    "newThreadAt": "04:00",
+    "zone": "Africa/Johannesburg",
+    "pauseAfter": 43200000,
+    "threads": [],
+    "state": "idle",
+    "createdAt": 1760180000000,
+    "updatedAt": 1760180000000
+  },
+  "home": {
+    "path": "/home/jaco/bots/odin",
+    "created": true,
+    "initialized": true,
+    "files": {
+      "state": "committed"
+    }
+  }
+}

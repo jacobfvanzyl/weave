@@ -343,8 +343,11 @@ impl Shared {
     fn arrived(self: &Arc<Self>, host: StoredHost, arrival: Arrival, done: oneshot::Sender<()>) {
         let host_id = host.host_id.clone();
         let link = Link::start(Arc::clone(self), host, arrival, done);
-        if let Some(old) = lock(&self.links).insert(host_id, link) {
+        let old = lock(&self.links).insert(host_id, link);
+        if let Some(old) = old {
             old.stop();
         }
+        // Its name may have changed as it joined again.
+        self.bots_changed();
     }
 }

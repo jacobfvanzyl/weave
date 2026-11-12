@@ -372,6 +372,19 @@ export function placeBlock(layout: SessionLayout, block: SessionBlock, target: T
   return room ? beside(next, room.beside, room.side) : tidy(withTab(next, tab.id, (current) => withRoot(current, leaf(placed))));
 }
 
+/**
+ * The layout with `block` docked in the place of the docked Block `id`, which leaves the layout.
+ * `block` leaves where it was, if the layout has it. Nothing changes where `id` isn't docked.
+ */
+export function replaceBlock(layout: SessionLayout, id: string, block: SessionBlock): SessionLayout {
+  if (block.id === id || !findBlock(layout, id)?.path) return layout;
+  const next = findBlock(layout, block.id) ? takeOut(layout, block.id, findBlock(layout, id)?.tab.id) : layout;
+  const at = findBlock(next, id);
+  if (!at?.path) return layout;
+  const placed: SessionBlock = { id: block.id, type: block.type, ...(block.props ? { props: block.props } : {}) };
+  return tidy(withTab(next, at.tab.id, (tab) => withRoot(tab, replaceAt(tab.root as SessionNode, at.path ?? [], () => leaf(placed)))));
+}
+
 /** The layout with the split at `path` in `tabId` shared out as `sizes`, one for each child. */
 export function resizeSplit(layout: SessionLayout, tabId: string, path: Path, sizes: number[]): SessionLayout {
   const tab = findTab(layout, tabId);

@@ -12,8 +12,8 @@
 //! - [`devices`]: the person's devices, which pair with the Dispatcher and reach Hosts through it.
 //! - [`agents`]: the agents the Host can run, signing in to them, and updating them.
 //! - [`files`]: files on the Host's computer, for clients that aren't on it.
-//! - [`worktrees`]: git repositories on the Host's computer, their worktrees, and where a
-//!   thread is in one.
+//! - [`worktrees`]: git repositories on the Host's computer, their worktrees, where a thread is
+//!   in one, and making a repository of its own with its first files.
 //! - [`threads`]: listing, creating, attaching to, reopening and closing threads.
 //! - [`events`]: what attached clients are sent: journaled events and changes.
 //! - [`turns`]: starting, steering and cancelling turns, and request keys.

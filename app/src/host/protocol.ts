@@ -802,6 +802,24 @@ export type RequestPermissionOutcome =
       outcome: "selected";
     });
 /**
+ * What became of the files [`InitRepositoryRequest`] named.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "FilesMade".
+ */
+export type FilesMade =
+  | {
+      file: string;
+      state: "kept";
+    }
+  | {
+      state: "committed";
+    }
+  | {
+      why: string;
+      state: "uncommitted";
+    };
+/**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ProgramState".
  */
@@ -5303,6 +5321,66 @@ export interface ReleaseWorktreeResponse {
   closed?: SessionId[];
 }
 /**
+ * `repos/init`: a directory on the Host's computer that is a git repository of its own, with
+ * `files` written and committed in it. The directory, and its parents, are made if they aren't
+ * there, and `git init` makes it a repository unless it's the top of one already; one inside
+ * another repository's work tree is refused, as a repository of its own is asked for. If any
+ * of `files` is there already, as a file, a directory or a link, none is written and nothing is
+ * committed. Otherwise each is written, never over anything, and those files alone are
+ * committed with `message`, as the user git's configuration names; without a `user.name` and
+ * `user.email` there, they're left written but uncommitted, and the answer says so. Nothing
+ * else in the directory is touched or committed.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "InitRepositoryRequest".
+ */
+export interface InitRepositoryRequest {
+  /**
+   * Absolute on the Host's computer, or under its user's home as `~/…`.
+   */
+  path: string;
+  /**
+   * Relative to the directory, within it: no `..`, no `.git`, each once.
+   */
+  files?: RepositoryFile[];
+  /**
+   * The commit message for `files`, which needs one.
+   */
+  message?: string;
+}
+/**
+ * A file [`InitRepositoryRequest`] writes, as UTF-8 text.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "RepositoryFile".
+ */
+export interface RepositoryFile {
+  path: string;
+  text: string;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "InitRepositoryResponse".
+ */
+export interface InitRepositoryResponse {
+  /**
+   * The directory, absolute, with symlinks resolved.
+   */
+  path: string;
+  /**
+   * It wasn't there, and was made.
+   */
+  created?: boolean;
+  /**
+   * It wasn't the top of a repository, and is one now.
+   */
+  initialized?: boolean;
+  /**
+   * What became of the files; absent when none were named.
+   */
+  files?: FilesMade | null;
+}
+/**
  * `terminals/list`: the terminals of the scope `directory` is in, oldest first.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -7541,12 +7619,18 @@ export interface HostCarried {
   signature: string;
 }
 /**
- * `schedules/list`.
+ * `schedules/list`: every schedule, or with `bot` (feature `bots_home`) only the schedules
+ * that prompt that Bot, its wake-ups included.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ListSchedulesRequest".
  */
-export interface ListSchedulesRequest {}
+export interface ListSchedulesRequest {
+  /**
+   * By id or name; invalid params for none.
+   */
+  bot?: string | null;
+}
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ListSchedulesResponse".
@@ -8052,6 +8136,15 @@ export interface Bot {
    * When it was last changed with `bots/update`.
    */
   updatedAt: number;
+  /**
+   * The Bot that made it, by id, when another Bot did (feature `bots_home`); absent for one
+   * the person added.
+   */
+  createdBy?: string | null;
+  /**
+   * That Bot's name now; absent once it's gone.
+   */
+  createdByName?: string | null;
 }
 /**
  * How a thread's permission requests are answered.
@@ -8101,11 +8194,17 @@ export interface BotResponse {
 }
 /**
  * `bots/add`: a new Bot, with no thread yet: the first prompt that reaches it starts one in
- * its home, which has to be a directory on its Host by then (the Dispatcher reads no Host's
- * files). Invalid params, saying why, for an empty name or one of more than one line, a name
+ * its home. Invalid params, saying why, for an empty name or one of more than one line, a name
  * another Bot has ignoring case, a Host that hasn't joined, an empty agent, a home that is
  * neither whole nor under `~`, a time zone that doesn't parse, or a `newThreadAt` that isn't
  * `HH:MM`.
+ *
+ * With feature `bots_home` (WVE-178), once those pass the Dispatcher has the Bot's Host make
+ * the home with `repos/init`: a git repository of its own, with the Bot's first memory files,
+ * `AGENTS.md` and `CLAUDE.md`, committed unless one of them is there already. The Bot is added
+ * only once that's done, with the home as the Host gives it, whole, and the answer says what
+ * making it did. Refused with `host_unavailable` while the Host isn't connected, and as invalid
+ * params when the Host is too old to make one or refuses, saying why; no Bot is added then.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "AddBotRequest".
@@ -8117,7 +8216,15 @@ export interface AddBotRequest {
    */
   host: string;
   agentId: string;
-  home: string;
+  /**
+   * Whole on the Host, or under its home as `~/…`; `~/bots/<name>` when absent, the name
+   * lowercased with a hyphen for each run of spaces or slash.
+   */
+  home?: string | null;
+  /**
+   * What the Bot is for, in the person's words: its first `AGENTS.md` says so.
+   */
+  job?: string | null;
   /**
    * Approving nothing, so what isn't approved waits for the person, when absent.
    */
@@ -8135,6 +8242,17 @@ export interface AddBotRequest {
    * [`DEFAULT_PAUSE_AFTER`] when absent.
    */
   pauseAfter?: number | null;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "AddBotResponse".
+ */
+export interface AddBotResponse {
+  bot: Bot;
+  /**
+   * What making its home on its Host did; absent from a Dispatcher without `bots_home`.
+   */
+  home?: InitRepositoryResponse | null;
 }
 /**
  * `bots/update`: change what's given, all or none, checked as `bots/add` checks it. A policy
@@ -8278,6 +8396,15 @@ export interface Bot1 {
    * When it was last changed with `bots/update`.
    */
   updatedAt: number;
+  /**
+   * The Bot that made it, by id, when another Bot did (feature `bots_home`); absent for one
+   * the person added.
+   */
+  createdBy?: string | null;
+  /**
+   * That Bot's name now; absent once it's gone.
+   */
+  createdByName?: string | null;
 }
 /**
  * `bots/newThread`: start a Bot's new thread, by id or name. Prompts for it wait from now on;
@@ -8294,6 +8421,23 @@ export interface NewBotThreadRequest {
   bot: string;
 }
 /**
+ * `bots/watch`: the Bots, as `bots/list` gives them; then a [`BotUpdatedNotification`]
+ * whenever one is added or anything `bots/list` gives of it changes, and a
+ * [`BotRemovedNotification`] when one is removed, until the connection ends or the client
+ * sends `bots/unwatch` (feature `bots_watch`).
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "WatchBotsRequest".
+ */
+export interface WatchBotsRequest {}
+/**
+ * `bots/unwatch`: stop what `bots/watch` sends.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "UnwatchBotsRequest".
+ */
+export interface UnwatchBotsRequest {}
+/**
  * `devices/paired`: a device took the offer this connection made.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -8301,6 +8445,25 @@ export interface NewBotThreadRequest {
  */
 export interface DevicePairedNotification {
   device: Device;
+}
+/**
+ * `bots/updated`, to clients watching the Bots: one was added, or changed, as it lists now.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "BotUpdatedNotification".
+ */
+export interface BotUpdatedNotification {
+  bot: Bot;
+}
+/**
+ * `bots/removed`, to clients watching the Bots: the Bot `bot`, by id, was removed, or its
+ * Host was.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "BotRemovedNotification".
+ */
+export interface BotRemovedNotification {
+  bot: string;
 }
 /**
  * Why the Dispatcher can't carry a connection to a Host: the `data` of the
@@ -8378,7 +8541,9 @@ export const HOST_PROTOCOL = {
     "authMessage": "weave-dispatcher-auth/1 {dispatcherId} {deviceId} {nonce}",
     "features": {
       "projects": "projects",
-      "bots": "bots"
+      "bots": "bots",
+      "botsHome": "bots_home",
+      "botsWatch": "bots_watch"
     },
     "defaultPauseAfter": 43200000
   },
@@ -8427,6 +8592,7 @@ export const HOST_PROTOCOL = {
     "listFiles": "files/list",
     "rename": "thread/rename",
     "worktrees": "worktrees",
+    "reposInit": "repos_init",
     "queue": "queue",
     "getThread": "threads/get",
     "requestKeys": "requestKeys",
@@ -8513,6 +8679,7 @@ export interface HostRequests {
   "worktrees/create": { params: CreateWorktreeRequest; result: CreateWorktreeResponse };
   "worktrees/remove": { params: RemoveWorktreeRequest; result: RemoveWorktreeResponse };
   "worktrees/release": { params: ReleaseWorktreeRequest; result: ReleaseWorktreeResponse };
+  "repos/init": { params: InitRepositoryRequest; result: InitRepositoryResponse };
   "terminals/list": { params: ListTerminalsRequest; result: TerminalsResponse };
   "terminals/watch": { params: WatchTerminalsRequest; result: TerminalsResponse };
   "terminals/unwatch": { params: UnwatchTerminalsRequest; result: Empty };
@@ -8584,16 +8751,20 @@ export interface DispatcherRequests {
   "projects/remove": { params: RemoveProjectRequest; result: Empty };
   "bots/list": { params: ListBotsRequest; result: ListBotsResponse };
   "bots/get": { params: GetBotRequest; result: BotResponse };
-  "bots/add": { params: AddBotRequest; result: BotResponse };
+  "bots/add": { params: AddBotRequest; result: AddBotResponse };
   "bots/update": { params: UpdateBotRequest; result: BotResponse };
   "bots/remove": { params: RemoveBotRequest; result: Empty };
   "bots/send": { params: SendToBotRequest; result: SentToBot };
   "bots/newThread": { params: NewBotThreadRequest; result: BotResponse };
+  "bots/watch": { params: WatchBotsRequest; result: ListBotsResponse };
+  "bots/unwatch": { params: UnwatchBotsRequest; result: Empty };
 }
 
 /** What each notification the Dispatcher sends carries. */
 export interface DispatcherNotifications {
   "devices/paired": DevicePairedNotification;
+  "bots/updated": BotUpdatedNotification;
+  "bots/removed": BotRemovedNotification;
 }
 
 export type DispatcherMethod = keyof DispatcherRequests;

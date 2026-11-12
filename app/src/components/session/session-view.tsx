@@ -3,11 +3,16 @@
 // Block at a time, a tab's Blocks by name to move between. What changes the layout goes to the
 // Host for every device; which tab is in front, focus and zoom are this device's own. What a
 // Block shows is the Session's from then on (`sessions/add`): nothing else in its directory is.
+//
+// A Bot's Session (WVE-178) is skinned apart: no tabs, the Bot's name in their place, and its
+// Thread Block locked to the top left of the one tab, showing the Bot's current thread. Terminals
+// and other Blocks go beside it, never before it, and no second thread is offered.
 import { useEffect, useMemo, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Add01Icon, Cancel01Icon, ComputerTerminal01Icon, BubbleChatIcon } from '@hugeicons/core-free-icons';
-import { type AppController, type CreatedThread, type LayoutChange, type OpenSession, type TerminalSummary, type ThreadSummary, threadKey } from '@/app/app-controller';
+import { type AppController, type BotSummary, type CreatedThread, type LayoutChange, type OpenSession, type TerminalSummary, type ThreadSummary, threadKey } from '@/app/app-controller';
 import { useCommand } from '@/app/commands';
+import { BotHeading } from '@/components/bots/bot-heading';
 import { type NewThreadTarget, NewThreadDialog } from '@/components/new-thread-dialog';
 import { type BlockContext, TerminalMark, blockType } from '@/components/session/blocks';
 import { NameInput } from '@/components/session/name-input';
@@ -29,6 +34,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import type { SessionBlock, SessionTab } from '@/host/protocol';
 import { cn } from '@/lib/utils';
 import { blockOfTerminal, blockOfThread, place, terminalBlock, terminalOf, threadBlock, threadOf } from '@/session/blocks';
+import { botAllows, botLayout, lockedBlock } from '@/session/bots';
 import {
   FLOATING_FRAME,
   type Side,
@@ -60,9 +66,11 @@ const describe = (error: unknown) => error instanceof Error ? error.message : St
  * What a new Block shows: a thread or terminal to start, one the Session has that no Block shows,
  * or one elsewhere in its directory, which a Block brings into the Session.
  */
-function NewBlockDialog({ open, onOpenChange, threads, closed, terminals, elsewhere, canTerminals, onNewThread, onNewTerminal, onThread, onTerminal }: {
+function NewBlockDialog({ open, onOpenChange, threads, closed, terminals, elsewhere, canTerminals, canThreads = true, onNewThread, onNewTerminal, onThread, onTerminal }: {
   open: boolean;
   onOpenChange(open: boolean): void;
+  /** Whether a thread may be given a Block: not in a Bot's Session, whose one thread is its own. */
+  canThreads?: boolean;
   /** The Session's open threads no Block shows, and its closed ones. */
   threads: ThreadSummary[];
   closed: ThreadSummary[];
@@ -82,14 +90,20 @@ function NewBlockDialog({ open, onOpenChange, threads, closed, terminals, elsewh
       <DialogContent className='w-[min(26rem,calc(100%-2rem))] max-w-none sm:max-w-md'>
         <DialogHeader>
           <DialogTitle>New Block</DialogTitle>
-          <DialogDescription>What it shows: something new, or a thread or terminal of this Session that no Block shows. It docks beside the Block with the keyboard, on every device.</DialogDescription>
+          <DialogDescription>
+            {canThreads
+              ? 'What it shows: something new, or a thread or terminal of this Session that no Block shows. It docks beside the Block with the keyboard, on every device.'
+              : "What it shows: a new terminal, or one of this directory's that no Block shows. It docks beside the Block with the keyboard, on every device."}
+          </DialogDescription>
         </DialogHeader>
         <div className='grid max-h-[60dvh] gap-3 overflow-y-auto'>
           <div role='group' aria-label='New' className='grid gap-0.5'>
-            <button type='button' className={row} onClick={onNewThread}>
-              <HugeiconsIcon icon={BubbleChatIcon} strokeWidth={2} className='size-3.5 text-icon-muted' />
-              New thread…
-            </button>
+            {canThreads && (
+              <button type='button' className={row} onClick={onNewThread}>
+                <HugeiconsIcon icon={BubbleChatIcon} strokeWidth={2} className='size-3.5 text-icon-muted' />
+                New thread…
+              </button>
+            )}
             {canTerminals && (
               <button type='button' className={row} onClick={onNewTerminal}>
                 <HugeiconsIcon icon={ComputerTerminal01Icon} strokeWidth={2} className='size-3.5 text-icon-muted' />
@@ -99,7 +113,7 @@ function NewBlockDialog({ open, onOpenChange, threads, closed, terminals, elsewh
           </div>
           <div role='group' aria-label='Not shown' className='grid gap-0.5'>
             <p className='px-2 text-[0.6875rem] font-medium text-muted-foreground'>Not shown</p>
-            {none && <p className='px-2 py-1 text-[0.6875rem] text-muted-foreground'>Every open thread and terminal here has a Block.</p>}
+            {none && <p className='px-2 py-1 text-[0.6875rem] text-muted-foreground'>{canThreads ? 'Every open thread and terminal here has a Block.' : 'Every terminal here has a Block.'}</p>}
             {threads.map((thread) => (
               <button key={thread.key} type='button' className={row} onClick={() => onThread(thread)}>
                 <HugeiconsIcon icon={BubbleChatIcon} strokeWidth={2} className='size-3.5 shrink-0 text-icon-muted' />
@@ -190,19 +204,42 @@ export type SessionViewProps = {
   /** The iPhone's Surface (WVE-183), for the thread in front. */
   surface?: DeviceSurface;
   onBack?(): void;
+  /** The Bot whose Session this is (WVE-178): one tab, its Thread Block locked to the top left. */
+  bot?: BotSummary;
+  /** Shows the Bot's page, from its name atop the Session. */
+  onOpenBot?(): void;
 };
 
-export function SessionView({ controller, session, members, leading, phone = false, reveal, onRevealed, onOpenThread, onCreated, surface, onBack }: SessionViewProps) {
+export function SessionView({ controller, session, members, leading, phone = false, reveal, onRevealed, onOpenThread, onCreated, surface, onBack, bot, onOpenBot }: SessionViewProps) {
   const { model, actions } = controller;
   const { layout } = session;
   const [view, changeView] = useSessionView(session.key);
   const host = model.hosts.find(({ id }) => id === session.hostId);
   const canTerminals = Boolean(host?.canTerminals);
-  const tab = tabInFront(layout, view);
+  // A Bot's Session shows its first tab, and never writes another.
+  const tab = bot ? layout.tabs[0] : tabInFront(layout, view);
+  // Its Thread Block, which stays at the top left.
+  const locked = bot ? lockedBlock(layout) : undefined;
+  const isLocked = (block: SessionBlock) => block.id === locked?.id;
   const zoomed = phone ? undefined : zoomedIn(tab, view);
   const focused = phone ? blockOnPhone(tab, view) : focusedBlock(tab, view);
   const update = (change: LayoutChange) => actions.updateLayout?.(session.key, change);
   const focus = (id: string) => changeView((current) => focusBlock(current, layout, id));
+
+  // A Bot's Thread Block shows its current thread: when the Bot starts a new one, or another
+  // device's write left something else at the top left, the layout is made so again, with the
+  // thread the Session's first. A Block that leaves this way leaves its thread running.
+  const botThread = bot?.thread;
+  const lockedShows = locked ? threadOf(locked) : undefined;
+  useEffect(() => {
+    if (!botThread || lockedShows === botThread) return;
+    actions.addToSession?.(session.key, { threads: [botThread], terminals: [] });
+    update((current) => botLayout(current, botThread));
+  }, [botThread, lockedShows, layout]);
+  // Opening the Bot is opening its thread: its Block has the keyboard, and the thread is read.
+  useEffect(() => {
+    if (locked && lockedShows === botThread) focus(locked.id);
+  }, [locked?.id, lockedShows === botThread]);
 
   // A Block placed here takes the keyboard once the layout has it.
   const [pending, setPending] = useState<{ block?: string; thread?: string }>();
@@ -255,7 +292,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
   const hidden = threads.filter(({ threadId }) => !blockOfThread(layout, threadId));
   const unplaced = terminalsInOrder(session.terminals ?? []).filter(({ id }) => !blockOfTerminal(layout, id));
   const hiddenTerminals = unplaced.filter(({ id }) => !own || own.terminals.includes(id));
-  const notShown = hidden.filter(({ state }) => state !== 'closed').length + hiddenTerminals.length;
+  const notShown = (bot ? 0 : hidden.filter(({ state }) => state !== 'closed').length) + hiddenTerminals.length;
   const elsewhere = useMemo(() => {
     if (!own) return { threads: [], terminals: [] };
     const directories = threadDirectories(model.threads, model.known ?? []);
@@ -291,7 +328,8 @@ export function SessionView({ controller, session, members, leading, phone = fal
   });
   const title = (block: SessionBlock) => blockType(block.type).title(block, { controller, session });
   const mark = (block: SessionBlock) => blockType(block.type).mark?.(block, { controller, session }) ?? null;
-  const menu = (block: SessionBlock) => blockType(block.type).actions?.(block, context(block)) ?? [];
+  // The Bot's thread isn't deleted from its Block: it's the Bot's.
+  const menu = (block: SessionBlock) => (blockType(block.type).actions?.(block, context(block)) ?? []).filter((item) => !(isLocked(block) && item.destructive));
   const rename = (block: SessionBlock) => blockType(block.type).rename?.(block, { controller, session });
   const body = (block: SessionBlock) => {
     const { Body } = blockType(block.type);
@@ -366,7 +404,14 @@ export function SessionView({ controller, session, members, leading, phone = fal
   // A thread to show, as one a link named or one just started from the sidebar.
   useEffect(() => {
     if (!reveal) return;
-    if (reveal.startsWith(`${session.hostId}/`)) showThread(reveal.slice(reveal.indexOf('/') + 1));
+    const threadId = reveal.startsWith(`${session.hostId}/`) ? reveal.slice(reveal.indexOf('/') + 1) : undefined;
+    // A Bot's Session gives no second thread a Block.
+    if (threadId && bot) {
+      const existing = blockOfThread(layout, threadId);
+      if (existing) bring(existing);
+    } else if (threadId) {
+      showThread(threadId);
+    }
     onRevealed?.();
   }, [reveal]);
 
@@ -392,6 +437,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
     }
   };
   const closeBlock = (block: SessionBlock) => {
+    if (isLocked(block)) return;
     const run = () => {
       end([block]);
       update((current) => removeBlock(current, block.id));
@@ -462,13 +508,14 @@ export function SessionView({ controller, session, members, leading, phone = fal
   };
   const toggleFloat = (block: SessionBlock) => {
     const found = findBlock(layout, block.id);
-    if (!found) return;
+    if (!found || isLocked(block)) return;
     update((current) => found.path
       ? placeBlock(current, block, { floating: found.tab.id, frame: FLOATING_FRAME })
       : place(current, block, { tab: found.tab.id }));
     setPending({ block: block.id });
   };
   const toNewTab = (block: SessionBlock) => {
+    if (bot) return;
     const made = newTab();
     update((current) => placeBlock(current, block, { newTab: made, after: findBlock(current, block.id)?.tab.id }));
     setPending({ block: block.id });
@@ -498,7 +545,8 @@ export function SessionView({ controller, session, members, leading, phone = fal
     float: toggleFloat,
     minimize,
     move: (block, target) => {
-      update((current) => placeBlock(current, block, target));
+      if (locked && !botAllows(layout, locked.id, block, target)) return;
+      update((current) => locked && !botAllows(current, locked.id, block, target) ? current : placeBlock(current, block, target));
       setPending({ block: block.id });
     },
     resize: (path, sizes) => update((current) => resizeSplit(current, tab.id, path, sizes)),
@@ -507,21 +555,22 @@ export function SessionView({ controller, session, members, leading, phone = fal
 
   const found = focused ? findBlock(layout, focused.id) : undefined;
   const docked = Boolean(found?.path);
-  useCommand('thread.new', () => startThread());
+  const pinned = Boolean(focused && isLocked(focused));
+  useCommand('thread.new', () => startThread(), !bot);
   useCommand('terminal.new', () => void startTerminal(), canTerminals);
   useCommand('block.add', () => setAdding({ target: here() }));
-  useCommand('tab.new', openTab);
-  useCommand('tab.rename', () => setRenaming(tab.id));
-  useCommand('tab.close', () => closeTab(tab));
-  useCommand('tab.next', () => stepTab(1), layout.tabs.length > 1);
-  useCommand('tab.previous', () => stepTab(-1), layout.tabs.length > 1);
+  useCommand('tab.new', openTab, !bot);
+  useCommand('tab.rename', () => setRenaming(tab.id), !bot);
+  useCommand('tab.close', () => closeTab(tab), !bot);
+  useCommand('tab.next', () => stepTab(1), !bot && layout.tabs.length > 1);
+  useCommand('tab.previous', () => stepTab(-1), !bot && layout.tabs.length > 1);
   useCommand('block.splitRight', () => { if (focused) setAdding({ target: { beside: focused.id, side: 'right' } }); }, docked && !phone);
   useCommand('block.splitDown', () => { if (focused) setAdding({ target: { beside: focused.id, side: 'down' } }); }, docked && !phone);
   useCommand('block.zoom', () => { if (focused) blockActions.zoom(focused.id); }, Boolean(focused) && !phone);
-  useCommand('block.float', () => { if (focused) toggleFloat(focused); }, Boolean(focused) && !phone);
-  useCommand('block.minimize', () => { if (focused) minimize(focused, true); }, Boolean(found?.frame) && !phone);
-  useCommand('block.toNewTab', () => { if (focused) toNewTab(focused); }, Boolean(focused));
-  useCommand('block.close', () => { if (focused) closeBlock(focused); }, Boolean(focused));
+  useCommand('block.float', () => { if (focused) toggleFloat(focused); }, Boolean(focused) && !phone && !pinned);
+  useCommand('block.minimize', () => { if (focused) minimize(focused, true); }, Boolean(found?.frame) && !phone && !pinned);
+  useCommand('block.toNewTab', () => { if (focused) toNewTab(focused); }, Boolean(focused) && !bot);
+  useCommand('block.close', () => { if (focused) closeBlock(focused); }, Boolean(focused) && !pinned);
   useCommand('block.focusLeft', () => focusBeside('left'), docked && !phone);
   useCommand('block.focusRight', () => focusBeside('right'), docked && !phone);
   useCommand('block.focusUp', () => focusBeside('up'), docked && !phone);
@@ -599,11 +648,17 @@ export function SessionView({ controller, session, members, leading, phone = fal
   const inTab = tabBlocks(tab).length;
 
   return (
-    <section aria-label={`Session ${sessionName}`} data-slot='session-view' data-session={session.key} className='flex min-h-0 min-w-0 flex-1 flex-col'>
+    <section aria-label={bot ? `Bot ${bot.name}` : `Session ${sessionName}`} data-slot='session-view' data-session={session.key} data-bot={bot?.id}
+      className='flex min-h-0 min-w-0 flex-1 flex-col'>
       <ThreadHeader leading={leading}>
-        {tabRail}
+        {bot ? <BotHeading bot={bot} unread={model.unread} onOpen={onOpenBot} /> : tabRail}
         {newBlock}
       </ThreadHeader>
+      {bot?.startingThread && (
+        <p role='status' data-slot='bot-starting' className='shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground'>
+          Starting a new thread: the current one saves its notes first, then the new one takes over here.
+        </p>
+      )}
       {(error ?? model.error) && (
         <Alert variant='destructive' className='m-2 w-auto has-data-[slot=alert-action]:pr-8'>
           <AlertDescription>{error ?? model.error}</AlertDescription>
@@ -620,7 +675,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
             {focused && (
               // One Block at a time: the tab's Blocks by name, and the one in front's menu and close.
               <div {...swipe}>
-                <BlockRail block={focused} among={tabBlocks(tab)} focusedId={focused.id}
+                <BlockRail block={focused} among={tabBlocks(tab)} focusedId={focused.id} locked={locked?.id}
                   actions={blockActions} title={title} mark={mark} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={false} />
               </div>
             )}
@@ -629,16 +684,18 @@ export function SessionView({ controller, session, members, leading, phone = fal
               : empty}
           </>
         )
-        : <TabBlocks tab={tab} focusedId={focused?.id} zoomedId={zoomed?.id} actions={blockActions} title={title} mark={mark} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={shown.length > 1} empty={empty} />}
+        : <TabBlocks tab={tab} focusedId={focused?.id} zoomedId={zoomed?.id} actions={blockActions} title={title} mark={mark} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={shown.length > 1} empty={empty}
+            locked={locked?.id} allows={locked ? (block, target) => botAllows(layout, locked.id, block, target) : undefined} />}
 
       <NewBlockDialog
         open={adding !== undefined}
         onOpenChange={(open) => { if (!open) setAdding(undefined); }}
-        threads={hidden.filter(({ state }) => state !== 'closed')}
-        closed={hidden.filter(({ state }) => state === 'closed')}
+        threads={bot ? [] : hidden.filter(({ state }) => state !== 'closed')}
+        closed={bot ? [] : hidden.filter(({ state }) => state === 'closed')}
         terminals={hiddenTerminals}
-        elsewhere={elsewhere}
+        elsewhere={bot ? { threads: [], terminals: elsewhere.terminals } : elsewhere}
         canTerminals={canTerminals}
+        canThreads={!bot}
         onNewThread={() => {
           const target = adding?.target;
           setAdding(undefined);
