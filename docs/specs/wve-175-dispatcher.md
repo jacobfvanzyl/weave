@@ -9,14 +9,16 @@ tailnet (WVE-176) since 2026-11-06, Hosts joining it and keeping a connection op
 since 2026-11-08, the app pairing with it alone and reaching every Host through it (WVE-196)
 since 2026-11-08, on the person's iPad and iPhone, Hosts taking no remote connections of
 their own (WVE-197), built 2026-11-08, the person's Projects (WVE-189, ADR 0031), built
-2026-11-08, and the person's Bots (WVE-118), with one-off schedules and a Bot's wake-ups, built
-2026-11-10. The decisions are in
+2026-11-08, the person's Bots (WVE-118), with one-off schedules and a Bot's wake-ups, built
+2026-11-10, and Bots in the app, their homes made by their Hosts, their own schedules and Bots
+that Bots make (WVE-178), built 2026-11-11. The decisions are in
 [ADR 0027](../adr/0027-the-dispatcher-starts-work-on-the-persons-hosts-as-a-client-of-them.md),
 [ADR 0029](../adr/0029-agents-reach-the-persons-other-hosts-through-the-dispatcher.md) and
 [ADR 0030](../adr/0030-the-dispatcher-is-the-hub-hosts-dial-out-to-it-and-devices-reach-every-host-through-it.md);
 Bots' in
 [ADR 0028](../adr/0028-bots-are-dispatcher-records-whose-work-goes-on-in-ordinary-threads.md),
-as WVE-118 settled it there.
+as WVE-118 and WVE-178 settled it there, and how the app shows a Bot in
+[ADR 0031](../adr/0031-the-app-lays-out-blocks-in-sessions-their-host-keeps-under-projects-the-dispatcher-keeps.md).
 
 ## Purpose
 
@@ -26,8 +28,9 @@ each keeps open to it, the one path work takes to a Host, schedules (WVE-145), a
 Host's agents make to the person's other Hosts (WVE-185), and the person's devices, which pair
 with it, reach its API over the tailnet (WVE-176) and reach every Host through it (WVE-195).
 It keeps the person's Projects too ([Projects](#projects), WVE-189), and their Bots, whose
-work goes on in ordinary threads on one Host each ([Bots](#bots), WVE-118). Webhooks (WVE-146)
-build on it.
+work goes on in ordinary threads on one Host each ([Bots](#bots), WVE-118), which the person
+adds from the app or the CLI, or a Bot adds when the person asks it to (WVE-178). Webhooks
+(WVE-146) build on it.
 
 ## Decisions
 
@@ -128,8 +131,8 @@ Dispatcher is the Host's client, so only the Dispatcher needs an address.
   minute, and a joined Host doesn't exit when idle. Joining another Dispatcher leaves the first.
   A pairing with the Dispatcher from before Hosts joined it went with the Host's other paired
   devices ([remote clients](wve-90-remote-clients.md#the-hosts-own-remote-access-retired)).
-- **Over the connection** the Dispatcher declares its own tools, a Bot's wake-ups
-  ([Wake-ups](#wake-ups)), and says it reaches the person's Hosts (`service/declareTools` with
+- **Over the connection** the Dispatcher declares its own tools, a Bot's
+  ([A Bot's tools](#a-bots-tools)), and says it reaches the person's Hosts (`service/declareTools` with
   `hosts`), watches the Host's threads (`threads/watch`) and sends it the work waiting for it. A
   newer connection from the same Host replaces the older.
 - **Leaving and removing.** `dispatcher/leave` on the Host closes its connection with
@@ -330,7 +333,8 @@ Each occurrence is written down in `occurrences`, keyed on its schedule and its 
 time, with the delivery that starts it in the same transaction. The delivery's request key is
 `schedule/<schedule id>/<scheduled time>` (`schedule/<id>/run/<time>` for one run by hand),
 and its turn's origin is the schedule's: `{"service": {"name": <the Dispatcher's>, "label":
-"schedule <name>", "id": <occurrence id>}}` ([Service origins](wve-85-host-protocol.md#service-origins)).
+"schedule <name>", "id": <occurrence id>}}` ([Service origins](wve-85-host-protocol.md#service-origins)),
+or `schedule <name> by <bot>` for one a Bot added itself ([Its schedules](#its-schedules)).
 So however often the Dispatcher considers a time, and across its restarts and the Host's,
 an occurrence starts once.
 
@@ -380,10 +384,13 @@ it's kept, done, with its occurrence, until it's removed. A Bot's own wake-up is
 which the Dispatcher forgets a week after its time once its occurrence is over
 ([Wake-ups](#wake-ups)).
 
-Not yet: agents creating schedules of their own, through tools the Dispatcher serves under the
-calling thread's policy (WVE-173): a Bot's thread asks only for wake-ups, one-offs of its own
-Bot ([Wake-ups](#wake-ups)). A per-schedule hourly cap, which matters once agents can; changing a
-schedule in place (remove it and add it again).
+A Bot's thread manages the schedules that name its Bot with the Dispatcher's tools (WVE-178):
+it asks for wake-ups, and adds, lists, pauses, resumes and removes its schedules, each of its own
+coming every five minutes at most ([A Bot's tools](#a-bots-tools)).
+
+Not yet: other agents creating schedules of their own, through tools the Dispatcher serves
+under the calling thread's policy (WVE-173); changing a schedule in place (remove it and add it
+again).
 
 ## Projects
 
@@ -417,7 +424,7 @@ every Host; Hosts know nothing of them, and the Host protocol is unchanged.
 
 ## Bots
 
-A Bot (ADR 0028, as WVE-118 settled it there) is a named assistant the person comes back to over
+A Bot (ADR 0028, as WVE-118 and WVE-178 settled it there) is a named assistant the person comes back to over
 weeks: a Dispatcher record whose work goes on in ordinary threads, one at a time, on the one Host
 it names, in its home there. The Host learns nothing of Bots: a Bot's threads carry its labels,
 and the rest is the Dispatcher's. A Bot belongs to no Project; its agent works in Projects by
@@ -425,20 +432,24 @@ name through the Host tools (WVE-208), as any thread's does.
 
 - **The record.** A name, an agent, the Host, its home there, a permission policy, a mode, a
   time zone, when to start a new thread daily if at all, how long a request may wait for the
-  person before it pauses, and its threads, the last its current one (`Bot`, [Its
-  API](#its-api)). Names are unique ignoring case and one line; ids are `b-` and 20 hex digits.
-  Host names aren't kept, as for Projects. The policy approves nothing unless told to, and asks
-  the person about the rest (`otherwise: ask`), so what it doesn't approve waits for them and
-  the Bot shows as needing them. A change to the policy or mode applies to threads started
-  after it: an open thread keeps its own.
-- **Its home** is a directory on its Host, whole or `~/…` under the home there, and a git
-  repository that holds its memory: `AGENTS.md`, what it always has in mind, `CLAUDE.md`
-  pointing at it (`@AGENTS.md`), notes beside them, and `threads/`, a dated note about each
-  thread before. The agent reads them as any thread in that directory does, and edits and
-  commits them as it goes, as the `AGENTS.md` it starts with tells it to; weave keeps no memory
-  of its own. `weave bots add` makes the home on this computer's Host ([Its home](#its-home)). The
-  Dispatcher reads no Host's files, so it can't check the home is there: the first thread's
-  Host refuses one that isn't.
+  person before it pauses, its threads, the last its current one, and the Bot that made it, if
+  one did (`createdBy`, WVE-178; `Bot`, [Its API](#its-api)). Names are unique ignoring case and
+  one line; ids are `b-` and 20 hex digits. Host names aren't kept, as for Projects, nor the
+  maker's name, which is read from its record while it's there and its id kept after. The
+  policy approves nothing unless told to, and asks the person about the rest (`otherwise:
+  ask`), so what it doesn't approve waits for them and the Bot shows as needing them. A change to
+  the policy or mode applies to threads started after it: an open thread keeps its own.
+- **Who adds one.** The person, from the app's New Bot or `weave bots add`, both `bots/add`; or
+  one of their Bots, with `create_bot`, when the person asks it to ([Making Bots](#making-bots)).
+  Either way its Host makes its home first, so it has to be connected to the Dispatcher.
+- **Its home** is a directory on its Host, a git repository of its own that holds its memory:
+  `AGENTS.md`, what it always has in mind, starting with its job when it was given one,
+  `CLAUDE.md` pointing at it (`@AGENTS.md`), notes beside them, and `threads/`, a dated note
+  about each thread before. The agent reads them as any thread in that directory does, and edits
+  and commits them as it goes, as the `AGENTS.md` it starts with tells it to; weave keeps no
+  memory of its own. The Dispatcher has the Bot's Host make it as it adds the Bot, with
+  `repos/init` ([Its home](#its-home)), and keeps it as the Host gives it back, whole; a Bot
+  added before WVE-178 may keep `~/…`. The Dispatcher reads no Host's files itself.
 - **Prompts.** The person prompts a Bot's thread as any thread, over the Host protocol: through
   the Dispatcher from a device ([Devices reaching Hosts](#devices-reaching-hosts)), or over the
   Host's socket on its own computer, and answers its pending requests the same way. The Host's
@@ -459,7 +470,9 @@ name through the Host tools (WVE-208), as any thread's does.
   run ([Schedules](#schedules)), one-offs among them. Each occurrence is a prompt for the Bot,
   settled as `bots/send`'s is, under the occurrence's key and with the schedule's origin. Their
   `overlap` is `skip`. A Bot's schedule lists the Bot's Host, agent, home as `cwd`, policy, mode
-  and current thread as they are now.
+  and current thread as they are now. The person adds them with `schedules/add`; the Bot adds
+  its own, and manages the person's for it, with its tools ([Its schedules](#its-schedules)).
+  `schedules/list` with `bot` lists only a Bot's.
 - **State,** from the thread watch the Dispatcher keeps on the Bot's Host: `working` while its
   current thread runs a turn; `needsYou` while a pending request there waits for the person,
   with `waitingSince`; `idle` otherwise, when its thread is idle or not open, it has none yet,
@@ -472,6 +485,40 @@ name through the Host tools (WVE-208), as any thread's does.
 - **Removing.** `bots/remove` forgets a Bot, its schedules, wake-ups among them, and the
   prompts still waiting for it; its threads and its home stay on its Host. Removing its Host
   (`hosts/remove`) removes it the same way; a Host that leaves keeps it, and its prompts wait.
+  A Bot it made keeps its id as `createdBy`, with no name.
+- **Watching.** A client that shows the Bots, as the app does, watches them (`bots/watch`): it
+  hears of each Bot added, changed or removed, and of each change to how one lists, such as its
+  state, its Host connecting or going, or its thread, until it unwatches or its connection ends.
+
+### Its home
+
+`bots/add` has the Bot's Host make its home (WVE-178), once everything else in the request has
+been checked and before the Bot is written down, with `repos/init`
+([A repository of its own](wve-85-host-protocol.md#a-repository-of-its-own)):
+
+- the directory `home` names, whole or `~/…` under the home there, or `~/bots/<name>` without
+  one, the name lowercased with a hyphen for each run of spaces and for a slash; a name that
+  leaves nothing but dots needs a `home`. The CLI gives one relative to this directory whole,
+  for a Bot on this computer's Host. It's made if it isn't there;
+- a git repository there, with `git init`, unless the directory is the top of one already. A
+  directory inside another repository is refused: a home is a repository of its own, so its
+  memory files aren't committed into someone else's;
+- unless an `AGENTS.md` or a `CLAUDE.md` is there, the Bot's first memory files: `AGENTS.md`,
+  which starts "# <name>", says the directory is the Bot's home, gives its job under "## Your
+  job" when it has one, says to write down what's worth remembering as it learns it, with a note
+  in `threads/` for each thread, and commit, to save when asked before a new thread, which tools
+  it has for Projects, wake-ups, its schedules and making Bots, and that a Bot it makes does
+  nothing until the person prompts it, and ends with "## What I know"; and `CLAUDE.md`, which is
+  `@AGENTS.md`. With either there, neither is written, and the job isn't written down;
+- one commit of those two files alone, "Start <name>'s home", as the user git's configuration on
+  the Host names, leaving anything else staged as it was. Without a `user.name` and `user.email`
+  there it writes the files, commits nothing, and says so.
+
+The Bot keeps the directory as its Host gives it back, whole, symlinks resolved. `bots/add`
+answers with what making it did, which `weave bots add` and `create_bot` say. While the Host
+isn't connected the Bot isn't added (`host_unavailable`), nor when its weave is too old to make
+a home (no `repos_init`, invalid params saying to update it) or it refuses, saying why. Nothing
+is made for a request the Dispatcher refuses first, a name taken among them.
 
 ### A new thread
 
@@ -504,11 +551,30 @@ start nothing twice. While its Host is away, it waits. Prompts the person sends 
 over the Host protocol meanwhile go into it, as into any thread: the Host knows nothing of the
 new one until it's named.
 
-### Wake-ups
+### A Bot's tools
 
-A Bot's thread asks to be prompted again later with the Dispatcher's own service tools
-([Service tools](wve-85-host-protocol.md#service-tools), WVE-171), the first it declares, on
-every Host that joined it. Agents see them as any service's, `<the Dispatcher's name>__<tool>`:
+The Dispatcher declares its own service tools on every Host that joined it
+([Service tools](wve-85-host-protocol.md#service-tools), WVE-171): ten, all a Bot's. Agents see
+them as any service's, `<the Dispatcher's name>__<tool>`, in this order: the wake-ups
+(WVE-118), `wake_me`, `list_wakeups` and `cancel_wakeup`; its schedules (WVE-178),
+`add_schedule`, `list_schedules`, `pause_schedule`, `resume_schedule` and `remove_schedule`; and
+making Bots (WVE-178), `create_bot` and `list_bots`. The rules for all of them:
+
+- **Only a Bot's own thread** is answered: on the Bot's Host, its current thread, one it had, or
+  the new one it's starting. Any other thread gets a tool error saying only a Bot's thread may do
+  what the tool does, as every tool's description tells every agent first.
+- **Only the calling Bot.** None changes another Bot, prompts it or schedules it; `create_bot`
+  makes one, and `list_bots` reads them all.
+- **Answers** are JSON text. A call refused, by the tool or by the API under it, is a tool error
+  in words for the agent: the API's reason made a sentence.
+- **New tools come with new threads.** A thread keeps the tools it was set up with
+  ([Service tools](wve-85-host-protocol.md#service-tools)), so a Bot's thread set up before an
+  updated Dispatcher connected to its Host lacks the tools that Dispatcher added; a thread
+  started after, such as the Bot's next new thread (`bots/newThread`), has them.
+
+#### Wake-ups
+
+A Bot's thread asks to be prompted again later:
 
 - `wake_me {prompt, at? | in?}`: a wake-up at `at`, an RFC 3339 time with its offset, or `in`
   seconds from now, exactly one of them, at least a minute away. It answers with the wake-up
@@ -519,9 +585,6 @@ every Host that joined it. Agents see them as any service's, `<the Dispatcher's 
 
 The rules:
 
-- **Only a Bot's own thread** is answered: on the Bot's Host, its current thread, one it had, or
-  the new one it's starting. Any other thread gets a tool error saying only a Bot's thread may
-  ask, as the tools' descriptions tell every agent.
 - **A wake-up is a one-off schedule naming the Bot** ([One-offs](#one-offs)), listed with
   `wakeUp`, named `wake-up-` and the first twelve hex digits of its id, in the Bot's zone. It
   comes as the Bot's schedules' occurrences do: into its current thread then, held while it
@@ -529,11 +592,132 @@ The rules:
   you asked for, due at …". Its turn's origin label is `wake-up <name>`. It keeps the Host's id
   for the call that asked for it, so a call the Host sends again makes one wake-up.
 - **At most 20** still to come for each Bot; another is refused, saying to cancel one or wait.
-- **The person sees them** among the schedules (`schedules/list`, `weave schedules`, and the
-  Bot's in `weave bots show`), and may remove one as any schedule (`schedules/remove`). A week
+- **The person sees them** among the schedules (`schedules/list`, `weave schedules`, the Bot's
+  in `weave bots show`, and the Bot's page in the app), and may remove one as any schedule
+  (`schedules/remove`). A week
   after its time, once its occurrence is over, the Dispatcher forgets it.
 - **A known limit:** a wake-up due while its Bot is paused is skipped, as the Bot's schedules'
   occurrences are, and lost. It doesn't come again, and nothing tells the Bot.
+
+#### Its schedules
+
+A Bot manages the schedules that name it when the person asks it to (WVE-178), so the app has no
+form to add one ([In the app](#in-the-app)). These are its own and the person's for it, but not
+its wake-ups, which the wake-up tools manage.
+
+- `add_schedule {name, cron, prompt, zone?}`: a schedule naming the calling Bot, checked as
+  `schedules/add` checks one with `bot`: `name` unique among all the person's schedules, the
+  cron expression's five fields or a name such as `@daily`, in `zone` or else the Bot's, with
+  `missed: latest` and `overlap: skip`. It answers with the schedule, as `list_schedules` gives
+  one. It keeps the Host's id for the call that added it (`made_call`), unique for the Bot, so a
+  call the Host sends again adds one schedule and answers with it; its turns' origin label is
+  `schedule <name> by <bot>`, by the Bot's name then.
+- `list_schedules {}`: the schedules naming the Bot, the person's too, one-offs the person added
+  among them (`cron` empty), wake-ups aside, by name, `{schedules}`. Each is `{id, name, cron,
+  zone, prompt, paused?, next?: {at, when}, last?: {at, when, state, outcome?, why?},
+  addedByYou?}`, `at` in RFC 3339 in the schedule's zone, `when` as people read it, and
+  `addedByYou` on those the Bot added.
+- `pause_schedule {id}`, `resume_schedule {id}`: by id or name, one of those, the person's too.
+  Pausing says "<bot> paused it"; resuming has it come again from now, catching up nothing it
+  missed while paused. One already so changes nothing. Each answers with the schedule.
+- `remove_schedule {id}`: forgets one of those, the person's too, `{removed}`; a turn it started
+  goes on. The description says to remove one only when the person asks, and to pause one to
+  stop it for a while.
+
+The rules, which hold for the Bot's tools only; the person's `schedules/*` aren't held to them:
+
+- **Every five minutes at most,** for one the Bot adds. One whose next times, looked at over more
+  than a day's worth at that rate, come closer than five minutes is refused, naming two of them.
+- **At most 20** schedules naming the Bot when it adds one, its wake-ups aside and the person's
+  for it counted; another is refused, saying to remove one, if the person agrees.
+- **Only its own.** Pausing, resuming or removing a wake-up is refused, saying `cancel_wakeup`
+  cancels it; so is a schedule that names another Bot or none, and one there isn't.
+
+That a Bot added a schedule (`made_call`, migration 10) isn't on the wire: `Schedule` doesn't
+say so, and `weave schedules` and the app show it as any of the Bot's. The origin label of its
+turns says it.
+
+#### Making Bots
+
+A Bot makes another when the person asks it to (WVE-178): the person adds a Bot from the app or
+the CLI, or asks one of their Bots for another (ADR 0028).
+
+- `create_bot {name, job, agent?, host?}`: a Bot added as `bots/add` adds one, with the calling
+  Bot as its maker (`createdBy`). Its home is `~/bots/<name>` on its Host, made there
+  ([Its home](#its-home)), its `AGENTS.md` starting with `job`; it has the caller's agent and Host
+  unless `agent` (an id) or `host` (an id or name) names another, the caller's time zone, the
+  policy `bots/add` gives without one, which asks the person, no mode and no daily new thread.
+  `name` and `job` are needed, trimmed. It answers `{made, home, next}`: the Bot as `list_bots`
+  gives one, what making its home did (`repos/init`'s answer), and what to do now, which says
+  the Bot does nothing until the person prompts it and to tell the person it's there and what
+  it's for, and says so when its home kept files that were there, so its job isn't written down,
+  or its first memory files went uncommitted.
+- `list_bots {}`: the person's Bots, by name, `{bots}`, each `{name, agent, host, home, state,
+  paused?, madeBy?, you?}`: `host` by its name, `home` whole, `state` `working`, `needsYou` or
+  `idle`, `paused` why its schedules are, `madeBy` the Bot that made it by name, or "a Bot since
+  removed", and `you` on the calling Bot.
+
+The rules:
+
+- **At most 20 Bots** when a Bot makes one, the person's counted: another is refused before its
+  home is made and again as it's written down, "there are 20 Bots, the most there may be when a
+  Bot makes one; the person can still add one themselves, or remove one". The person's
+  `bots/add` isn't capped.
+- **It does nothing until the person prompts it.** It has no thread and no schedules, none of
+  the Dispatcher's tools prompts or schedules another Bot, and the tool tells its maker to tell
+  the person it's there.
+- **What `bots/add` refuses** comes back as a tool error, "Couldn't make <name>: …", a Host away
+  or too old, a name taken and a home inside another repository among it.
+- **Those watching the Bots** hear of the new one as of any (`bots/watch`), and it lists as made
+  by its maker.
+
+### Known limits
+
+- **Adding a Bot needs its Host connected,** since the Host makes the home; and a Host whose
+  weave is from before `repos_init` can't have one added until it's updated. Bots added before
+  keep working there.
+- **A Bot a Bot makes is inert only as far as the Dispatcher's tools go.** Once it has a thread,
+  the Host tools let any thread prompt any thread (ADR 0023), its maker's among them.
+- **`create_bot` isn't kept per call,** as `wake_me` and `add_schedule` are: a call the Host sends
+  again is refused, the name being taken, though the Bot was made.
+- **Schedule names are unique across all schedules,** the person's and every Bot's, so a Bot's
+  `add_schedule` may be refused for a name another has.
+- **The app shows a Bot's policy without changing it:** `weave bots update --approve` changes it.
+- **Reading an earlier thread opens it in its agent,** the only way a Host gives its transcript,
+  and the app closes it again once nothing needs it.
+- **The app keeps a Bot's Session right only on a device that has the Bot open:** its Thread
+  Block moves to the Bot's new thread when one of them writes the layout
+  ([In the app](#in-the-app)).
+
+### In the app
+
+The app shows the Bots from a Dispatcher that keeps them (WVE-178, ADR 0031), watching them
+(`bots/watch`) where it can and listing them again as it refreshes where it can't.
+
+- **The list.** A Bots group above the Projects, a row for each Bot by name, with what it's
+  doing, the most pressing first: away (its Host isn't connected), needs you, working, unread
+  (its current thread ended a turn this device hasn't shown, the device's own), or idle; and
+  "no thread yet", "starting a new thread" or "paused" when so. New Bot is there with
+  `bots_home`, while a Host is connected: its name, its job, the Host and the agent, everything
+  else set on the Bot's page afterwards; its home is `~/bots/<name>`.
+- **A Bot opens as a Session,** the one at its home on its Host, listed under Bots and never under
+  a Project or its Host. It has one tab and no tab bar, the Bot's name and state in its place, and
+  the Bot's Thread Block at the top left of it, showing its current thread. That Block isn't
+  closed, moved, floated, minimized or swapped, its thread isn't deleted from it, and no Block
+  goes before it, to its left or above it; other Blocks, terminals and the like, dock to its
+  right or below, or float. No second Thread Block is offered. When the Bot starts a new thread,
+  or another device's write leaves something else there, the app puts the Bot's current thread
+  back at the top left, the Block that left taking its thread with it, running. Once the Bot is
+  removed, its Session is an ordinary one, under its Host.
+- **Before its first thread** the Bot shows an empty conversation, whose first prompt goes
+  through `bots/send` and starts the thread; the Session is made once the Bot lists it.
+- **Its page,** from its name: its settings, changed with `bots/update` (name, mode, a new thread
+  daily and how long a request may wait), its policy, shown only; its schedules and wake-ups,
+  each paused or resumed, run now or removed, with no form to add one; its earlier threads,
+  read-only; the threads it started elsewhere, by Project or else by Host, each given a Block in
+  its directory's Session when tapped, the Session made if there's none; New thread
+  (`bots/newThread`) and Remove.
+- **Notifications** on the Mac are of a Bot's current thread too, as of a thread in a Session.
 
 ### Not yet
 
@@ -546,8 +730,10 @@ The rules:
   which wait for WVE-217 and a successor on another Host: `thread/setSuccessor` names only a
   thread on the same Host. A home recorded as a Project's locations are, with its remote,
   waits for moving too.
-- A push when a Bot's requests go unanswered (WVE-177), and "unread" in its state (WVE-178).
-- Bots in the app and the TUI.
+- A push when a Bot's requests go unanswered (WVE-177). "Unread" is each device's own, in the
+  app (WVE-178), not in the Bot's state.
+- Changing a Bot's policy in the app.
+- Bots in the TUI.
 
 ## Its API
 
@@ -572,9 +758,12 @@ id, device?, features}`
 Another `protocol` answers `incompatible_protocol`. `auth` is the Host's (`device` or `pair`),
 and none on the socket; `device` is the paired device a WebSocket client connected as.
 `features` names the optional parts of the API it answers: `projects` for `projects/*`
-(WVE-189), and `bots` for `bots/*`, `schedules/add`'s `bot` and `at`, and what `Schedule` says
-of them (WVE-118). One from before them says none, and the API's version stays 2; the CLI says
-such a Dispatcher is older than what it asks for, and to update it.
+(WVE-189); `bots` for `bots/*`, `schedules/add`'s `bot` and `at`, and what `Schedule` says
+of them (WVE-118); `bots_home` for `bots/add` having the Bot's Host make its home, without
+`home` for `~/bots/<name>`, with `job`, answering what making it did, `Bot`'s `createdBy` and
+`createdByName`, and `schedules/list`'s `bot` (WVE-178); and `bots_watch` for `bots/watch` and
+`bots/unwatch` (WVE-178). One from before them says none, and the API's version stays 2; the CLI
+says such a Dispatcher is older than what it asks for, and to update it.
 
 **`dispatcher/status`** `{}` → `{version, pid, startedAt, name, database, pending, id, remote?,
 devices}`
@@ -634,7 +823,10 @@ random bytes in base64url. `signature` is the Dispatcher's of `weave-dispatcher-
 Host checks before it serves the connection. A token that isn't good answers `unauthenticated`
 and closes the connection (4002).
 
-**`schedules/list`** `{}` → `{schedules: Schedule[]}`
+**`schedules/list`** `{bot?}` → `{schedules: Schedule[]}`
+
+Every schedule, or with `bot` (feature `bots_home`), by id or name, only those naming that Bot,
+its wake-ups among them; invalid params, "there's no Bot …", for none.
 
 ```ts
 type Schedule = {
@@ -737,7 +929,8 @@ type Bot = {
   hostId: string;
   hostName: string;           // what the Dispatcher calls its Host now
   connected: boolean;         // whether the Dispatcher is connected to its Host now
-  home: string;               // on its Host: whole, or "~/…"
+  home: string;               // on its Host: whole, as the Host made it; "~/…" for some added
+                              // before WVE-178
   policy: PermissionPolicy;   // its new threads'
   mode?: string;              // its new threads'; the agent's configured one when absent
   newThreadAt?: string;       // "HH:MM" in zone: a new thread daily then
@@ -750,6 +943,8 @@ type Bot = {
   paused?: string;            // why its schedules' occurrences are skipped
   startingThread?: true;      // a new thread is being started; its prompts wait for it
   createdAt: number; updatedAt: number;
+  createdBy?: string;         // the Bot that made it, by id, when one did (feature bots_home)
+  createdByName?: string;     // that Bot's name now; absent once it's gone
 };
 ```
 
@@ -759,14 +954,27 @@ By name. Only with the `bots` feature, as are the rest.
 
 By id or name, ignoring case; invalid params, "there's no Bot …", for none.
 
-**`bots/add`** `{name, host, agentId, home, policy?, mode?, newThreadAt?, zone?, pauseAfter?}` →
-`{bot}`
+**`bots/add`** `{name, host, agentId, home?, job?, policy?, mode?, newThreadAt?, zone?,
+pauseAfter?}` → `{bot, home?}`
 
-A new Bot, with no thread yet ([Bots](#bots)). `policy` approves nothing and asks about the rest
-when absent, `zone` is the Dispatcher's computer's, and `pauseAfter` is 12 hours (43200000).
+A new Bot, with no thread yet ([Bots](#bots)), whose Host makes its home first (feature
+`bots_home`, WVE-178; [Its home](#its-home)). `home` is `~/bots/<name>` when absent, the name
+lowercased with a hyphen for each run of spaces or slash; `job`, what it's for in the person's
+words, goes in its first `AGENTS.md`. `policy` approves nothing and asks about the rest when
+absent, `zone` is the Dispatcher's computer's, and `pauseAfter` is 12 hours (43200000). The
+answer's `home` is `repos/init`'s: the directory, whole, whether it was made and made a
+repository, and whether the memory files were committed, kept what was there, or are
+uncommitted and why ([A repository of its own](wve-85-host-protocol.md#a-repository-of-its-own));
+the Bot's `home` is that directory.
+
 Invalid params, saying why, for an empty name or one of more than one line, a name another Bot
 has ignoring case, a Host that hasn't joined, an empty agent, a home neither whole nor under
-`~`, a zone that doesn't parse, or a `newThreadAt` that isn't `HH:MM`.
+`~`, a name that makes no directory name without a `home`, a zone that doesn't parse, or a
+`newThreadAt` that isn't `HH:MM`; then `host_unavailable` while the Host isn't connected, or the
+Dispatcher's request to it fails on the way, and invalid params when its weave is too old to
+make a home (no `repos_init`) or it refuses, as for a directory inside another repository,
+saying why in its words. No Bot is added then, and for any of the first, nothing is made. Before
+`bots_home`, `home` was needed and `{bot}` the answer, and the CLI made the home itself.
 
 **`bots/update`** `{bot, name?, policy?, mode?, newThreadAt?, zone?, pauseAfter?}` → `{bot}`
 
@@ -793,6 +1001,15 @@ empty prompt or no such Bot.
 
 Begins the Bot's new thread ([A new thread](#a-new-thread)). Invalid params, saying why, for a
 Bot with no thread yet, or one starting one already.
+
+**`bots/watch`** `{}` → `{bots: Bot[]}`, **`bots/unwatch`** `{}` → `{}`
+
+Feature `bots_watch` (WVE-178). The Bots, as `bots/list` gives them; then, to that connection,
+`bots/updated` `{bot}` whenever one is added or anything `bots/list` gives of it changes (its
+state, its Host connecting, going or renamed, its threads, a change through `bots/update`), and
+`bots/removed` `{bot: <id>}` when one is removed, or its Host is, each change once, until the
+connection ends or sends `bots/unwatch`. A change made before the answer reaches the client may
+come before it, and is newer than it.
 
 ## The CLI
 
@@ -826,9 +1043,9 @@ Bot with no thread yet, or one starting one already.
 | `weave projects remove <project> [--json]` | forgets it; `--json` prints `{}` |
 | `weave --project <p>`, `weave run --project <p>`, `weave schedules add --project <p>` | work in the Project's location on the Host in question: `--host`'s, or this computer's without it (`schedules add` always names one), a git Project's primary worktree. Never another Host's: a Project with no location there is refused, saying where it is and `weave projects add --to <p> [--host <h>] <dir>`. Refused with `--cwd`. While the Dispatcher doesn't answer, it goes by the last list |
 | `weave threads [list] --project <p> [--host <h>]` | only the threads `containing` places in that Project on that Host, the thread's Host id from its hello |
-| `weave bots [list] [--json]` | the Bots, a line each: its state, agent, Host, and thread or none yet |
-| `weave bots add <name> --agent <id> [--host <host>] [--home <dir>] [--approve <kinds>] [--mode] [--new-thread-at HH:MM] [--zone] [--pause-after <duration>] [--json]` | adds a Bot on this computer's Host, or `--host`'s. `--home` is `~/bots/<name>` when omitted, the name lowercased with hyphens for spaces; `--approve` names what its threads approve without asking, as `weave run`'s does, and it asks about the rest; `--pause-after` takes `90s`, `30m`, `12h`. On this computer's Host it makes the home first ([Its home](#its-home)) and says what it did; on another's it can't, and says to make the home there with `mkdir -p` and `git init`, or to run `weave bots add` on that computer, and `--home` names a directory there, whole or `~/…` |
-| `weave bots show <bot> [--json]` | one, by the flags that set it: its threads, and its schedules, wake-ups said to be its own |
+| `weave bots [list] [--json]` | the Bots, a line each: its state, agent, Host, and thread or none yet, and "made by" the Bot that made it, if one did |
+| `weave bots add <name> --agent <id> [--host <host>] [--home <dir>] [--job <text>] [--approve <kinds>] [--mode] [--new-thread-at HH:MM] [--zone] [--pause-after <duration>] [--json]` | adds a Bot on this computer's Host, or `--host`'s, whose Host makes its home first ([Its home](#its-home)), here or on another computer alike, and says what that did (on stderr with `--json`). `--home` is `~/bots/<name>` when omitted; a directory there, whole or `~/…`, and on this computer's Host one relative to this directory too. `--job` is what it's for, which its first `AGENTS.md` says. `--approve` names what its threads approve without asking, as `weave run`'s does, and it asks about the rest; `--pause-after` takes `90s`, `30m`, `12h`. A Dispatcher without `bots_home` is said to need updating (WVE-178) |
+| `weave bots show <bot> [--json]` | one, by the flags that set it: its threads, its schedules (`schedules/list` with `bot`), wake-ups said to be its own, and the Bot that made it |
 | `weave bots update <bot> [--name] [--approve <kinds> \| --no-approve] [--mode \| --no-mode] [--new-thread-at HH:MM \| --no-new-thread-at] [--zone] [--pause-after] [--json]` | `bots/update`, refused with nothing to change; it says when the thread it has open keeps the approvals and mode it started with |
 | `weave bots remove <bot> [--json]` | forgets it and its schedules, saying its threads and home stay where they are; `--json` prints `{}` |
 | `weave bots send <bot> [<prompt>…] [--key <key>] [--json]` | `bots/send`, the prompt read from stdin when omitted or `-`; it says where the prompt goes: into the thread, after the turn running there, starting the first, or waiting for a new thread or for the Bot's Host |
@@ -839,23 +1056,9 @@ directory if one answers, and otherwise the paired one, and says both when neith
 `$WEAVE_DISPATCHER_DIR` set it asks only that one. On a paired computer, `weave dispatcher run`,
 `start`, `restart` and `install` refuse, and `weave pair` and `weave devices` say where it runs.
 
-### Its home
-
-`weave bots add` makes a Bot's home when the Bot's Host is this computer's, before it asks the
-Dispatcher, and leaves what was there as it was:
-
-- the directory `--home` names, whole, `~/…` under this computer's home, or relative to this
-  directory, made if it isn't there, and given to the Dispatcher whole, links resolved;
-- a git repository there, with `git init`, unless the directory is one already. A directory
-  inside another repository is refused: a home is a repository of its own, so its memory files
-  aren't committed into someone else's;
-- unless an `AGENTS.md` or a `CLAUDE.md` is there, the Bot's first memory files: `AGENTS.md`,
-  which says what the home is for, to write down what's worth remembering as it learns it, with
-  a note in `threads/` for each thread, and commit, to save when asked before a new thread, and
-  which tools it has for Projects and wake-ups; and `CLAUDE.md`, which is `@AGENTS.md`;
-- one commit of those two files alone, "Start <name>'s home", as the user git's configuration
-  names, leaving anything else staged as it was. Without a `user.name` and `user.email` it
-  writes the files, commits nothing, and says so.
+Until WVE-178, `weave bots add` made a Bot's home itself, and only on this computer's Host: for
+another's it said what to run there. The Bot's Host makes it now, wherever the CLI runs
+([Its home](#its-home)).
 
 ## Acceptance
 
@@ -964,15 +1167,47 @@ Dispatcher, and leaves what was there as it was:
   saying why. The store's
   unit tests: names, the first thread answered and each new-thread step once, a new thread the
   Host refuses, and wake-ups counted, listed, cancelled and forgotten. CLI `tests/dispatcher.rs`:
-  `weave bots` through this computer's pairing, a Bot on this computer's Host whose home it makes
-  and one on another's for which it says what to run there; listing, showing and changing them;
-  the first prompt starting the thread in its home, the next going into it, a key sending once,
-  and a new thread taking over; `weave schedules add --bot` with `--cron` and `--at`, a time
+  `weave bots` through this computer's pairing, a Bot on this computer's Host and one on
+  another's, each Host making its home (WVE-178), with its job; listing, showing and changing
+  them; the first prompt starting the thread in its home, the next going into it, a key sending
+  once, and a new thread taking over; `weave schedules add --bot` with `--cron` and `--at`, a time
   that has passed and `--bot` beside what it stands in place of refused; removing, its home
   staying; and a home keeping what was there, the person's own `AGENTS.md`, a repository's
-  commits and what's staged, committing nothing without a git identity.
+  commits and what's staged, a home given relative to this directory, and one inside another
+  repository refused with no Bot added.
   `protocol/tests/wire.rs`: the Bot, its requests and answers, a Bot's schedule and its wake-up,
-  and an older client's schedule reading as before.
+  and an older client's schedule reading as before; `bots/add` with a job and its answer,
+  `bots/watch`, `bots/unwatch` and their notifications, `schedules/list` for a Bot, and
+  `repos/init` and its answers.
+- `tests/bots.rs` (WVE-178): `bots/add` having the Bot's Host make its home, `~/bots/<name>` by
+  default, a repository of its own with its first memory files committed saying its job, and
+  what was there kept, while what the Dispatcher refuses makes nothing and no Bot is added with
+  its Host away or refusing; a Bot another made naming it, by name while it's there, which the
+  API never sets; `bots/watch` hearing of each change once, until unwatched; `schedules/list`
+  for a Bot listing only its schedules, its wake-ups too; a Bot's thread making another with
+  `create_bot`, its maker, home, job, agent and zone recorded and nothing else happening until
+  the person prompts it, watchers hearing of it, `list_bots` listing both, and what `bots/add`
+  refuses coming back as the tool's error; a thread that isn't a Bot's refused by every new tool;
+  a Bot making another only while there are fewer than 20, the person adding one regardless; a
+  Bot adding a schedule of its own, listing it with the person's for it but not its wake-ups or
+  another Bot's, it coming into the Bot's thread at its time with its origin saying the Bot made
+  it, and pausing, resuming and removing its own and the person's for it, by id or name, but not
+  another Bot's nor its wake-ups; and `add_schedule` refusing what `schedules/add` would, one
+  coming more often than every five minutes, and one past 20, the person's counted but not its
+  wake-ups. Unit tests: a home's default name and first files, the five-minute rule over the
+  turn of the day, a made Bot naming its maker after it's gone, and a Bot's schedules counted
+  and added once per call.
+- The app's Bots (WVE-178): `app/src/host/bots.host.test.ts`, against a dev Dispatcher and a dev
+  Host that joined it, each Bot's home under the dev Host's directory: the Bots listed with their
+  state as the watch tells it, a first prompt through `bots/send` showing in the thread it
+  starts, the Bot's Session kept out of the list of Sessions, and its Thread Block following it
+  to a new thread. `bots-store.test.ts`, against a scripted Dispatcher: watched, with what's told
+  before the answer made again on it, and again after a reconnect; listed where it keeps Bots but
+  doesn't watch; none where it keeps none; adding, changing and removing, saying why not.
+  `src/session/bots.test.ts`: a row's state, a Bot's Session and Thread Block, what may be
+  dropped in its Session, and the threads it started elsewhere. `src/components/bots/bots.test.tsx`,
+  on the mock controller: the list, the Bot's Session, its first prompt and new thread, its page,
+  and New Bot.
 - Live: the Dispatcher on the homelab as a systemd user service, and `weave hosts` and
   `weave schedules` from the Mac; the Mac's and homelab-1's Hosts join it, and a schedule works
   without the Dispatcher dialing either. A thread on homelab-1 opened from the Mac's CLI through
@@ -984,7 +1219,7 @@ Dispatcher, and leaves what was there as it was:
 - Webhooks (WVE-146) make deliveries as schedules do; the edge (WVE-117) holds webhook
   deliveries and pushes for it.
 - More of the Dispatcher's own tools, declared with `service/declareTools` (WVE-171) beside a
-  Bot's wake-ups: agents' own schedules (WVE-173).
+  Bot's: schedules of other agents' own (WVE-173).
 - Choosing the Host a piece of work runs on, which a delivery's Host can become a rule for, and
   a Bot moving to another Host ([Not yet](#not-yet), WVE-217).
 - What Bots don't do yet ([Not yet](#not-yet)).

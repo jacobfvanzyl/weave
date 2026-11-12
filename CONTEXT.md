@@ -127,11 +127,11 @@ An occurrence that starts late, once, for the latest time a schedule missed whil
 _Avoid_: backfill, retry
 
 **Bot**:
-A named assistant the Dispatcher keeps, with an agent, a permission policy, triggers and a home on the Host it names, whose work goes on there in one thread at a time.
+A named assistant the Dispatcher keeps, with an agent, a permission policy, triggers and a home on the Host it names, whose work goes on there in one thread at a time. The person makes one, or asks one of their Bots to make another, which does nothing until the person prompts it.
 _Avoid_: resident, persona, dot, always-on agent, profile
 
 **Home**:
-A Bot's own directory on its Host, a git repository whose files are its memory, in which its threads run. It isn't the Host's home directory, though it's usually under it.
+A Bot's own directory on its Host, a git repository of its own whose files are its memory, in which its threads run. Its Host makes it as the Bot is added. It isn't the Host's home directory, though it's usually under it.
 _Avoid_: workspace, memory store, Bot directory
 
 **Wake-up**:
@@ -149,7 +149,7 @@ A named piece of the person's work, kept by the Dispatcher, with at most one loc
 _Avoid_: workspace, space, repo
 
 **Session**:
-One directory on one Host, for a repository one of its worktrees, holding tabs of Blocks laid out the same on every device. The person starts one from a client, and its Host keeps it until it ends, which is for good. It holds only the threads and terminals given a Block in it and those they started, not everything in its directory; a Project's Sessions are those in its locations.
+One directory on one Host, for a repository one of its worktrees, holding tabs of Blocks laid out the same on every device. The person starts one from a client, and its Host keeps it until it ends, which is for good. It holds only the threads and terminals given a Block in it and those they started, not everything in its directory; a Project's Sessions are those in its locations. A Bot's Session, at its home, is listed as the Bot: one tab, its thread's Block locked to the top left.
 _Avoid_: workspace, space, window
 
 **Tab**:

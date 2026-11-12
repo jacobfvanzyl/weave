@@ -11,9 +11,10 @@ the repository's pinned Linear CLI and tracker conventions from `../docs/agents/
 WVE-199 reworks it, and WVE-203 did the middle of that: the app lists the person's Sessions,
 under their Projects, and shows one as tabs of Blocks, laid out from the document its Host keeps
 (ADR 0031). The same React runs on the Mac in Tauri beside the Capacitor shell (ADR 0032,
-WVE-204), where terminals are drawn in the page by libghostty-vt in WebAssembly (WVE-205). Still
-to come: Bots in the list (WVE-178, once the Dispatcher keeps them), and Block types of the
-person's own (WVE-206).
+WVE-204), where terminals are drawn in the page by libghostty-vt in WebAssembly (WVE-205). The
+person's Bots are in the list above the Projects, each opening as the Session at its home
+(WVE-178, ADR 0028 and ADR 0031 as it settled them). Still to come: Block types of the person's
+own (WVE-206).
 
 ## Boundaries
 
@@ -55,8 +56,24 @@ person's own (WVE-206).
   Block shows (`session-view.tsx`). A thread started from the TUI or a schedule is in no Session,
   whatever its directory. The app offers it in New Block, under what's elsewhere in the
   directory, and says nothing else of it: banners, notifications, counts and `weave://thread`
-  links go by `ownThreads` and `threadSessions` (`src/session/sessions.ts`). On a Host from
-  before `sessions_add`, everything in a Session's directory still counts as its own.
+  links go by `ownThreads` and `threadSessions` (`src/session/sessions.ts`), which count a Bot's
+  current thread as the person's too. On a Host from before `sessions_add`, everything in a
+  Session's directory still counts as its own.
+- A Bot is a Session of its own kind (WVE-178): the one at its home on its Host
+  (`botDirectory`, `botSessionKey`), which the Host keeps as any other and knows nothing of. The
+  app lists it under Bots only (`sessionSummaries` leaves it out, `botSessionKeys`), and as an
+  ordinary Session once the Bot is removed. On screen it has one tab and no tab bar, the Bot's
+  name and state in its place (`bot-heading.tsx`), and the Bot's Thread Block locked at the top
+  left (`lockedBlock`, the first docked Block of the first tab): not closed, dragged, floated,
+  minimized or swapped, nothing dropped before it, to its left or above it (`botAllows`), its
+  thread not deleted from its menu, and no second thread, new tab or tab commands offered. Other
+  Blocks dock to its right or below it, or float. Whenever the Bot's current thread isn't the one
+  there, as after a new thread or another device's write, the device showing the Bot writes the
+  layout so again (`botLayout`, in `session-view.tsx`), the Block that leaves taking its thread
+  with it, running. A device that hasn't the Bot open doesn't, so the document may lag until one
+  does. The Bot's logic is in `src/session/bots.ts`, with no I/O, and its views in
+  `src/components/bots/`: keep it there, and keep `SessionView`'s Bot branches to what its `bot`
+  prop needs.
 - Everything the person does to a layout is a command (`src/app/commands.ts`): keys, the Mac's
   menu bar, a Block's menu and the palette run the same ones. Add to the table there, and handle
   it with `useCommand` in the component that can do it.
@@ -66,10 +83,10 @@ person's own (WVE-206).
 | Path | Owns |
 | --- | --- |
 | `src/app` | The controller seam (`app-controller.ts`), the platform seam beside it (`platform.ts`: what differs between Capacitor, Tauri and a browser), the commands and their keys (`commands.ts`), what the app works out from the listed threads (`thread-list.ts`), read state (`thread-read-state.ts`), the mock and Host controllers, and hooks. |
-| `src/session` | A Session's layout, with no I/O: the document's tree operations (`layout.ts`), the Block types' names and props (`blocks.ts`), each device's own view of a layout (`view.ts`), and the Sessions there are, under Projects or Hosts (`sessions.ts`, with the Dispatcher's rule for which Project a directory is in). The Sessions are the ones the Hosts keep (`sessions/watch`): the app makes none up from the threads listed, and a Host makes none itself, so a directory shows once a client starts a Session there, which its first Block does. Ending one (a tile's menu, or the End Session command) is its Host's to do, for good, and offered only on a Host that closes what's in it (`sessionsEnd`). |
-| `src/host` | The Host protocol's and the Dispatcher's generated types (`protocol.ts`, never edited by hand), the Host connection (`connection.ts`), the Dispatcher's API and the connections it carries (`dispatcher.ts`), the pairing (`storage.ts`), device keys, journal following, the store behind the Host controller (`host-store.ts`), and the Sessions the Hosts keep, with the layout changes still to save (`sessions.ts`). |
+| `src/session` | A Session's layout, with no I/O: the document's tree operations (`layout.ts`, `replaceBlock` among them), the Block types' names and props (`blocks.ts`), each device's own view of a layout (`view.ts`), the Sessions there are, under Projects or Hosts (`sessions.ts`, with the Dispatcher's rule for which Project a directory is in, and a Bot's Session at its home), and Bots (`bots.ts`, WVE-178: a row's state, most pressing first, away, needs you, working, unread, which is the device's own, or idle; the selection that names a Bot, `bot:<id>`, apart from a Session's key; the Bot's Thread Block and what may be dropped around it; its earlier threads; and the threads its threads started elsewhere, by Project or else by Host). The Sessions are the ones the Hosts keep (`sessions/watch`): the app makes none up from the threads listed, and a Host makes none itself, so a directory shows once a client starts a Session there, which its first Block does. Ending one (a tile's menu, or the End Session command) is its Host's to do, for good, and offered only on a Host that closes what's in it (`sessionsEnd`). |
+| `src/host` | The Host protocol's and the Dispatcher's generated types (`protocol.ts`, never edited by hand), the Host connection (`connection.ts`), the Dispatcher's API and the connections it carries (`dispatcher.ts`), the pairing (`storage.ts`), device keys, journal following, the store behind the Host controller (`host-store.ts`), and the Sessions the Hosts keep, with the layout changes still to save (`sessions.ts`). The store keeps the Bots from a Dispatcher with `bots`: watched with `bots_watch` (`bots/watch`, its notifications through `DispatcherConnection`'s `onNotification`, those that come before the answer made again on it), else listed on each refresh; New Bot only with `bots_home` (`canAddBots`). It adds, changes, removes, sends to and starts a new thread for a Bot, and lists and changes its schedules, through the Dispatcher's API, its refusals in the Dispatcher's words; and shows an earlier thread to read beside what's on screen (`peekThread`), opening it in its agent if it was closed and closing it again once nothing needs it. |
 | `src/chat` | The ACP transcript (`acp-transcript.ts`) and its views: the chat pane, tool calls and their terminals, plans, subagents, elicitations; the recorded journals its tests read (`fixtures/journals`). |
-| `src/components` | The shell (`app-shell.tsx`), the list of Sessions (`session-list.tsx`: under their Projects, and under its Host each one no Project has; a Host with none of those is no heading), a Session on screen (`session/session-view.tsx`: the tab rail, where a tab is renamed in place and closed, with a + after the last that also takes a Block dragged onto it, New Block for what's not shown, closing, and the iPhone's one Block at a time; `session/tab-blocks.tsx`: a tab's docked Blocks, the rail every Block has whatever its type (split right, split down, float, zoom when its tab has more than one Block, its type's menu, close, and for a floating one dock and minimize; the whole rail drags the Block, onto another's edge to dock beside it or its middle to trade places, and a name clicked twice is typed over where the type's names are the person's to give), the edge around the Block with the keyboard when the tab shows others, edges to drag, floating Blocks, and the names of those minimized at the bottom right; `session/blocks.tsx`: how each Block type draws and what its menu offers, and the text floor for one the app doesn't have), a thread (`thread-view.tsx`, which has no header in a Block: the rail renames it, and the rail's menu asks it for its status or deleting, `askThread`), the command palette, the banner and dialogs, and the thread's status sheet (`thread-status-sheet.tsx`, WVE-160: its MCP servers, from the thread's menu); `ui` and `ai-elements` are shadcn and AI Elements components. |
+| `src/components` | The shell (`app-shell.tsx`), the list of Sessions (`session-list.tsx`: under their Projects, and under its Host each one no Project has; a Host with none of those is no heading), a Session on screen (`session/session-view.tsx`: the tab rail, where a tab is renamed in place and closed, with a + after the last that also takes a Block dragged onto it, New Block for what's not shown, closing, and the iPhone's one Block at a time; `session/tab-blocks.tsx`: a tab's docked Blocks, the rail every Block has whatever its type (split right, split down, float, zoom when its tab has more than one Block, its type's menu, close, and for a floating one dock and minimize; the whole rail drags the Block, onto another's edge to dock beside it or its middle to trade places, and a name clicked twice is typed over where the type's names are the person's to give), the edge around the Block with the keyboard when the tab shows others, edges to drag, floating Blocks, and the names of those minimized at the bottom right; `session/blocks.tsx`: how each Block type draws and what its menu offers, and the text floor for one the app doesn't have), the Bots (`bots/`, WVE-178: the group in the list, `bot-list.tsx`; a Bot on screen, `bot-view.tsx`, its Session through `SessionView` with `bot`, or before its first thread an empty conversation whose first prompt goes through `bots/send`; its heading; its page, `bot-page.tsx`, with what `bots/update` changes, its policy shown only, its schedules and wake-ups to pause, resume, run or remove and no form to add one, its earlier threads read in `thread-reader.tsx`, the threads it started elsewhere, each given a Block in its directory's Session when tapped, which `app-shell.tsx` makes if there's none (`bringIn`), New thread and Remove; and New Bot, `new-bot-dialog.tsx`: name, job, a connected Host and its agent), a thread (`thread-view.tsx`, which has no header in a Block: the rail renames it, and the rail's menu asks it for its status or deleting, `askThread`), the command palette, the banner and dialogs, and the thread's status sheet (`thread-status-sheet.tsx`, WVE-160: its MCP servers, from the thread's menu); `ui` and `ai-elements` are shadcn and AI Elements components. |
 | `src/markdown` | What agent Markdown renders as beyond Streamdown's defaults (WVE-122), kept inert: no script, no fetch, no navigation without consent. `MessageResponse` (`src/components/ai-elements/message.tsx`) puts it together. |
 | `src/surface` | A Surface (WVE-183): the messages and the projection the iPhone sends (`surface-messages.ts`), the link between the two web views (`surface-link.ts`, a BroadcastChannel between tabs in a browser), the iPhone's hook and scrubber, and the Surface's page (`surface-app.tsx`). |
 | `src/terminal` | Terminals (WVE-153): the native plugin's bridge, the hook that lays a surface out under a Block and keeps it attached, and what the app shows of a terminal, with the font size this device keeps (`terminals.ts`). A terminal's name follows what's in it (its title, else the command running, else its directory), so the app renames none and shows no `label`. A terminal's Block is in `src/components/session/blocks.tsx`. |
@@ -126,6 +143,11 @@ WebSocket on makes no Tailscale Serve entry: keep it that way, and check `tailsc
 is unchanged after a run. They skip unless the binaries are built: `(cd .. && cargo build -p
 weave-cli -p weave-fake-agent -p weave-holder)`; the holder gives the dev Host terminals. They run
 in Vitest's `node` environment, since happy-dom's WebSocket fails the upgrade.
+`bots.host.test.ts` (WVE-178) adds Bots there, each Bot's home under the dev Host's directory,
+never the person's `~/bots`. `src/host/bots-store.test.ts` runs the store's Bots against a
+scripted Dispatcher, `src/session/bots.test.ts` the rules in `bots.ts`, and
+`src/components/bots/bots.test.tsx` the list, a Bot's Session, its page and New Bot on the mock
+controller, whose `list` scenario has a Bot for each way a row shows.
 
 The transcript's tests read journals recorded from a dev Host (`src/chat/fixtures/journals/`).
 Record them again with `scripts/record-journals.ts` after the Host or fake agent changes what it
@@ -180,7 +202,8 @@ the app's commands, which the page tells the core when it starts (`set_menu`), w
 and ⌘⇧] the tabs, ⌘⌥ and an arrow the Block that way, ⌘⇧↩ zoom, ⌘N a thread, ⌘⇧N a terminal, ⌘K
 the palette, ⌘= ⌘- ⌘0 the text size of terminals. On the Mac only the menu bar hears those keys; on the iPad and in a browser the
 page does. Closing the window (its red button) hides it, so notifications of threads waiting on
-the person or finishing keep coming, and a click shows the thread in its Session.
+the person or finishing keep coming, a Bot's current thread's among them, and a click shows the
+thread in its Session, or a Bot's thread in the Bot.
 `weave://thread/<host>/<thread>` does the same and `weave://pair-dispatcher?…` offers a pairing,
 once the app is installed.
 

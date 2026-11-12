@@ -26,9 +26,9 @@ So the app is organised as Project → Session → Blocks.
   - Any mixture of types can sit anywhere in a layout. A thread or terminal from another directory on the same Host may sit there too.
   - A client without a Block's type shows the Block's type and props as text. That is the text floor of ADR 0018.
 - **Each device keeps its own view of the layout.** Focus, zoom, the tab in front and scroll positions stay on the device, as does how it presents the layout: a phone shows each tab as a stack, one Block at a time. None of this is written to the document.
-- **Bots stay outside Projects and Sessions.**
+- **Bots stay outside Projects and Sessions.** (WVE-178 puts a Bot in a Session of its own kind: see below.)
   - A Bot's thread moves between Hosts (ADR 0028, ADR 0030), and a Session is on one Host. (Not yet: since WVE-118 each Bot stays on the one Host it names until moving is built, WVE-217.)
-  - Apps list Bots beside Projects. A Bot opens in a Thread Block of its own, which follows the Bot's thread to each successor.
+  - Apps list Bots beside Projects. A Bot opens in a Thread Block of its own, which follows the Bot's thread to each successor. (Replaced in WVE-178: a Bot opens as the Session at its home.)
   - A Bot's agent reaches any thread through the Host tools (ADR 0023, ADR 0029). Nothing ties a Bot to a Project.
 - **"Session" takes this meaning, so the code and the wire stop using it for threads.**
   - ADR 0021 kept `session/*`, `sessions/*`, `sessionId` and the Host tools' names until the mismatch cost more than a major version of the Host protocol. A second meaning for the word costs more.
@@ -93,3 +93,13 @@ So the app is organised as Project → Session → Blocks.
 - **Apps list the Sessions their Hosts keep, not threads, and make none up.** A client doesn't show one for a directory because threads once ran in it. (WVE-203 first listed one for every directory with a listed thread, closed ones included, which showed worktrees long gone.) The one exception is on screen only: a Session being started shows before its first Block makes it. The Dispatcher's Projects group them, each Session saying which Host it's on, and those in no Project stay under their Host. A Host is a heading only for those: one whose Sessions are all in Projects isn't listed. A Project with no Session yet is listed, for starting one.
 - **"Tab" is the word,** not Rex's "window": the document says tabs, and the Mac app has windows of its own.
 - **A change to a layout names the revision it was made on** (`ifRevision`). When another device saved first, the client makes the change again on what that device saved, so neither loses the other's.
+
+## Settled in WVE-178 (2026-11-11)
+
+- **A Bot is a Session of its own kind** (ADR 0028, as WVE-178 settled it there). This replaces "Bots stay outside Projects and Sessions" and a Bot opening "in a Thread Block of its own", above. That was written while a Bot's thread could move between Hosts; since WVE-118 a Bot stays on the one Host it names, as a Session does, so it can live in its home there.
+  - In the person's words, "a slightly special type of Session", "skinned not to have multiple Tabs at all and a single Thread block that is always locked to the top left".
+  - It's the Session at the Bot's home on its Host, made as any Session is, by the Block the Bot's thread gets. The Host knows nothing of Bots: the app lists that Session under Bots, above the Projects, and nowhere else, and once the Bot is removed lists it under its Host as any Session.
+  - It has one tab and no tab bar, the Bot's name in its place. The Bot's Thread Block is the first docked Block of that tab, at the top left: it isn't closed, moved, floated, minimized or swapped, and no Block is dropped before it, to its left or above it. Other Blocks dock to its right or below it, or float, as in any Session. No second Thread Block is offered.
+  - The app keeps that Block on the Bot's current thread. When the Bot starts a new thread, or another device's write leaves something else there, the client writes the layout so again: the Block showing the old thread gives its place to the new one and leaves the layout, its thread running on, as a Block that leaves a layout other than by a deliberate close does (WVE-203, above).
+  - Bots still belong to no Project, and still reach any thread through the Host tools.
+- **A thread a Bot started elsewhere joins the Session of its directory when the person taps it** on the Bot's page: it gets a Block there, and the Session is made if there's none, as a thread brought in from elsewhere does (WVE-203, above). It doesn't join one by itself.

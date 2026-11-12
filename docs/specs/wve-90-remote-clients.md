@@ -244,7 +244,7 @@ hello only on the connection the Host opened to the Dispatcher, and forgets it w
 ([WVE-175's Hosts](wve-175-dispatcher.md#hosts)). Being a service only takes from what it may do,
 which is what starting headless turns, following threads, naming and labelling the ones it
 starts, serving its tools and reaching the person's other Hosts for this Host's agents
-(ADR 0029) need:
+(ADR 0029), and making a Bot's home (WVE-178), need:
 
 - `host/hello`, `host/challenge`, `host/status`, `agents/list`;
 - `threads/list`, `threads/get`, `threads/watch`, `threads/unwatch`;
@@ -252,11 +252,13 @@ starts, serving its tools and reaching the person's other Hosts for this Host's 
   `thread/rename`, `thread/setSuccessor`, `thread/label`, `thread/report`;
 - `service/declareTools`, `service/answerTool`;
 - `queue/add`, `turn/steer`, `turn/cancel`;
+- `repos/init`, a repository of its own with its first files
+  ([the Host protocol](wve-85-host-protocol.md#a-repository-of-its-own));
 - `dispatcher/carry`, which only the Dispatcher the Host joined may ask, on the connection the
   Host opened to it ([the Host protocol](wve-85-host-protocol.md#connections-the-dispatcher-carries)).
 
 Everything else answers `forbidden`, before any handler sees it: the computer's files,
-terminals and worktrees, opening or attaching to a thread as a client of it, answering a
+terminals and worktrees (`repos/init` aside), opening or attaching to a thread as a client of it, answering a
 thread's pending requests, and agents' sign-in and updates. Its turns' origin names it, as any
 remote client's does, unless it says what started a turn (`origin` on `thread/run`, `queue/add`
 and `turn/steer`; see [Service origins](wve-85-host-protocol.md#service-origins)) or which thread

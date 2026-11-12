@@ -27,7 +27,10 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
 - `store.rs`: its state in SQLite (`rusqlite`, bundled): `hosts` and `deliveries`, and in
   `store/calls.rs` the `calls` from Hosts' agents and the turns they began (`follows`). Migrations are
   numbered SQL in `MIGRATIONS`, applied in order and recorded in `PRAGMA user_version`; never
-  edit one once released, add the next. The eighth (WVE-118) added Bots: `bots`, `bot_threads`
+  edit one once released, add the next. The tenth (WVE-178) added `made_call` to `schedules`,
+  the Host's id for the `add_schedule` call that added a Bot's own schedule, unique per Bot; the
+  ninth (WVE-178), `created_by` on `bots`, the Bot that made one, by id and with no foreign key so
+  it outlives its maker. The eighth (WVE-118) added Bots: `bots`, `bot_threads`
   and `bot_new_threads`, `bot_id` on `schedules` and `deliveries`, cascading so removing a Bot or
   its Host takes its schedules and the prompts waiting for it, and a schedule's `at` and
   `wake_call`. The seventh (WVE-189) added Projects. The sixth (WVE-200) renamed the `session_id` columns to
@@ -44,12 +47,13 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   removing a Host closes its connection with `CLOSE_REVOKED` (`Link::revoke`), which it forgets
   the Dispatcher at. A Host with no key in `hosts` was paired before Hosts joined, and is listed
   `unjoined` until it joins. On each connection it declares the Dispatcher's own tools
-  (`wakeups::tools`) beside `hosts`, and answers their calls (`HostEvent::ToolCall`,
-  `wakeups::answer`). It settles a Bot's prompt (`Work::Bot`) with `bots::settle` before its
+  (`tools::tools`) beside `hosts`, and answers their calls (`HostEvent::ToolCall`,
+  `tools::answer`). It settles a Bot's prompt (`Work::Bot`) with `bots::settle` before its
   first send, leaving one that has to wait unsent while the work after it goes on, reads at once
   a thread a Bot's `thread/run` opened (`bots::delivered`), so the next prompt queues there, and
   runs `bots::advance` when it connects, when it's woken, and when the watch says a Bot's thread
-  changed.
+  changed. Whenever it connects, hears of a thread or goes, it asks `Shared::bots_changed`, so
+  those watching the Bots hear of their state and Host.
 - `scheduler.rs` (WVE-145): the task that considers every schedule when one is due, when they
   change, and every 30 seconds of wall clock at most (`Clock`; tests pass one they move), and
   `Plan`, a schedule's croner expression in its jiff time zone. Catch-ups, the one-week look-back
@@ -59,7 +63,8 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   picks) has one time, considered as a cron expression's are, and is skipped, saying so, when
   missed by more than the look-back; it's kept once done. A Bot's schedule fires a `Work::Bot`
   (`BotPrompt`) under the occurrence's key, a wake-up with the origin label `wake-up <name>` and
-  a catch-up line of its own. Each pass considers the Bots first (`bots::consider`), so an
+  a catch-up line of its own, and a schedule a Bot added itself (`made_call`) with `schedule
+  <name> by <bot>`, by the Bot's name then. Each pass considers the Bots first (`bots::consider`), so an
   occurrence due as a Bot pauses is skipped, and then forgets wake-ups done a week ago
   (`Store::prune_wake_ups`).
 - `projects.rs`, `store/projects.rs` (WVE-189, ADR 0031): the person's Projects, the seventh
@@ -70,10 +75,18 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   remotes in the transaction that makes it (`ProjectError::Refused` is invalid params). The client
   says where a directory lies in git, from its Host; the Dispatcher never reads a Host's
   directories, and Hosts' own connections never reach `projects/*` (WVE-208).
-- `bots.rs`, `store/bots.rs` (WVE-118, ADR 0028 as WVE-118 settled it): the person's Bots,
-  behind the `bots` feature. A Bot names one Host, a foreign key, so `remove_host` takes it, and
-  a home there the Dispatcher never reads: the first thread's Host refuses one that isn't there.
-  Names are checked in the transaction that changes them (`BotError::Refused` is invalid
+- `bots.rs`, `store/bots.rs` (WVE-118, ADR 0028 as WVE-118 and WVE-178 settled it): the
+  person's Bots, behind the `bots` feature. A Bot names one Host, a foreign key, so
+  `remove_host` takes it, and a home there. `add_bot` (WVE-178, feature `bots_home`) checks the
+  name (`Store::free_bot_name`) and the rest of the request first, then has the Host's link ask
+  `repos/init` (`make_home`, with `bots/home.rs`: `default_home`, `~/bots/<name>`, and
+  `request`, the first `AGENTS.md`, its job under "## Your job", and `CLAUDE.md`), refusing with
+  `host_unavailable` while the link is away and invalid params for a Host without `repos_init`,
+  and writes the Bot down only once that answers, with the home as the Host gave it; the
+  Dispatcher never reads a Host's files itself. `created_by` names the Bot that made one, which
+  only the tools pass (and `Dispatcher::add_bot_made_by`, for tests): such an add is refused at
+  `MOST_BOTS` (20), checked before the home is made and again in the store's transaction. Names
+  are checked in the transaction that changes them too (`BotError::Refused` is invalid
   params). A prompt for a Bot is a `Work::Bot` delivery with `bot_id`, from `bots/send` (keyed
   `bot/<id>/send/<key>`, hashed past `MAX_KEY`) or a Bot's schedule, settled at its first send
   (`settle`): `link::into_thread` for its current thread, or `thread/run` in its home with its
@@ -91,20 +104,46 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   leaves the Bot its thread (`refused`). `consider`, from the scheduler, pauses a Bot whose
   thread has waited longer than `pause_after` and marks a daily new thread due, a missed day
   once, by the scheduler's clock. A Bot's state is the link's watch (`Seen`), never stored.
-- `wakeups.rs` (WVE-118): the Dispatcher's first service tools (WVE-171), `wake_me`,
-  `list_wakeups` and `cancel_wakeup`, declared on every link and answered only for a Bot's own
+  `bots/watch.rs` (WVE-178, feature `bots_watch`): the API connections watching the Bots
+  (`Watchers`). Whatever may change how a Bot lists (the API, a link, the scheduler) calls
+  `Shared::bots_changed`, which lists the Bots again and tells each watcher `bots/updated` for
+  those that differ from what was last told and `bots/removed` for those gone; one record of what
+  was told serves every watcher, and a new watcher is answered under the same lock, so none misses
+  a change or hears one twice. Take no lock of the links' before calling it, as it reads them.
+- `tools.rs` (WVE-171): the Dispatcher's own service tools, a Bot's, declared on every link
+  (`tools`, in the order agents see them) and answered (`answer`, `respond`) only for a Bot's own
   thread on its Host (`own_bot`: its current thread, one it had, or the new one starting), with a
-  tool error in words for the agent otherwise. A wake-up is a one-off schedule naming the Bot,
-  with `wake_call` the Host's id for the call, unique per Bot so a call sent again makes one; at
-  least a minute away (`SOONEST`), and at most 20 to come (`MOST`, counted in `add_wake_up`'s
-  transaction). One due while its Bot is paused is skipped like any of the Bot's occurrences,
-  and lost.
+  tool error in words for the agent otherwise; each tool's description begins with `ONLY`, and
+  API errors reach the agent as sentences (`sentence`). Each module gives its `NAMES`, its
+  `tools()` and what only a Bot's thread `CAN` do with them:
+  - `tools/wakeups.rs` (WVE-118): `wake_me`, `list_wakeups` and `cancel_wakeup`. A wake-up is a
+    one-off schedule naming the Bot, with `wake_call` the Host's id for the call, unique per Bot
+    so a call sent again makes one; at least a minute away (`SOONEST`), and at most 20 to come
+    (`MOST`, counted in `add_wake_up`'s transaction). One due while its Bot is paused is skipped
+    like any of the Bot's occurrences, and lost.
+  - `tools/schedules.rs` (WVE-178): `add_schedule`, `list_schedules`, `pause_schedule`,
+    `resume_schedule` and `remove_schedule`, over the schedules naming the calling Bot, the
+    person's too, wake-ups aside (`own_schedule` refuses those, and anything not the Bot's).
+    `add` checks a schedule as `schedules/add` does (`Shared::new_schedule`), in the Bot's zone
+    unless it names one, refuses one coming more often than every five minutes (`too_often` over
+    `LOOKED_AT` next times, `OFTENEST`), and writes it with `made_call` in
+    `Store::add_bot_schedule`'s transaction, which answers with the one the same call added before
+    (`BotSchedule::Again`) and refuses at 20 schedules naming the Bot, wake-ups aside (`MOST`,
+    `BotSchedule::Full`).
+  - `tools/bots.rs` (WVE-178): `create_bot`, which adds a Bot through `Shared::add_bot` with the
+    caller as its maker, `~/bots/<name>` and its job, and the caller's agent, Host and zone unless
+    it names others, and answers with what it made, what making its home did and what to tell the
+    person (`next`); and `list_bots`. Nothing here lets a Bot prompt or schedule another, so one a
+    Bot makes does nothing until the person prompts it. A call the Host sends again isn't
+    recognised: it's refused, the name being taken.
 - `store/schedules.rs`: `schedules` and `occurrences`. An occurrence and its delivery are
   written in one transaction, unique on schedule, scheduled time and `manual`; delivering it,
   the Host refusing it and its turn ending update it from `store.rs` and `link.rs`. The same
   transaction skips a Bot's occurrence while the Bot is paused, unless it's run by hand. A
   Bot's wake-ups to come (`TO_COME`: its time not yet considered, no occurrence but by hand)
-  are counted, listed and cancelled here, and forgotten a week after their time once over.
+  are counted, listed and cancelled here, and forgotten a week after their time once over; a
+  Bot's own schedules are counted and written once per call here (`add_bot_schedule`). The
+  `made_call` mark is the Dispatcher's own: the wire's `Schedule` doesn't carry it.
 - `calls.rs` (WVE-185, ADR 0029): the Host tool calls naming another Host that a Host passes it
   (`HostEvent::HostCall`, since each link declares `hosts`), answered with `service/answerTool`.
   Reads and steers go straight to the named Host while its link is connected; `thread/run` and
@@ -121,7 +160,10 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   and the WebSocket (`Peer::Remote`): a remote client signs its `dispatcher/challenge` at hello
   (`dispatcher_auth_message`) or pairs with a code, and may ask everything but `devices/*` and
   `hosts/offer` with `here` (`local_first`, `forbidden`). A Host's own connection asks for
-  `weave-dispatcher-host` and goes to `joins.rs` instead.
+  `weave-dispatcher-host` and goes to `joins.rs` instead. Its hello's features are
+  `api::features`: `projects`, `bots`, `bots_home` and `bots_watch`. `bots/watch` and
+  `bots/unwatch` are answered there, and a connection that ends stops watching; `client.rs` hears
+  the changes (`DispatcherConnection::bot_change`, `BotChange`).
 - `carry.rs` (WVE-195, ADR 0030): the person's devices' connections carried to their Hosts. A
   device asks on the WebSocket with `weave-dispatcher-carry` (`device`: its challenge, hello and
   `hosts/open`, read with `weave_remote::preamble`), or on the socket after a hello there, which
@@ -171,7 +213,11 @@ clock the test moves (`TestClock`), with the fake agent: its first prompt starti
 and the rest following it, its state, a new thread asked for and daily, across Dispatcher
 restarts at each step (the relay deafened to lose the Host's answers) and a Host restart,
 pausing while its thread waits on the person, one-offs, and wake-ups its agent asks for, lists
-and cancels with the Dispatcher's tools.
+and cancels with the Dispatcher's tools; and (WVE-178) its Host making its home, `bots/watch`,
+`schedules/list` for a Bot, a Bot making another (`create_bot`, and the cap of 20), a Bot adding
+and managing its own schedules within their limits, and every new tool refusing a thread that
+isn't a Bot's. Its Hosts run git away from the configuration of whoever runs the tests
+(`common::ISOLATED_GIT`).
 `tests/hosts.rs` runs two or three Hosts whose fake agents call Host tools naming each
 other, the relay deafened to lose an answer, and name Projects the test adds directly
 (WVE-208). `tests/carry.rs` has a paired device reach two

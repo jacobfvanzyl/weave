@@ -77,7 +77,7 @@ journals.
 ./target/debug/weave schedules            # the Dispatcher's schedules; also add, pause, run, occurrences
 ./target/debug/weave schedules add later --bot odin --at "2026-11-12 09:00" -- "check the deploy"   # once, prompting a Bot
 ./target/debug/weave bots                 # the Dispatcher's Bots; also add, show, update, remove, send, new-thread
-./target/debug/weave bots add odin --agent claude --approve read   # a Bot on this computer's Host, its home made in ~/bots/odin
+./target/debug/weave bots add odin --agent claude --approve read --job "keep my week in order"   # a Bot on this computer's Host, which makes its home in ~/bots/odin
 ./target/debug/weave bots send odin "what's on today?"   # into its thread, or starting its first
 ./target/debug/weave projects             # the Dispatcher's Projects; also add, show, rename, update, remove
 ./target/debug/weave projects add --host homelab ~/code/odin   # register a directory there
@@ -102,24 +102,27 @@ back to another Host. `weave threads list --project` filters with
 
 `weave bots` (`src/commands/bots.rs`, WVE-118, ADR 0028) manages the Bots the Dispatcher keeps,
 each subcommand only with a Dispatcher whose hello offers `bots` (`dispatcher::require`, which
-says an older one needs updating). `add` finds the Bot's Host in `hosts/list`, this computer's
-(`weave_host::own_id`) without `--host`, and refuses a name `bots/list` has before it makes
-anything. On this computer's Host it makes the home first (`bots/home.rs`): the directory, `git
-init` unless it's a repository already (one inside another's is refused), and, unless an `AGENTS.md` or `CLAUDE.md` is there,
-both, written with `create_new` and committed alone (`commit --only`) as the user git's
-configuration names (`user.useConfigOnly`), or left uncommitted, saying why; git runs without
-`GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE`, so it works on the home whatever repository the
-environment names. For another computer's Host, `--home` is a directory there, whole or `~/…`
-(`args::directory_on`), `~/bots/<name>` by default, and it says what to run there. Its policy
-asks about what `--approve` leaves out (`Unapproved::Ask`), the kinds read by `args::tool_kinds`
-and said back by `args::approve_words` in `show`. `send` reads its prompt before it asks the
-Dispatcher, and says where the prompt went (`sent_to`).
+says an older one needs updating). `add` needs `bots_home` too (WVE-178): the Dispatcher has
+the Bot's Host make its home with `repos/init`, on this computer's Host or another's alike, and
+refuses a name taken before anything is made, so the CLI makes nothing itself and checks no name
+first. It finds the Bot's Host in `hosts/list`, this computer's (`weave_host::own_id`) without
+`--host`; `--home` is sent as given, whole or `~/…`, one relative to this directory made whole
+for this computer's Host (`home_here`) and refused for another's (`args::directory_on`), or not
+at all for the Dispatcher's `~/bots/<name>`; `--job` goes in the home's first `AGENTS.md`.
+`bots/home.rs` only says what making the home did (`said`, from `bots/add`'s `home`), before the
+Bot, on stderr with `--json`. The Host refuses a home inside another repository, and leaves what
+was there as it was. `list` and `show` say which Bot made one that a Bot made (`made_by`), and
+`show` asks `schedules/list` for the Bot's alone, filtering again for a Dispatcher that ignores
+`bot`. Its policy asks about what `--approve` leaves out (`Unapproved::Ask`), the kinds read by
+`args::tool_kinds` and said back by `args::approve_words` in `show`. `send` reads its prompt
+before it asks the Dispatcher, and says where the prompt went (`sent_to`).
 `weave schedules add --bot` names a Bot in place of `--host`, `--agent`, `--cwd`, `--project`,
 `--thread`, `--mode`, `--approve` and `--allow-overlap`, which clap refuses beside it, and `--at`
 a one-off in place of `--cron` (an `ArgGroup` wants one), read by `clock::parse_time` in
 `--zone` or this computer's zone, which it sends as the schedule's; both need `bots` too.
 `tests/dispatcher.rs` runs both against a Dispatcher in the test, with a Bot here and one on
-another computer's Host, and checks a home keeps what was there.
+another computer's Host, each Host making its home, and checks a home keeps what was there, takes
+a directory relative to this one, and is refused inside another repository.
 
 `--host <id or name>` on `weave`, `weave threads` and `weave run` reaches another of the person's
 Hosts through the Dispatcher (WVE-195, ADR 0030): `host::Target::Carried`, a `Carry` through the

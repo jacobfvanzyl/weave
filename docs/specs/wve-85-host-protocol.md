@@ -183,7 +183,8 @@ request with `unauthenticated`.
   [Context usage](#context-usage)), and `serviceTools` (WVE-171): `service/declareTools`,
   `service/toolCall`, `service/toolCallCancelled` and `service/answerTool` (see
   [Service tools](#service-tools)), and `carry` (WVE-195): `dispatcher/carry` and the
-  `dispatcher` auth (see [Connections the Dispatcher carries](#connections-the-dispatcher-carries)).
+  `dispatcher` auth (see [Connections the Dispatcher carries](#connections-the-dispatcher-carries)),
+  and `repos_init` (WVE-178): `repos/init` (see [A repository of its own](#a-repository-of-its-own)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -1077,8 +1078,9 @@ Feature `serviceTools`, WVE-171, ADR 0027. A service declares tools of its own, 
 offers every thread's agent through `weave` beside the client and Host tools, and answers their
 calls over its own connection. The only service is the Dispatcher the Host joined, over the
 connection the Host keeps open to it, which is how agents reach the Dispatcher. Its tools are a
-Bot's wake-ups, which every thread is offered and only a Bot's own threads get answers from
-([Wake-ups](wve-175-dispatcher.md#wake-ups), WVE-118).
+Bot's: its wake-ups (WVE-118), its schedules, and making another Bot (WVE-178), which every
+thread is offered and only a Bot's own threads get answers from
+([A Bot's tools](wve-175-dispatcher.md#a-bots-tools)).
 
 **`service/declareTools`** `{tools: Tool[], hosts?}` → `{names: string[]}`
 
@@ -1421,6 +1423,37 @@ make: refused with `worktree_busy` while a thread in the worktree runs a turn or
 request; otherwise its open threads close and its Session ends. `weave worktrees pre-remove`
 asks it as a worktrunk `pre-remove` hook, so `wt remove`, `wt merge` and `wt step prune` stop
 while a thread needs the worktree.
+
+### A repository of its own
+
+Feature `repos_init`, WVE-178. A client that isn't on the Host's computer makes a directory there
+a git repository of its own, with its first files committed, as the Dispatcher makes a Bot's
+home ([Its home](wve-175-dispatcher.md#its-home)). The Host knows nothing of what it's for. Any
+client may ask it, remote ones and services among them.
+
+**`repos/init`** `{path, files?: {path, text}[], message?}` →
+`{path, created?, initialized?, files?: {state: "committed"} | {state: "kept", file} | {state: "uncommitted", why}}`
+
+1. `path` is whole on the Host's computer, or `~/…` under its user's home. A directory that is,
+   or would be once made, inside another repository's work tree is refused before anything is
+   made, since a repository of its own is asked for; the top of a repository is taken as it is.
+2. The directory is made, with its parents, if it isn't there (`created`), and `git init` makes it
+   a repository unless it's the top of one already (`initialized`). The answer's `path` is the
+   directory whole, with symlinks resolved.
+3. `files`, UTF-8 text at paths relative to the directory and within it (no `..`, no `.git`,
+   each once), need a `message`. If any of them is there already, as a file, a directory or a
+   link, none is written and nothing is committed (`kept`, naming the first that was). Otherwise
+   each is written, never over anything, and those files alone are committed with `message`
+   (`commit --only`), as the user git's configuration or environment names, running the hooks
+   the person's own commits run (`committed`). Without a `user.name` and `user.email` for git,
+   or when the commit fails, they're left written but uncommitted, saying why (`uncommitted`).
+   `files` is absent from the answer when none were named.
+
+Nothing else in the directory is touched or committed, so what was staged or untracked there
+stays so. Invalid params, the message saying why, for a `path` neither whole nor under `~`, a
+file path outside the directory or named twice, files without a message, a directory inside
+another repository, and one that can't be made or isn't a directory; `git_failed` when `git
+init` fails.
 
 ## Sessions
 
@@ -1972,12 +2005,17 @@ as it does now.
 
 - The socket's file mode and directory, and the peer user id check, are the whole of `local`
   authentication. `local` is never accepted on a network transport.
-- Clients can't make the Host run a command, set an agent's environment or write to a path
-  of their choosing: the protocol has no field for any of them.
+- Clients can't make the Host run a command or set an agent's environment: the protocol has no
+  field for either. The one path of their choosing it writes to is `repos/init`'s.
 - `files/*` read only, and only what the Host's user can (see [Files](#files)).
 - `worktrees/*` write only what git does: a worktree beside a repository, on a branch, and
   removing a repository's worktree other than its primary one (see [Worktrees](#worktrees)).
   Git runs the repository's own hooks, which no client sets.
+- `repos/init` (WVE-178) makes a directory where the client says, as the Host's user, and writes
+  the files it names there only where nothing is, within that directory and never in `.git`,
+  in a directory that isn't inside another repository (see
+  [A repository of its own](#a-repository-of-its-own)). It writes over nothing and commits only
+  those files.
 - `agents/terminalSignIn` is the only response that carries a command, and only `local`
   clients that claimed `terminalSignIn` get it.
 - Journals and traces stay 0600. The agent environment is never written or sent.
@@ -2179,6 +2217,13 @@ New, in-process with fake agents:
 - a suspended thread resumes when attached, with its interrupted turn ended as `interrupted`;
   one nobody takes up within the idle grace closes, keeping its journal's age, and opens again
   in a new journal (WVE-120);
+- `repos/init` (WVE-178, `host/tests/daemon.rs`, git away from the configuration of whoever runs
+  the tests): a directory made a repository with its files committed alone, and with none named
+  only made one; the top of a repository kept, what was staged or untracked there staying so; a
+  directory inside another repository refused, one that isn't there not made; a file there
+  already writing none; paths outside the directory, a relative directory and files without a
+  message refused, making nothing; `~` as the Host's home; without a name and email for git,
+  the files written but not committed;
 - golden fixtures match for every message type.
 
 TUI: `ChatWidget` tests cover answering pending requests through the Host, requests

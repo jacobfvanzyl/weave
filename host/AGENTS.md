@@ -78,7 +78,16 @@ begins, and read again after each of its own turns (`Command::Located`, which se
 `git::worktree_path`) and remove worktrees; `Shared::release` refuses while a thread in one runs
 a turn or waits on a request, and otherwise closes them, for `worktrees/remove` and for
 `worktrees/release`, which worktrunk's `pre-remove` hook asks through `weave worktrees
-pre-remove`. The Host never removes a worktree on its own. Tests run git with
+pre-remove`. The Host never removes a worktree on its own. `repos/init` (`repos.rs`, WVE-178,
+feature `repos_init`, which services may ask too, in `FOR_SERVICES`) makes a directory a
+repository of its own with a client's first files, as the Dispatcher makes a Bot's home: a
+path whole or under `Shared::home`, refused before anything is made when it is, or would be,
+inside another work tree (`Git::work_tree_top` of the nearest directory there); made with its
+parents, `git init` unless it's the top of one; the files, within it and outside `.git`, written
+with `create_new` only when none is there, and committed alone (`Git::commit_only`, `commit
+--only`, hooks running) when git knows who to commit as (`Git::knows_who`,
+`user.useConfigOnly`), else left uncommitted, saying why. Disk work runs off the dispatch loop
+(`spawn_blocking`); refusals are invalid params whose message a client passes on. Tests run git with
 `GIT_CONFIG_GLOBAL=/dev/null`, so the person's git configuration stays out. Host-run terminals reach
 clients as `terminalOutput`/`terminalExit` events; the Host strips agents' `_meta` terminal
 output after turning it into the same events, so each chunk arrives once. The Host resolves
