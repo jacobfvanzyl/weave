@@ -257,6 +257,7 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
     await waitFor(() => model().threads.find((listed) => listed.key === key)?.state === 'closed', 'the thread to close');
     await store.actions.deleteThread(key);
     expect(model().error).toBeUndefined();
+    expect(model().threadErrors).toBeUndefined();
     await waitFor(() => !model().threads.some((listed) => listed.key === key), 'the thread to go');
   });
 

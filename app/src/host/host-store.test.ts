@@ -218,7 +218,7 @@ describe('HostStore', () => {
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
     await store.actions.updateAgent();
-    expect(store.snapshot().error).toBe('Remote clients can\'t administer the Host. That\'s done on the Host\'s computer.');
+    expect(store.snapshot().threadErrors?.[threadKey(HOST, THREAD)]).toBe('Remote clients can\'t administer the Host. That\'s done on the Host\'s computer.');
     expect(host.asked).not.toContain('thread/reopen');
     expect(store.snapshot().thread).not.toHaveProperty('updating');
     store.stop();
@@ -267,13 +267,14 @@ describe('HostStore', () => {
     await settle();
     await store.actions.respondToPermission('p-1', 'allow');
     expect(tools(store)[0]).toMatchObject({ permission: { status: 'pending' } });
-    expect(store.snapshot().error).toBe("Couldn't answer: Invalid params");
+    expect(store.snapshot().threadErrors).toEqual({ [threadKey(HOST, THREAD)]: "Couldn't answer: Invalid params" });
+    expect(store.snapshot().error).toBeUndefined();
 
     // Resolved without this device hearing how: it no longer waits, and isn't tried again.
     answer = { error: { code: HOST_PROTOCOL.errors.alreadyResolved, message: 'already resolved' } };
     await store.actions.respondToPermission('p-1', 'allow');
     expect(tools(store)[0]).toMatchObject({ permission: { status: 'ended' } });
-    expect(store.snapshot().error).toBeUndefined();
+    expect(store.snapshot().threadErrors).toBeUndefined();
     const answers = host.asked.filter((method) => method === 'pending/answer').length;
     await store.actions.respondToPermission('p-1', 'allow');
     expect(host.asked.filter((method) => method === 'pending/answer')).toHaveLength(answers);
@@ -328,8 +329,105 @@ describe('HostStore closing and deleting', () => {
     await store.start();
     await settle();
     await store.actions.deleteThread(threadKey(HOST, THREAD));
-    expect(store.snapshot().error).toBe("Couldn't delete the thread: the agent couldn't start");
+    // Its Block left the layout when it was asked, so the failure is the app's to say.
+    expect(store.snapshot().error).toBe("Couldn't delete the thread: the agent couldn't start.");
+    expect(store.snapshot().threadErrors).toBeUndefined();
     expect(store.snapshot().threads.map(({ threadId }) => threadId)).toEqual([THREAD]);
+    store.stop();
+  });
+});
+
+describe("HostStore, a thread's failures", () => {
+  const OTHER = 's-2';
+  const refusal = 'nothing has been sent in the thread, so there\'s nothing to move and it stays as it was';
+  /** A Host with two threads open, each attached as itself. */
+  const twoThreads = (answers: Answers = {}, state: Partial<ThreadState> = {}) => {
+    const host = scriptedHost(() => [{ id: 'claude', name: 'Claude', version: '0.86.0' } as AgentSummary], {
+      'threads/list': () => ({
+        result: {
+          threads: [THREAD, OTHER].map((sessionId) => ({ info: { sessionId, cwd: '/work' }, agentId: 'claude', state: 'open', activity: 'idle', clients: 1, headless: false })),
+        },
+      }),
+      'thread/attach': (given) => ({ result: { ...host.state, ...state, threadId: (given as { threadId: string }).threadId, replay: { from: 1, reset: true } } }),
+      ...answers,
+    });
+    return host;
+  };
+  const both = async (host: ReturnType<typeof scriptedHost>) => {
+    const store = storeFor(host.socket);
+    await store.start();
+    store.actions.showThreads?.([threadKey(HOST, THREAD), threadKey(HOST, OTHER)], threadKey(HOST, THREAD));
+    await settle();
+    return store;
+  };
+
+  it('says what failed in the thread it failed in, in the Host\'s words, until it\'s tried again or dismissed', async () => {
+    let refuse = true;
+    const host = twoThreads({
+      'turn/cancel': () => refuse ? { error: { code: -32600, message: 'Invalid request', data: 'the thread has ended' } } : { result: {} },
+    });
+    const store = await both(host);
+    const other = store.actions.forThread!(threadKey(HOST, OTHER));
+    await other.cancelTurn();
+    // The other thread and the app say nothing of it.
+    expect(store.snapshot().threadErrors).toEqual({ [threadKey(HOST, OTHER)]: 'The thread has ended.' });
+    expect(store.snapshot().error).toBeUndefined();
+
+    other.dismissError?.();
+    expect(store.snapshot().threadErrors).toBeUndefined();
+
+    await other.cancelTurn();
+    expect(store.snapshot().threadErrors).toEqual({ [threadKey(HOST, OTHER)]: 'The thread has ended.' });
+    refuse = false;
+    await other.cancelTurn();
+    expect(store.snapshot().threadErrors).toBeUndefined();
+    store.stop();
+  });
+
+  it('lets go of a failure with the thread that leaves the screen', async () => {
+    const host = twoThreads({ 'turn/cancel': () => ({ error: { code: -32600, message: 'Invalid request', data: 'the thread has ended' } }) });
+    const store = await both(host);
+    await store.actions.forThread!(threadKey(HOST, OTHER)).cancelTurn();
+    store.actions.showThreads?.([threadKey(HOST, THREAD)], threadKey(HOST, THREAD));
+    expect(store.snapshot().threadErrors).toBeUndefined();
+    store.stop();
+  });
+
+  it('says why a thread couldn\'t move to its agent\'s new version', async () => {
+    const host = twoThreads({
+      'agents/update': () => ({ result: { version: '0.94.0' } }),
+      'thread/reopen': () => ({ error: { code: -32600, message: 'Invalid request', data: refusal } }),
+    });
+    const store = await both(host);
+    await store.actions.forThread!(threadKey(HOST, OTHER)).updateAgent();
+    expect(store.snapshot().threadErrors).toEqual({
+      [threadKey(HOST, OTHER)]: "Nothing has been sent in the thread, so there's nothing to move and it stays as it was.",
+    });
+    store.stop();
+  });
+
+  it('updates the agent of a thread nothing was sent in without asking its Host to move it', async () => {
+    const host = twoThreads({
+      'agents/update': () => ({ result: { version: '0.94.0' } }),
+      'thread/reopen': () => ({ error: { code: -32600, message: 'Invalid request', data: refusal } }),
+    }, { blank: true });
+    const store = await both(host);
+    expect(store.snapshot().open?.[threadKey(HOST, OTHER)]?.update).toMatchObject({ running: '0.86.0', latest: '0.94.0', blank: true });
+    await store.actions.forThread!(threadKey(HOST, OTHER)).updateAgent();
+    expect(host.asked).toContain('agents/update');
+    expect(host.asked).not.toContain('thread/reopen');
+    expect(store.snapshot().threadErrors).toBeUndefined();
+    expect(store.snapshot().open?.[threadKey(HOST, OTHER)]?.updating).toBeUndefined();
+    store.stop();
+  });
+
+  it('keeps what belongs to no thread for the app', async () => {
+    const host = twoThreads({ 'threads/list': () => ({ error: { code: -32603, message: 'Internal error', data: 'the journals can\'t be read' } }) });
+    const store = storeFor(host.socket);
+    await store.start();
+    await settle();
+    expect(store.snapshot().error).toBe("the journals can't be read");
+    expect(store.snapshot().threadErrors).toBeUndefined();
     store.stop();
   });
 });

@@ -105,7 +105,11 @@ lists, or `useMockController` from fixtures with `?mock=`. Keep components free 
 the model and call actions. Until the app is paired with the Dispatcher, `AppShell` shows the
 pairing screen (`pair-dispatcher.tsx`). Several threads are on screen at once: the Session's view
 says which (`showThreads`), the model has each (`open`), and what's done in one names it
-(`forThread`, or `threadController` for a component that reads one thread).
+(`forThread`, or `threadController` for a component that reads one thread). What fails in a thread
+is said in its own Block (`threadErrors`, by thread key, WVE-219), under its banners, until it's
+dismissed or tried again; `model.error` is for what has no thread or no Block left to say it in:
+pairing, listing, a Session's layout, and closing or deleting a thread, whose Block leaves as it's
+asked. A Host's refusal reads as its `data`, the reason, not JSON-RPC's name for the code.
 
 The Host protocol's types, and the Dispatcher's API beside them, come from the Rust
 (`../protocol/tests/schema.rs`). After a protocol change there, regenerate them, and never edit

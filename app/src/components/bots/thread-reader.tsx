@@ -26,6 +26,7 @@ export function ThreadReader({ controller, threadKey, title, description, onClos
     return () => actions.peekThread?.(undefined);
   }, [threadKey]);
   const open = threadKey ? model.open?.[threadKey] : undefined;
+  const failure = threadKey ? model.threadErrors?.[threadKey] : undefined;
   return (
     <Dialog open={threadKey !== undefined} onOpenChange={(next) => { if (!next) onClose(); }}>
       <DialogContent data-slot='thread-reader' className='flex h-[min(44rem,calc(100dvh-2rem))] w-[min(48rem,calc(100%-2rem))] max-w-none flex-col gap-2 p-0 sm:max-w-3xl'>
@@ -33,7 +34,7 @@ export function ThreadReader({ controller, threadKey, title, description, onClos
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description ?? 'To read: this thread has ended, and its Bot carries on in a newer one.'}</DialogDescription>
         </DialogHeader>
-        {model.error && !open && <Alert variant='destructive' className='mx-4 w-auto'><AlertDescription>{model.error}</AlertDescription></Alert>}
+        {failure && !open && <Alert variant='destructive' className='mx-4 w-auto'><AlertDescription>{failure}</AlertDescription></Alert>}
         <div className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-xl border-t border-border'>
           {open
             ? <ChatPane key={open.key} model={open.transcript} loading={open.loading} readOnly

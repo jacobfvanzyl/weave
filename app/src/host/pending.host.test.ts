@@ -129,6 +129,7 @@ describe.skipIf(!devHostAvailable())('pending requests in the app with a dev Hos
       permission: { status: 'answered', selectedOptionId: 'allow' },
     });
     expect(model().error).toBeUndefined();
+    expect(model().threadErrors).toBeUndefined();
   });
 
   it('closes the card and says so when the TUI answers first', async () => {
@@ -146,6 +147,7 @@ describe.skipIf(!devHostAvailable())('pending requests in the app with a dev Hos
     await store.actions.respondToPermission(pending.id, 'allow');
     expect(permissionTool(thread().transcript, 'elsewhere')?.permission?.status).toBe('elsewhere');
     expect(model().error).toBeUndefined();
+    expect(model().threadErrors).toBeUndefined();
     await tui.request('thread/detach', { threadId: threadId() });
   });
 

@@ -195,14 +195,23 @@ function UpdateNotice({ update, updating, reopening, onUpdate, onMove, onDismiss
       <HugeiconsIcon icon={SparklesIcon} strokeWidth={2} />
       <AlertTitle>{shortName(update.name)} {update.latest} is out; this thread runs {update.running}.</AlertTitle>
       <AlertDescription>
-        {update.available && (
-          <>
-            The Host has {update.available} for new threads. Moving this one ends its background commands and running
-            subagents, and waits for a running turn.
-          </>
-        )}
-        <div className='mt-1.5'>
-          {update.available
+        {update.available && (update.blank
+          ? (
+            <>
+              The Host has {update.available} for new threads. Nothing has been sent in this one, so it stays on{' '}
+              {update.running}: start a new thread to use {update.available}.
+            </>
+          )
+          : (
+            <>
+              The Host has {update.available} for new threads. Moving this one ends its background commands and running
+              subagents, and waits for a running turn.
+            </>
+          ))}
+        <div className='mt-1.5 empty:hidden'>
+          {update.available && update.blank
+            ? null
+            : update.available
             ? (
               <Button size='sm' variant='outline' disabled={reopening} onClick={onMove}>
                 {reopening ? 'Moving…' : `Move to ${update.available}`}
@@ -278,6 +287,8 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface, 
   const openSubagent = useCallback((threadId: string) => setWatching(threadId), []);
   const swipe = useEdgeSwipe(subagent ? () => setWatching(undefined) : onSwipeBack);
   const [update, dismissUpdate] = useUpdateNotice(thread.key, thread.update);
+  // What failed in this thread, and nothing else's: another Block's failure is its own to show.
+  const failure = model.threadErrors?.[thread.key];
   const [statusShown, setStatusShown] = useState(false);
   useEffect(() => setStatusShown(false), [thread.key]);
   // In a Block, its rail has the thread's menu, which asks here for what needs the thread's view.
@@ -337,9 +348,16 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface, 
           side={phone ? 'bottom' : 'right'}
         />
         {host && host.status !== 'connected' && <ConnectionNotice host={host} dispatcher={model.dispatcher} />}
-        {model.error && (
-          <Alert variant='destructive' className='m-2 w-auto'>
-            <AlertDescription>{model.error}</AlertDescription>
+        {failure && (
+          <Alert variant='destructive' className='m-2 w-auto has-data-[slot=alert-action]:pr-8'>
+            <AlertDescription>{failure}</AlertDescription>
+            {actions.dismissError && (
+              <AlertAction>
+                <Button size='icon-xs' variant='ghost' aria-label='Dismiss error' onClick={() => actions.dismissError?.()}>
+                  <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+                </Button>
+              </AlertAction>
+            )}
           </Alert>
         )}
         {summary?.continuedIn && (

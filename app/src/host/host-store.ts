@@ -207,7 +207,22 @@ type Creating = { hostId: string; agentId: string; resolve(created: CreatedThrea
 /** ACP's error for an agent that needs signing in, passed through by the Host. */
 const AUTH_REQUIRED = -32000;
 
-const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
+/**
+ * An error in words. A Host's refusal says why in its `data`; its message is JSON-RPC's name for
+ * the code ("Invalid request"), which tells the person nothing.
+ */
+const describe = (error: unknown) => {
+  if (error instanceof HostError && typeof error.data === 'string' && error.data.trim()) return error.data.trim();
+  return error instanceof Error ? error.message : String(error);
+};
+
+/** `text` as a sentence of its own: the Host writes its reasons to follow a colon. */
+const sentence = (text: string) => {
+  const capital = text.charAt(0).toUpperCase() + text.slice(1);
+  return /[.!?…]$/.test(capital) ? capital : `${capital}.`;
+};
+
+const keyOf = (followed: { hostId: string; threadId: string }) => threadKey(followed.hostId, followed.threadId);
 
 const failedWith = (error: unknown, code: number) => error instanceof HostError && error.code === code;
 
@@ -375,7 +390,10 @@ export class HostStore {
   readonly #read = new ThreadReadState();
   readonly #listeners = new Set<() => void>();
   #selectedKey?: string;
+  /** What failed that belongs to no thread. */
   #error?: string;
+  /** What failed in a thread, by its key, while the thread is on screen. */
+  readonly #threadErrors = new Map<string, string>();
   #nextTag = 1;
   #nextLocal = 1;
   #snapshot?: AppModel;
@@ -576,9 +594,9 @@ export class HostStore {
     listWorktrees: (input) => this.#listWorktrees(input),
     createWorktree: (input) => this.#createWorktree(input),
     removeWorktree: (input) => this.#removeWorktree(input),
-    closeThread: (key) => this.#report(() => this.#close(key)),
+    closeThread: (key) => this.#reportGone(() => this.#close(key)),
     renameThread: (key, title) => this.#rename(key, title),
-    deleteThread: (key) => this.#report(() => this.#delete(key)),
+    deleteThread: (key) => this.#reportGone(() => this.#delete(key)),
     ...this.#threadActions(() => this.#selected()),
     newTerminal: () => this.#newTerminal(),
     closeTerminal: async (id) => {
@@ -759,7 +777,7 @@ export class HostStore {
         if (!followed) return;
         if (followed.held.some((prompt) => prompt.id === id)) {
           // It leaves when the Host's `unqueued` event says so.
-          void this.#report(async () => {
+          void this.#report(keyOf(followed), async () => {
             await this.#connection(followed).request('queue/remove', { threadId: followed.threadId, queuedId: id });
           });
           return;
@@ -767,18 +785,14 @@ export class HostStore {
         followed.queued = followed.queued.filter((prompt) => prompt.id !== id);
         this.#changed();
       },
-      resumeQueue: () => this.#report(async () => {
-        const followed = pick();
-        if (!followed) return;
+      resumeQueue: () => this.#reportIn(pick(), async (followed) => {
         await this.#connection(followed).request('queue/resume', { threadId: followed.threadId });
       }),
-      cancelTurn: () => this.#report(async () => {
-        const followed = pick();
-        if (!followed) return;
+      cancelTurn: () => this.#reportIn(pick(), async (followed) => {
         await this.#connection(followed).request('turn/cancel', { threadId: followed.threadId });
       }),
-      reopenThread: () => this.#report(() => this.#reopen(pick())),
-      updateAgent: () => this.#report(() => this.#updateAgent(pick())),
+      reopenThread: () => this.#reportIn(pick(), (followed) => this.#reopen(followed)),
+      updateAgent: () => this.#reportIn(pick(), (followed) => this.#updateAgent(followed)),
       respondToPermission: (requestId, optionId) => this.#answer(
         requestId,
         { permission: { outcome: { outcome: 'selected', optionId } } },
@@ -791,14 +805,14 @@ export class HostStore {
         { type: 'elicitation/resolved', requestId, response },
         pick(),
       ),
-      setMode: (modeId) => this.#report(async () => {
-        const followed = pick();
-        if (!followed) return;
+      setMode: (modeId) => this.#reportIn(pick(), async (followed) => {
         await this.#connection(followed).request('thread/setMode', { threadId: followed.threadId, modeId });
       }),
-      setConfigOption: (configId, value) => this.#report(async () => {
+      dismissError: () => {
         const followed = pick();
-        if (!followed) return;
+        if (followed) this.#clearError(keyOf(followed));
+      },
+      setConfigOption: (configId, value) => this.#reportIn(pick(), async (followed) => {
         // The change reaches every client, this one too, through the journal.
         await this.#connection(followed).request('thread/setConfigOption', typeof value === 'boolean'
           ? { threadId: followed.threadId, configId, type: 'boolean', value }
@@ -807,15 +821,46 @@ export class HostStore {
     };
   }
 
-  /** Runs an action whose failure the person reads in the model's error, not from a caller. */
-  async #report(action: () => Promise<void>) {
+  /**
+   * Runs an action in the thread `key`, whose failure the person reads in that thread's Block
+   * (`threadErrors`), not from a caller. Doing it again takes the last failure away first.
+   */
+  async #report(key: string, action: () => Promise<void>) {
+    this.#clearError(key);
+    try {
+      await action();
+    } catch (error) {
+      this.#fail(key, sentence(describe(error)));
+    }
+  }
+
+  /**
+   * Runs the closing or deleting of a thread. Its Block leaves the layout as it's asked, so a
+   * failure has no Block to show in, and is the app's to say.
+   */
+  async #reportGone(action: () => Promise<void>) {
     this.#error = undefined;
     try {
       await action();
     } catch (error) {
-      this.#error = describe(error);
+      this.#error = sentence(describe(error));
       this.#changed();
     }
+  }
+
+  /** `#report`, in the thread an action picked; nothing when it picked none. */
+  async #reportIn(followed: Followed | undefined, action: (followed: Followed) => Promise<void>) {
+    if (followed) await this.#report(keyOf(followed), () => action(followed));
+  }
+
+  /** Says what failed in the thread `key`, in its Block. */
+  #fail(key: string, message: string) {
+    this.#threadErrors.set(key, message);
+    this.#changed();
+  }
+
+  #clearError(key: string) {
+    if (this.#threadErrors.delete(key)) this.#changed();
   }
 
   #capabilities(): ClientCapabilities {
@@ -1552,9 +1597,14 @@ export class HostStore {
     this.#selectedKey = front;
     this.#read.focus(front);
     this.#error = undefined;
+    // A thread's failure is read in its Block: it goes with the Block.
+    for (const key of this.#threadErrors.keys()) {
+      if (!wanted.has(key)) this.#threadErrors.delete(key);
+    }
     for (const key of wanted) {
       const again = exactly && key === front;
       if (before.has(key) && !again) continue;
+      this.#threadErrors.delete(key);
       const [hostId, ...rest] = key.split('/');
       let followed = this.#followed.get(key);
       if (!followed) {
@@ -1633,8 +1683,7 @@ export class HostStore {
     }
     if (event.type === 'openFailed') {
       const agentId = entry.threads.find(({ info }) => info.sessionId === followed.threadId)?.agentId;
-      this.#error = `Couldn't open the thread: ${this.#explain(event.error, entry, agentId).message}`;
-      this.#changed();
+      this.#fail(keyOf(followed), `Couldn't open the thread: ${describe(this.#explain(event.error, entry, agentId))}`);
       return;
     }
     this.#opened(followed, event.thread);
@@ -1840,7 +1889,7 @@ export class HostStore {
     const pending = followed?.pending.find(({ id }) => id === requestId);
     // One no longer waiting says why already.
     if (!followed || !pending) return;
-    this.#error = undefined;
+    this.#clearError(keyOf(followed));
     this.#apply(followed, [shown]);
     try {
       await this.#connection(followed).request('pending/answer', { threadId: followed.threadId, pendingId: requestId, ...answer });
@@ -1857,10 +1906,9 @@ export class HostStore {
       // An answer lost with the connection shows again on attaching, if the request still waits.
       if (failedWith(error, CONNECTION_CLOSED)) return;
       if (waiting) this.#apply(followed, this.#pendingEvents(followed, pending));
-      this.#error = failedWith(error, HOST_PROTOCOL.errors.notTarget)
+      this.#fail(keyOf(followed), failedWith(error, HOST_PROTOCOL.errors.notTarget)
         ? 'That request is for another client.'
-        : `Couldn't answer: ${describe(error)}`;
-      this.#changed();
+        : `Couldn't answer: ${describe(error)}`);
     }
   }
 
@@ -1878,8 +1926,7 @@ export class HostStore {
       } catch (error) {
         // Cancelled meanwhile, or the connection ended, which cancels it too.
         if (!failedWith(error, HOST_PROTOCOL.errors.alreadyResolved) && !failedWith(error, CONNECTION_CLOSED)) {
-          this.#error = `Couldn't answer the agent's ${pending.tool} call: ${describe(error)}`;
-          this.#changed();
+          this.#fail(keyOf(followed), `Couldn't answer the agent's ${pending.tool} call: ${describe(error)}`);
         }
       } finally {
         this.#running.delete(pending.id);
@@ -1991,15 +2038,14 @@ export class HostStore {
     this.#fresh.add(key);
     this.#selectedKey = key;
     this.#read.focus(key);
-    this.#error = undefined;
     this.#opened(followed, thread);
     const { cwd, git } = thread.state;
     return { key, sessionKey: sessionKey(entry.hostId, git?.worktree ?? cwd) };
   }
 
   async #send(text: string, images: PromptImage[] = [], followed: Followed | undefined) {
-    this.#error = undefined;
     if (!followed) return;
+    this.#clearError(keyOf(followed));
     const prompt: QueuedPrompt = { id: `prompt-${this.#nextLocal++}`, text, ...(images.length > 0 ? { images } : {}) };
     try {
       const connection = this.#connection(followed);
@@ -2013,8 +2059,7 @@ export class HostStore {
       await this.#start(followed, connection, prompt);
     } catch (error) {
       const explained = this.#explain(error, this.#hosts.get(followed.hostId), followed.state?.agent.id);
-      this.#error = explained.message;
-      this.#changed();
+      this.#fail(keyOf(followed), sentence(describe(explained)));
       throw explained;
     }
   }
@@ -2081,8 +2126,7 @@ export class HostStore {
       await this.#start(followed, this.#connection(followed), next);
     } catch (error) {
       followed.queued.unshift(next);
-      this.#error = `Couldn't send the queued message: ${this.#explain(error, this.#hosts.get(followed.hostId), followed.state?.agent.id).message}`;
-      this.#changed();
+      this.#fail(keyOf(followed), `Couldn't send the queued message: ${describe(this.#explain(error, this.#hosts.get(followed.hostId), followed.state?.agent.id))}`);
     }
   }
 
@@ -2131,6 +2175,13 @@ export class HostStore {
     }
     if (version === followed.update?.running) {
       followed.update = undefined;
+      this.#changed();
+      return;
+    }
+    // The Host moves no thread nothing was sent in (its agent may have kept nothing of it). The
+    // agent is updated for new threads all the same, which the Host tells its open threads
+    // (`agents/updateAvailable`), and the notice says this one stays (`blank`).
+    if (followed.state?.blank) {
       this.#changed();
       return;
     }
@@ -2289,7 +2340,9 @@ export class HostStore {
       queued: [...followed.steering, ...followed.held, ...followed.queued],
       ...(followed.queuePaused && followed.held.length > 0 ? { queuePaused: true } : {}),
       canAttachImages: followed.state?.agent.initialize.agentCapabilities?.promptCapabilities?.image === true,
-      ...(followed.update ? { update: this.#updateNotice(followed.update, this.#hosts.get(followed.hostId)) } : {}),
+      ...(followed.update
+        ? { update: { ...this.#updateNotice(followed.update, this.#hosts.get(followed.hostId)), ...(followed.state?.blank ? { blank: true } : {}) } }
+        : {}),
       ...(followed.updating ? { updating: true } : {}),
       ...(followed.reopening ? { reopening: true } : {}),
       ...(followed.loading ? { loading: true } : {}),
@@ -2416,6 +2469,7 @@ export class HostStore {
       ...(this.#bots ? { bots: [...this.#bots.values()].map(botSummary).sort((left, right) => left.name.localeCompare(right.name)) } : {}),
       ...(this.#bots && this.#canAddBots ? { canAddBots: true } : {}),
       ...(this.#error ? { error: this.#error } : {}),
+      ...(this.#threadErrors.size > 0 ? { threadErrors: Object.fromEntries(this.#threadErrors) } : {}),
     };
   }
 }

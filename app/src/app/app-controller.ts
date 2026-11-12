@@ -153,6 +153,11 @@ export type AgentUpdateNotice = {
    * runs: the agent was updated on the Host, and Move takes the thread there.
    */
   available?: string;
+  /**
+   * Nothing has been sent in the thread, so its Host won't move it (WVE-219): its agent may have
+   * kept nothing of it to take up. Update still updates the agent, for new threads.
+   */
+  blank?: boolean;
 };
 
 /**
@@ -405,7 +410,13 @@ export type AppModel = {
   bots?: BotSummary[];
   /** The Dispatcher makes a new Bot's home on its Host (`bots_home`), so the app can add Bots. */
   canAddBots?: boolean;
+  /** What failed that belongs to no thread: pairing, listing, a Session's layout. */
   error?: string;
+  /**
+   * What failed in a thread, by its key (WVE-219): shown in the thread's own Block and nowhere
+   * else, until the person dismisses it or does the same again.
+   */
+  threadErrors?: Record<string, string>;
 };
 
 /** What's done in one thread: `AppActions` does them in the thread in front, `forThread` in another. */
@@ -428,6 +439,8 @@ export type ThreadActions = {
   respondToElicitation(requestId: string, response: CreateElicitationResponse): Promise<void> | void;
   setMode(modeId: string): Promise<void> | void;
   setConfigOption(optionId: string, value: string | boolean): Promise<void> | void;
+  /** Takes away what the thread shows of its last failure (`AppModel.threadErrors`). */
+  dismissError?(): void;
 };
 
 /** A thread this device started, and the Session it's in. */

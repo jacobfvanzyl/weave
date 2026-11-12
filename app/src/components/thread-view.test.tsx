@@ -95,6 +95,39 @@ describe('ThreadView', () => {
     expect(screen.getByRole('button', { name: 'Updating…' })).toBeDisabled();
   });
 
+  it('updates the agent of a thread nothing was sent in, which stays on its version, and says so', async () => {
+    const user = userEvent.setup();
+    const handlers = actions();
+    const thread: OpenThread = {
+      key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [],
+      update: { agentId: 'claude', name: '@agentclientprotocol/claude-agent-acp', running: '0.86.0', latest: '0.94.0', blank: true },
+    };
+    const { rerender } = render(<ThreadView controller={controller(thread, handlers)} thread={thread} />);
+    await user.click(screen.getByRole('button', { name: 'Update to 0.94.0' }));
+    expect(handlers.updateAgent).toHaveBeenCalled();
+    // Updated on the Host: nothing to move, so no Move, and where the new version is.
+    const updated = { ...thread, update: { ...thread.update!, available: '0.94.0' } };
+    rerender(<ThreadView controller={controller(updated, handlers)} thread={updated} />);
+    expect(screen.getByText(/Nothing has been sent in this one, so it stays on 0\.86\.0: start a new thread to use 0\.94\.0\./)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^(Move|Update)/ })).not.toBeInTheDocument();
+  });
+
+  it('shows what failed in its own thread only, and dismisses it', async () => {
+    const user = userEvent.setup();
+    const handlers = { ...actions(), dismissError: vi.fn() };
+    const thread: OpenThread = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [] };
+    const failed = (threadErrors: Record<string, string>, error?: string): AppController => {
+      const base = controller(thread, handlers);
+      return { ...base, model: { ...base.model, threadErrors, error } };
+    };
+    const { rerender } = render(<ThreadView controller={failed({ 'h/other': 'The thread has ended.' }, "Couldn't list the Hosts.")} thread={thread} />);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    rerender(<ThreadView controller={failed({ 'h/main': 'The thread has ended.' })} thread={thread} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('The thread has ended.');
+    await user.click(screen.getByRole('button', { name: 'Dismiss error' }));
+    expect(handlers.dismissError).toHaveBeenCalled();
+  });
+
   it('keeps a dismissed update notice hidden in that thread, until there is more to say', async () => {
     const user = userEvent.setup();
     const update = { agentId: 'claude', name: '@agentclientprotocol/claude-agent-acp', running: '0.86.0', latest: '0.94.0' };

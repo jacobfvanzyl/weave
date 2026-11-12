@@ -318,8 +318,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
   }, [session.key, strangers.threads.join('\n'), strangers.terminals.join('\n')]);
 
   const context = (block: SessionBlock): BlockContext => ({
-    // A thread's Block shows its own errors' place once, above the Blocks.
-    controller: { ...controller, model: { ...model, error: undefined } },
+    controller,
     session,
     focused: block.id === focused?.id,
     onOpenThread,

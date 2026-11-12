@@ -39,6 +39,9 @@ import { ThreadReadState } from './thread-read-state';
 export const MOCK_SCENARIOS = ['list', 'thread', 'running', 'unreachable', 'offline', 'banner', 'empty', 'unpaired', 'markdown', 'terminals', 'session'] as const;
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
+/** A message the mock fails to send, so a thread's Block has an error to show (WVE-219). */
+export const MOCK_FAILS = '/fail';
+
 export const mockScenarioFromLocation = (search = location.search): MockScenario => {
   const value = new URLSearchParams(search).get('mock');
   return MOCK_SCENARIOS.find((scenario) => scenario === value) ?? 'list';
@@ -644,11 +647,18 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
       readState.current.focus(key);
       update((current) => ({ ...current, shown: key ? [key] : [], model: { ...current.model, selectedKey: key } }));
     };
+    /** What failed in a thread shows in its own Block (`threadErrors`), until dismissed or tried again. */
+    const setThreadError = (key: string, message: string | undefined) => update((current) => {
+      const { [key]: _, ...rest } = current.model.threadErrors ?? {};
+      return { ...current, model: { ...current.model, threadErrors: message ? { ...rest, [key]: message } : rest } };
+    });
     /** What's done in one thread: in the one `pick` gives when it's done. */
     const threadActions = (pick: () => string | undefined): ThreadActions => ({
     send(text, images) {
       const key = pick();
       if (!key) return;
+      setThreadError(key, text.trim() === MOCK_FAILS ? "Couldn't start the turn: the mock was asked to fail." : undefined);
+      if (text.trim() === MOCK_FAILS) return;
       const current = state.current.model.threads.find((item) => item.key === key);
       if (transcript(key).turn.status !== 'running') {
         startTurn(key, text, images);
@@ -681,6 +691,10 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
     },
     // The mock's queue never pauses.
     resumeQueue() {},
+    dismissError() {
+      const key = pick();
+      if (key) setThreadError(key, undefined);
+    },
     cancelTurn() {
       const key = pick();
       if (!key) return;

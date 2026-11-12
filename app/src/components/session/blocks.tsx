@@ -100,8 +100,9 @@ const thread: BlockType = {
           onOpenThread={context.onOpenThread} surface={context.surface} onSwipeBack={context.onSwipeBack} onDeleted={context.onRemove} />
       );
     }
-    if (controller.model.error) {
-      return <Notice action={<Button size='sm' variant='outline' onClick={context.onRemove}>Remove from the layout</Button>}>{controller.model.error}</Notice>;
+    const failure = controller.model.threadErrors?.[key];
+    if (failure) {
+      return <Notice action={<Button size='sm' variant='outline' onClick={context.onRemove}>Remove from the layout</Button>}>{failure}</Notice>;
     }
     if (host && host.status !== 'connected') return <Notice>{host.name} isn't connected.</Notice>;
     return <Notice><Spinner className='mr-1.5 inline size-3' />Opening the thread…</Notice>;

@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { requestOpenThread } from '@/app/open-thread';
-import { type MockScenario, useMockController } from '@/app/use-mock-controller';
+import { MOCK_FAILS, type MockScenario, useMockController } from '@/app/use-mock-controller';
 import { AppShell } from './app-shell';
 
 function MockApp({ scenario = 'list', bannerMs, turnMs }: { scenario?: MockScenario; bannerMs?: number; turnMs?: number }) {
@@ -295,6 +295,30 @@ describe('a Session someone arranged', () => {
     await user.keyboard('{Enter}');
     expect(await within(alpha).findByText('Keep going')).toBeInTheDocument();
     expect(within(within(session).getByRole('group', { name: 'Block, Update the Host protocol spec' })).queryByText('Keep going')).not.toBeInTheDocument();
+  });
+
+  it('says what failed in a thread in its own Block, not the other or above them, until it’s dismissed or tried again', async () => {
+    const user = userEvent.setup();
+    const session = open();
+    const alpha = within(session).getByRole('group', { name: 'Block, Bring Alpha back' });
+    const failing = async () => {
+      await user.type(within(alpha).getByRole('textbox', { name: 'Message agent' }), MOCK_FAILS);
+      await user.keyboard('{Enter}');
+      return within(alpha).findByText(/the mock was asked to fail/);
+    };
+    await failing();
+    // Once on screen: in the Block it failed in.
+    expect(within(session).getAllByText(/the mock was asked to fail/)).toHaveLength(1);
+    expect(within(within(session).getByRole('group', { name: 'Block, Update the Host protocol spec' })).queryByText(/the mock was asked to fail/)).not.toBeInTheDocument();
+
+    await user.click(within(alpha).getByRole('button', { name: 'Dismiss error' }));
+    expect(within(session).queryByText(/the mock was asked to fail/)).not.toBeInTheDocument();
+
+    await failing();
+    await user.type(within(alpha).getByRole('textbox', { name: 'Message agent' }), 'Keep going');
+    await user.keyboard('{Enter}');
+    expect(await within(alpha).findByText('Keep going')).toBeInTheDocument();
+    expect(within(session).queryByText(/the mock was asked to fail/)).not.toBeInTheDocument();
   });
 
   it('docks a thread that wasn’t shown beside a Block, zooms a Block, and moves one to a tab of its own', async () => {
