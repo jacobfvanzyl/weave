@@ -1,0 +1,692 @@
+{
+  "name": "narrate-fail",
+  "state": {
+    "threadId": "fake-18e7495bf3551cc8",
+    "agent": {
+      "id": "fake",
+      "name": "Fake Agent",
+      "initialize": {
+        "protocolVersion": 1,
+        "agentCapabilities": {
+          "loadSession": true,
+          "promptCapabilities": {
+            "image": true,
+            "audio": true,
+            "embeddedContext": true
+          },
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false,
+            "acp": false
+          },
+          "sessionCapabilities": {
+            "list": {},
+            "delete": {},
+            "additionalDirectories": {},
+            "resume": {},
+            "close": {}
+          },
+          "auth": {
+            "logout": {}
+          }
+        },
+        "authMethods": [
+          {
+            "id": "token",
+            "name": "Token",
+            "description": "Sign in immediately"
+          },
+          {
+            "type": "terminal",
+            "id": "terminal-login",
+            "name": "Terminal login",
+            "description": "Confirm sign-in in a terminal",
+            "args": [
+              "--login"
+            ],
+            "env": {
+              "WEAVE_FAKE_LOGIN": "1"
+            }
+          }
+        ],
+        "agentInfo": {
+          "name": "weave-fake-agent",
+          "title": "Fake Agent",
+          "version": "0.1.0"
+        },
+        "_meta": {
+          "steering": {
+            "supported": true
+          }
+        }
+      }
+    },
+    "cwd": "/work/project",
+    "additionalDirectories": [],
+    "state": "open",
+    "activity": "idle",
+    "clients": 1,
+    "blank": true,
+    "policy": {
+      "approve": [
+        "edit",
+        "execute",
+        "read"
+      ],
+      "otherwise": "ask"
+    },
+    "modes": {
+      "currentModeId": "ask",
+      "availableModes": [
+        {
+          "id": "ask",
+          "name": "Ask"
+        },
+        {
+          "id": "code",
+          "name": "Code"
+        }
+      ]
+    },
+    "configOptions": [
+      {
+        "id": "mode",
+        "name": "Mode",
+        "category": "mode",
+        "type": "select",
+        "currentValue": "ask",
+        "options": [
+          {
+            "value": "ask",
+            "name": "Ask"
+          },
+          {
+            "value": "code",
+            "name": "Code"
+          }
+        ]
+      },
+      {
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": "small",
+        "options": [
+          {
+            "group": "fast",
+            "name": "Fast",
+            "options": [
+              {
+                "value": "small",
+                "name": "Small"
+              }
+            ]
+          },
+          {
+            "group": "smart",
+            "name": "Smart",
+            "options": [
+              {
+                "value": "large",
+                "name": "Large"
+              },
+              {
+                "value": "huge",
+                "name": "Huge"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "verbose",
+        "name": "Verbose",
+        "type": "boolean",
+        "currentValue": false
+      }
+    ],
+    "turns": [],
+    "pending": [],
+    "subagents": [],
+    "journal": {
+      "id": "1794483635806",
+      "head": 1
+    },
+    "notices": [],
+    "mcpServers": [
+      {
+        "name": "weave",
+        "source": "host",
+        "transport": "stdio",
+        "state": "declared"
+      }
+    ]
+  },
+  "events": [
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 1,
+      "at": 1794483635806,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "available_commands_update",
+            "availableCommands": [
+              {
+                "name": "read",
+                "description": "Read a file through the client",
+                "input": {
+                  "hint": "absolute path"
+                }
+              },
+              {
+                "name": "write",
+                "description": "Write a file through the client",
+                "input": {
+                  "hint": "absolute path, then text"
+                }
+              },
+              {
+                "name": "run",
+                "description": "Run a shell command in a client terminal",
+                "input": {
+                  "hint": "shell command"
+                }
+              },
+              {
+                "name": "kill-after",
+                "description": "Run a command and kill it after a delay",
+                "input": {
+                  "hint": "milliseconds, then command"
+                }
+              },
+              {
+                "name": "plan",
+                "description": "Show a plan that progresses"
+              },
+              {
+                "name": "slow",
+                "description": "Stream chunks slowly",
+                "input": {
+                  "hint": "number of chunks"
+                }
+              },
+              {
+                "name": "markdown",
+                "description": "Write diagrams, math, alerts and other rich Markdown"
+              },
+              {
+                "name": "ask",
+                "description": "Ask a few questions with a form"
+              },
+              {
+                "name": "questions",
+                "description": "Ask as Claude's and Codex's adapters do, with Other and a note",
+                "input": {
+                  "hint": "claude or codex, to ask only that one"
+                }
+              },
+              {
+                "name": "connect",
+                "description": "Connect an account through a URL"
+              },
+              {
+                "name": "mcp",
+                "description": "List the MCP servers this session has"
+              },
+              {
+                "name": "think",
+                "description": "Reason out loud, then answer"
+              },
+              {
+                "name": "work",
+                "description": "Think, then make five tool calls a moment apart",
+                "input": {
+                  "hint": "fail, to fail one"
+                }
+              },
+              {
+                "name": "compact",
+                "description": "Compact the context, keeping a summary"
+              },
+              {
+                "name": "delegate",
+                "description": "Delegate to two subagents"
+              },
+              {
+                "name": "delegate-legacy",
+                "description": "Delegate in the subagent RFD's earlier draft"
+              },
+              {
+                "name": "switch-mode",
+                "description": "Switch modes on the agent's own initiative"
+              },
+              {
+                "name": "withdraw",
+                "description": "Ask permission, then withdraw the request"
+              },
+              {
+                "name": "extension",
+                "description": "Send the client an extension request and notification"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 2,
+      "at": 1794483635817,
+      "event": {
+        "kind": "turnStarted",
+        "threadId": "fake-18e7495bf3551cc8",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "/narrate fail"
+          }
+        ],
+        "origin": {
+          "client": {
+            "name": "weave-tui",
+            "id": "c4"
+          }
+        },
+        "turnId": "q-KuriEnvK"
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 3,
+      "at": 1794483635819,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "title": "/narrate fail",
+            "updatedAt": "2026-11-12T11:40:35.818336Z"
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 4,
+      "at": 1794483635819,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "I'll read the "
+            }
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 5,
+      "at": 1794483635819,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "parser and find "
+            }
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 6,
+      "at": 1794483635819,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "where it loads "
+            }
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 7,
+      "at": 1794483635819,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "its fixtures."
+            }
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 8,
+      "at": 1794483636121,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "call-1",
+            "title": "Read src/parser.rs",
+            "kind": "read",
+            "status": "in_progress",
+            "locations": [
+              {
+                "path": "src/parser.rs"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 9,
+      "at": 1794483636923,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call-1",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "const FIXTURES: &str = \"fixtures\";\n"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 10,
+      "at": 1794483637225,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "call-2",
+            "title": "Search fixtures/",
+            "kind": "search",
+            "status": "in_progress"
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 11,
+      "at": 1794483638027,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call-2",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "src/parser.rs:1"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 12,
+      "at": 1794483638331,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "It reads them "
+            }
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 13,
+      "at": 1794483638331,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "from the old "
+            }
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 14,
+      "at": 1794483638331,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "path. I'll point "
+            }
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 15,
+      "at": 1794483638331,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "it at tests/fixtures "
+            }
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 16,
+      "at": 1794483638331,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "and run the "
+            }
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 17,
+      "at": 1794483638331,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "tests."
+            }
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 18,
+      "at": 1794483638631,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "call-3",
+            "title": "Edit src/parser.rs",
+            "kind": "edit",
+            "status": "in_progress"
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 19,
+      "at": 1794483639433,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call-3",
+            "status": "completed",
+            "content": [
+              {
+                "type": "diff",
+                "path": "src/parser.rs",
+                "oldText": "const FIXTURES: &str = \"fixtures\";\n",
+                "newText": "const FIXTURES: &str = \"tests/fixtures\";\n"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 20,
+      "at": 1794483639734,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "call-4",
+            "title": "cargo test -p parser",
+            "kind": "execute",
+            "status": "in_progress",
+            "rawInput": {
+              "command": "cargo test -p parser"
+            }
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 21,
+      "at": 1794483640538,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e7495bf3551cc8",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call-4",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "test result: ok"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "threadId": "fake-18e7495bf3551cc8",
+      "seq": 22,
+      "at": 1794483640538,
+      "event": {
+        "kind": "turnEnded",
+        "threadId": "fake-18e7495bf3551cc8",
+        "error": {
+          "code": -32603,
+          "message": "Internal error",
+          "data": "the turn failed after its work, as asked"
+        }
+      }
+    }
+  ]
+}

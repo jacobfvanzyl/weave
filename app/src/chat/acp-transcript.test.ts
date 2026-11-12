@@ -45,6 +45,56 @@ describe('journal times', () => {
   });
 });
 
+describe('how turns ended', () => {
+  const prompt = (text: string, extra: Partial<Extract<AcpTranscriptEvent, { type: 'prompt' }>> = {}): AcpTranscriptEvent =>
+    ({ type: 'prompt', prompt: [{ type: 'text', text }], ...extra });
+  const ended = (extra: Partial<Extract<AcpTranscriptEvent, { type: 'turn/ended' }>> = {}): AcpTranscriptEvent => ({ type: 'turn/ended', ...extra });
+  const ends = (events: AcpTranscriptEvent[]) => {
+    const transcript = events.reduce(reduceAcpEvent, createTranscript('main'));
+    return transcript.entries.flatMap(({ id }) => transcript.turnEnds[id] ? [transcript.turnEnds[id].end] : []);
+  };
+
+  it('records each turn\'s end against its prompt', () => {
+    expect(ends([prompt('a'), ended({ stopReason: 'end_turn' }), prompt('b'), ended({ stopReason: 'cancelled' }), prompt('c'), ended({ error: 'boom' })]))
+      .toEqual(['finished', 'stopped', 'failed']);
+    // A limit or a refusal finishes it; the Host stopping while it ran fails it.
+    expect(ends([prompt('a'), ended({ stopReason: 'max_tokens' }), prompt('b'), ended({ stopReason: 'refusal' }), prompt('c'), ended({ interrupted: true, error: 'interrupted' })]))
+      .toEqual(['finished', 'finished', 'failed']);
+  });
+
+  it('records it against the prompt, never a steer, and only once', () => {
+    let transcript = [prompt('a'), prompt('more', { steer: true }), ended()].reduce(reduceAcpEvent, createTranscript('main'));
+    expect(Object.keys(transcript.turnEnds)).toEqual([transcript.entries[0].id]);
+    // A prompt with nothing in it makes no entry, and its end changes none.
+    transcript = [prompt('a'), ended({ stopReason: 'end_turn' }), { type: 'prompt', prompt: [] } as AcpTranscriptEvent, ended({ error: 'boom' })].reduce(reduceAcpEvent, createTranscript('main'));
+    expect(Object.values(transcript.turnEnds)).toEqual([{ end: 'finished' }]);
+  });
+
+  it('keys it by the Host\'s copy of this device\'s prompt', () => {
+    let transcript = queueOptimisticPrompt(createTranscript('main'), 'local-1', [{ type: 'text', text: 'Go' }]);
+    transcript = [prompt('Go', { own: true }), ended()].reduce(reduceAcpEvent, transcript);
+    const [entry] = transcript.entries;
+    expect(entry.id).not.toBe('local-1');
+    expect(Object.keys(transcript.turnEnds)).toEqual([entry.id]);
+    // One this device is still sending isn't the ended turn's.
+    transcript = reduceAcpEvent(createTranscript('main'), prompt('Again'));
+    transcript = reduceAcpEvent(queueOptimisticPrompt(transcript, 'local-2', [{ type: 'text', text: 'Next' }]), ended());
+    expect(Object.keys(transcript.turnEnds)).toEqual([transcript.entries[0].id]);
+  });
+
+  it('dates it by the journal, and forgets it with the history', () => {
+    let transcript = reduceJournalEvent(createTranscript('main'), prompt('a'), 100);
+    transcript = reduceJournalEvent(transcript, ended(), 900);
+    transcript = reduceJournalEvent(transcript, prompt('b'), 1_000);
+    const first = transcript.turnEnds[transcript.entries[0].id];
+    expect(first).toEqual({ end: 'finished', endedAt: 900 });
+    transcript = reduceJournalEvent(transcript, ended({ stopReason: 'cancelled' }), 2_000);
+    expect(transcript.turnEnds[transcript.entries[0].id]).toBe(first);
+    expect(transcript.turnEnds[transcript.entries[1].id]).toEqual({ end: 'stopped', endedAt: 2_000 });
+    expect(reduceAcpEvent(transcript, { type: 'history/reset' }).turnEnds).toEqual({});
+  });
+});
+
 describe('ACP transcript message reduction', () => {
   it('uses protocol message IDs as chunk boundaries', () => {
     const updates = [

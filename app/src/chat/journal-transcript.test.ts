@@ -2,9 +2,7 @@
 // each event kind as the app shows it, and the same transcript whether the journal arrives live or
 // replayed.
 import { describe, expect, it } from 'vitest';
-import type { OpenedThread } from '@/host/connection';
-import { JournalFollower, transcriptEvents } from '@/host/journal';
-import type { ThreadEventNotification, ThreadState } from '@/host/protocol';
+import type { ThreadEventNotification } from '@/host/protocol';
 import {
   type AcpTranscript,
   blocksText,
@@ -14,32 +12,9 @@ import {
   threadLabel,
   type TranscriptEntry,
 } from './acp-transcript';
+import { follow, type Recording, recordings } from './fixtures/recordings';
 import { terminalText } from './terminal-text';
-
-type Recording = { name: string; state: ThreadState; events: ThreadEventNotification[] };
-
-const recordings = Object.fromEntries(
-  Object.values(import.meta.glob<Recording>('./fixtures/journals/*.json', { eager: true, import: 'default' }))
-    .map((recording) => [recording.name, recording]),
-);
-
-/**
- * The transcript a client shows after following the journal: `live` as each event happened, or
- * `replayed` from history after attaching once it was all written.
- */
-function follow(recording: Recording, how: 'live' | 'replayed'): AcpTranscript {
-  const follower = new JournalFollower();
-  const head = how === 'replayed' ? recording.events.at(-1)?.seq ?? 0 : 0;
-  const state = { ...recording.state, journal: { ...recording.state.journal, head } };
-  follower.opened({ state, replay: { from: 1, reset: true } } as OpenedThread);
-  let transcript = reduceAcpEvent(createTranscript(state.threadId), { type: 'thread/loaded', modes: state.modes, configOptions: state.configOptions });
-  for (const notification of recording.events) {
-    if (!follower.accept(notification)) continue;
-    const reading = { history: follower.isHistory(notification), own: () => false };
-    transcript = transcriptEvents(notification, reading).reduce(reduceAcpEvent, transcript);
-  }
-  return transcript;
-}
+import { foldLabel, type TranscriptItem, transcriptItems, type TurnFold, workSummary } from './transcript-runs';
 
 const text = (entry: Extract<TranscriptEntry, { kind: 'message' }>) => entry.chunks
   .map((chunk) => `${chunk.kind === 'thought' ? '(thinking) ' : ''}${chunk.content.map((block) => block.type === 'text' ? block.text : `[${block.type}]`).join('')}`)
@@ -101,7 +76,7 @@ const shown = ({ turn: _turn, entries, subagents, ...rest }: AcpTranscript): unk
 describe('transcripts from recorded journals', () => {
   it('records the journals the tests read', () => {
     expect(Object.keys(recordings).sort()).toEqual(
-      ['cancel', 'close', 'compact', 'delegate', 'image', 'markdown', 'modes', 'notice', 'plan', 'questions', 'reopen', 'run', 'steer', 'think', 'write'],
+      ['cancel', 'close', 'compact', 'delegate', 'image', 'markdown', 'modes', 'narrate', 'narrate-cancel', 'narrate-fail', 'narrate-steer', 'notice', 'plan', 'questions', 'reopen', 'run', 'steer', 'think', 'write'],
     );
   });
 
@@ -182,5 +157,128 @@ describe('transcripts from recorded journals', () => {
     expect(events.length).toBeGreaterThan(8_000);
     expect(transcript.entries).toHaveLength(600);
     expect(elapsed).toBeLessThan(2_000);
+  });
+});
+
+/**
+ * A transcript's rows as the chat shows them: a fold by its label, its time said as "…", with the
+ * rows it spans in braces, `+` before those that stay in sight.
+ */
+function rows(transcript: AcpTranscript, running = transcript.turn.status === 'running'): string[] {
+  const row = (item: TranscriptItem): string => {
+    if (item.kind === 'fold') return `${foldLabel(item).replace(/\d+[hms]( \d+[ms])?$/, '…')} {${item.rows.map(({ item: spanned, hidden }) => `${hidden ? '' : '+'}${row(spanned)}`).join(' | ')}}`;
+    if (item.kind === 'work') return `[${workSummary(item.entries)}]${item.working ? ' working' : ''}`;
+    const { entry } = item;
+    if (entry.kind === 'message') return `${entry.role}${entry.steer ? ' (steer)' : ''}: ${text(entry)}`;
+    if (entry.kind === 'diagnostic') return `${entry.severity}: ${entry.title}`;
+    return entry.kind;
+  };
+  return items(transcript, running).map(row);
+}
+
+const items = (transcript: AcpTranscript, running = transcript.turn.status === 'running') =>
+  transcriptItems(transcript.entries, running, { turnEnds: transcript.turnEnds, subagents: transcript.subagents });
+
+const folds = (transcript: AcpTranscript) => items(transcript).filter((item): item is TurnFold => item.kind === 'fold');
+
+/** When the journal recorded an event of `kind`, the first or the last. */
+const recorded = (recording: Recording, kind: ThreadEventNotification['event']['kind'], which: 'first' | 'last' = 'first') => {
+  const found = recording.events.filter(({ event }) => event.kind === kind);
+  return (which === 'first' ? found[0] : found.at(-1))!.at;
+};
+
+describe('finished turns folded from recorded journals (WVE-218)', () => {
+  const asked = "assistant: I'll read the parser and find where it loads its fixtures.";
+  const commentary = "assistant: It reads them from the old path. I'll point it at tests/fixtures and run the tests.";
+  const answer = 'assistant: Done: the parser reads its fixtures from tests/fixtures, and the tests pass.';
+
+  it('folds a finished turn\'s commentary and tool calls under "Worked for …" between its prompt and final message', () => {
+    for (const how of ['live', 'replayed'] as const) {
+      const transcript = follow(recordings.narrate, how);
+      expect(rows(transcript), how).toEqual([
+        'user: /narrate',
+        `Worked for … {${asked} | [1 read, 1 search] | ${commentary} | [1 command, 1 edit]}`,
+        answer,
+      ]);
+      expect(folds(transcript)[0].took, how).toBe(recorded(recordings.narrate, 'turnEnded') - recorded(recordings.narrate, 'turnStarted'));
+    }
+  });
+
+  it('records how each turn ended the same live and replayed', () => {
+    const ends = (name: string) => Object.values(follow(recordings[name], 'live').turnEnds).map(({ end }) => end);
+    expect(['narrate', 'narrate-steer', 'narrate-cancel', 'narrate-fail', 'reopen'].map(ends))
+      .toEqual([['finished'], ['finished'], ['stopped'], ['failed'], ['finished', 'finished']]);
+    const live = follow(recordings.narrate, 'live');
+    const prompt = live.entries[0];
+    expect(live.turnEnds).toEqual({ [prompt.id]: { end: 'finished', endedAt: recorded(recordings.narrate, 'turnEnded') } });
+    expect(follow(recordings.narrate, 'replayed').turnEnds).toEqual(live.turnEnds);
+  });
+
+  it('shows a running turn as it did, and folds it once it ends', () => {
+    const running = follow(recordings.narrate, 'live', ({ event }) => event.kind === 'turnEnded');
+    expect(running.turn.status).toBe('running');
+    expect(rows(running)).toEqual(['user: /narrate', asked, '[1 read, 1 search]', commentary, '[1 command, 1 edit]', answer]);
+    const midway = follow(recordings.narrate, 'live', ({ event }) => event.kind === 'update' && event.notification.update.sessionUpdate === 'agent_message_chunk'
+      && event.notification.update.content.type === 'text' && event.notification.update.content.text.startsWith('It reads'));
+    expect(rows(midway)).toEqual(['user: /narrate', asked, '[1 read, 1 search] working']);
+    expect(rows(follow(recordings.narrate, 'live'))[1]).toMatch(/^Worked for … \{/);
+  });
+
+  it('folds every finished turn in replayed history, and leaves only failed turns\' work out of a fold', () => {
+    for (const name of Object.keys(recordings)) {
+      const transcript = follow(recordings[name], 'replayed');
+      const failed = Object.values(transcript.turnEnds).some(({ end }) => end === 'failed');
+      const loose = items(transcript).filter((item) => item.kind === 'work');
+      expect(loose.length > 0, name).toBe(failed);
+    }
+    // A compaction stays in sight, so that turn has nothing to fold.
+    expect(rows(follow(recordings.compact, 'replayed'))).toEqual(['user: /compact', 'compaction', 'assistant: Compacted.']);
+    expect(['narrate', 'narrate-steer', 'narrate-cancel', 'run', 'write', 'plan', 'think', 'delegate'].filter((name) => folds(follow(recordings[name], 'replayed')).length === 0))
+      .toEqual([]);
+  });
+
+  it('reads in the order of the entries with every fold open', () => {
+    const ids = (item: TranscriptItem): string[] => item.kind === 'fold'
+      ? item.rows.flatMap(({ item: row }) => ids(row))
+      : item.kind === 'work' ? item.entries.map(({ id }) => id) : [item.entry.id];
+    for (const name of Object.keys(recordings)) {
+      const transcript = follow(recordings[name], 'replayed');
+      // A final message's thinking folds apart from it, as `<id>:work` before it.
+      expect(items(transcript).flatMap(ids).filter((id) => !id.endsWith(':work')), name).toEqual(transcript.entries.map(({ id }) => id));
+    }
+  });
+
+  it('keeps a steer in sight, with the work after it under "Continued for …"', () => {
+    for (const how of ['live', 'replayed'] as const) {
+      const transcript = follow(recordings['narrate-steer'], how);
+      expect(rows(transcript), how).toEqual([
+        'user: /narrate',
+        `Worked for … {${asked} | [1 read]}`,
+        'user (steer): And check the lexer too.',
+        `Continued for … {[2 searches] | ${commentary} | [1 command, 1 edit]}`,
+        `${answer} I looked into what you added too: And check the lexer too.`,
+      ]);
+      const [top, continued] = folds(transcript);
+      expect(top.took).toBe(recorded(recordings['narrate-steer'], 'turnEnded') - recorded(recordings['narrate-steer'], 'turnStarted'));
+      // From the steer to the answer's last chunk.
+      const steered = recorded(recordings['narrate-steer'], 'turnSteered');
+      expect(continued.took).toBe(transcript.entries.at(-1)!.updatedAt! - steered);
+      expect(continued.took).toBeGreaterThan(0);
+    }
+  });
+
+  it('says the person stopped a cancelled turn', () => {
+    for (const how of ['live', 'replayed'] as const) {
+      const transcript = follow(recordings['narrate-cancel'], how);
+      expect(rows(transcript), how).toEqual(['user: /narrate', `You stopped after … {${asked} | [1 read, 1 search]}`, commentary, 'info: Turn cancelled']);
+      expect(foldLabel(folds(transcript)[0])).toMatch(/^You stopped after \d+s$/);
+    }
+  });
+
+  it('leaves a failed turn open', () => {
+    for (const how of ['live', 'replayed'] as const) {
+      expect(rows(follow(recordings['narrate-fail'], how)), how)
+        .toEqual(['user: /narrate fail', asked, '[1 read, 1 search]', commentary, '[1 command, 1 edit]', 'error: Turn failed']);
+    }
   });
 });

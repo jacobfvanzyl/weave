@@ -28,6 +28,7 @@
 //! | `extension` | a `_`-prefixed request (expects "method not found") and notification |
 //! | `stop refusal\|max-tokens\|max-turn-requests` | ends the turn with that stop reason (not advertised) |
 //! | `fail` | fails the prompt with an internal error (not advertised) |
+//! | `narrate [fail]` | commentary, two tool calls, more commentary, two more, then an answer, a moment apart; a steered message gets a tool call of its own before the work goes on; with `fail`, fails the prompt after the work (not advertised) |
 //!
 //! Echoed prompts also list any non-text content blocks they carried.
 //! | anything else | echoes the prompt |
@@ -35,8 +36,9 @@
 //! It supports the whole v1 session lifecycle (new, load with replay, resume, list with
 //! pagination, close, delete), config options and modes, `agent` and `terminal` sign-in, and
 //! logout, and the steering extension (`_session/steering`, see `steering`): a turn answers
-//! messages steered into it before it ends, and `slow` stops its chunks for them. With a
-//! state file, sessions and sign-in survive across processes.
+//! messages steered into it before it ends, `slow` stops its chunks for them, and `narrate`
+//! follows each up with a tool call before going on. With a state file, sessions and sign-in
+//! survive across processes.
 
 mod mcp;
 mod questions;

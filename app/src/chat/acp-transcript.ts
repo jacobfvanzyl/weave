@@ -212,9 +212,25 @@ export type TranscriptTerminal = {
 /** How much of a terminal's output a transcript keeps. */
 export const TERMINAL_KEEP = 256 * 1024;
 
+/**
+ * How a turn ended, as its `turn/ended` recorded it: `finished` by the agent (at the end of its
+ * work, or at a limit or a refusal its diagnostic gives), `stopped` when cancelled, or `failed`
+ * with an error or because the Host stopped while it ran.
+ */
+export type TurnEnd = {
+  end: 'finished' | 'stopped' | 'failed';
+  /** When the journal recorded the end, in milliseconds; none where the events weren't dated. */
+  endedAt?: number;
+};
+
 export type AcpTranscript = {
   threadId: string;
   entries: TranscriptEntry[];
+  /**
+   * How each turn ended, by the id of the prompt's entry that started it (a user message that
+   * isn't a steer). A turn whose end wasn't recorded has none, as for history an agent loaded.
+   */
+  turnEnds: Record<string, TurnEnd>;
   title?: string | null;
   updatedAt?: string | null;
   availableCommands: AvailableCommand[];
@@ -301,6 +317,7 @@ export const urlElicitation = (request: CreateElicitationRequest): UrlElicitatio
 export const createTranscript = (threadId: string): AcpTranscript => ({
   threadId,
   entries: [],
+  turnEnds: {},
   availableCommands: [],
   availableModes: [],
   configOptions: [],
@@ -830,16 +847,33 @@ const stopReasonText: Partial<Record<StopReason, string>> = {
   refusal: 'The agent refused to continue',
 };
 
+/** A prompt's entry: a user message that starts a turn, not one steered into it. */
+export const isPrompt = (entry: TranscriptEntry): entry is TranscriptMessage =>
+  entry.kind === 'message' && entry.role === 'user' && !entry.steer;
+
+/**
+ * How the turn ended, against its prompt's entry: the latest prompt the Host journaled, never one
+ * this device shows while sending it, unless its turn already ended, as when a prompt with nothing
+ * in it made no entry.
+ */
+const withTurnEnd = (model: AcpTranscript, event: Extract<AcpTranscriptEvent, { type: 'turn/ended' }>): AcpTranscript => {
+  const prompt = [...model.entries].reverse().find((entry) => isPrompt(entry) && !entry.optimistic);
+  if (!prompt || model.turnEnds[prompt.id]) return model;
+  const end: TurnEnd['end'] = event.interrupted || event.error !== undefined ? 'failed' : event.stopReason === 'cancelled' ? 'stopped' : 'finished';
+  return { ...model, turnEnds: { ...model.turnEnds, [prompt.id]: { end } } };
+};
+
 /** A turn's end, in the transcript: nothing for one that finished, otherwise why it didn't. */
 const recordTurnEnd = (model: AcpTranscript, event: Extract<AcpTranscriptEvent, { type: 'turn/ended' }>): AcpTranscript => {
+  const ended = withTurnEnd(model, event);
   if (event.interrupted) {
-    return appendEntry(model, { kind: 'diagnostic', severity: 'info', title: 'Interrupted: the weave Host stopped while this turn ran' });
+    return appendEntry(ended, { kind: 'diagnostic', severity: 'info', title: 'Interrupted: the weave Host stopped while this turn ran' });
   }
   if (event.error !== undefined) {
-    return appendEntry(model, { kind: 'diagnostic', severity: 'error', title: 'Turn failed', detail: event.error });
+    return appendEntry(ended, { kind: 'diagnostic', severity: 'error', title: 'Turn failed', detail: event.error });
   }
-  if (!event.stopReason || event.stopReason === 'end_turn') return model;
-  return appendEntry(model, {
+  if (!event.stopReason || event.stopReason === 'end_turn') return ended;
+  return appendEntry(ended, {
     kind: 'diagnostic',
     severity: 'info',
     title: stopReasonText[event.stopReason] ?? 'Stopped for an unrecognized reason',
@@ -1059,6 +1093,12 @@ const stampEntries = (before: TranscriptEntry[], after: TranscriptEntry[], at: n
   });
 };
 
+/** The turn ends an event recorded, stamped with when it happened. */
+const stampTurnEnds = (before: AcpTranscript['turnEnds'], after: AcpTranscript['turnEnds'], at: number): AcpTranscript['turnEnds'] => {
+  if (after === before) return after;
+  return Object.fromEntries(Object.entries(after).map(([id, end]) => [id, end === before[id] ? end : { ...end, endedAt: at }]));
+};
+
 const stampTranscript = (before: AcpTranscript | undefined, after: AcpTranscript, at: number): AcpTranscript => {
   if (after === before) return after;
   const subagents = after.subagents === before?.subagents
@@ -1067,7 +1107,12 @@ const stampTranscript = (before: AcpTranscript | undefined, after: AcpTranscript
         const earlier = before?.subagents.find(({ threadId }) => threadId === subagent.threadId);
         return earlier?.transcript === subagent.transcript ? subagent : { ...subagent, transcript: stampTranscript(earlier?.transcript, subagent.transcript, at) };
       });
-  return { ...after, entries: stampEntries(before?.entries ?? [], after.entries, at), subagents };
+  return {
+    ...after,
+    entries: stampEntries(before?.entries ?? [], after.entries, at),
+    turnEnds: stampTurnEnds(before?.turnEnds ?? {}, after.turnEnds, at),
+    subagents,
+  };
 };
 
 /** `reduceAcpEvent` for a journal event, recording when it happened on the entries it made or changed. */

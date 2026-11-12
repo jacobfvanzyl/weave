@@ -73,6 +73,9 @@ describe('ChatPane', () => {
     );
 
     expect(screen.getByText('Exercise the complete ACP renderer.')).toBeInTheDocument();
+    // The first turn has ended, its thinking folded under a row of its own (WVE-218).
+    expect(screen.queryByText('Checking every content family.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Worked' }));
     expect(screen.getByText('Checking every content family.')).toBeInTheDocument();
     expect(container.querySelector('[data-slot="message-header"]')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'ACP rich content' })).toBeInTheDocument();

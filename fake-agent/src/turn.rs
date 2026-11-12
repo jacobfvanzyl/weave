@@ -156,6 +156,7 @@ impl Turn {
             "mcp-legacy" => self.mcp_legacy(cx).await?,
             "think" => self.think(cx).await?,
             "work" => self.work(cx, rest == "fail").await?,
+            "narrate" => self.narrate(cx, rest == "fail").await?,
             "compact" => self.compact(cx).await?,
             "delegate" => self.delegate(cx).await?,
             "delegate-legacy" => self.delegate_legacy(cx).await?,
@@ -773,6 +774,91 @@ impl Turn {
             .await
     }
 
+    /// A turn told as it goes, as agents narrate theirs: a line of commentary, two tool calls,
+    /// another line, two more tool calls, then an answer, a moment apart. A message steered into
+    /// it is taken before the next step and followed up with a tool call of its own, and the work
+    /// goes on after it. With `fails`, the prompt fails once the work is done, unanswered.
+    async fn narrate(&self, cx: &ConnectionTo<Client>, fails: bool) -> Result<(), Error> {
+        let path = "src/parser.rs";
+        let old = "const FIXTURES: &str = \"fixtures\";\n";
+        let test = || {
+            ToolCall::new(next_tool_call_id(), "cargo test -p parser")
+                .kind(ToolKind::Execute)
+                .raw_input(serde_json::json!({ "command": "cargo test -p parser" }))
+        };
+        let beats = [
+            Beat::Say("I'll read the parser and find where it loads its fixtures."),
+            Beat::call(
+                ToolCall::new(next_tool_call_id(), format!("Read {path}"))
+                    .kind(ToolKind::Read)
+                    .locations(vec![ToolCallLocation::new(path)]),
+                old,
+            ),
+            Beat::call(
+                ToolCall::new(next_tool_call_id(), "Search fixtures/").kind(ToolKind::Search),
+                format!("{path}:1"),
+            ),
+            Beat::Say(
+                "It reads them from the old path. I'll point it at tests/fixtures and run the tests.",
+            ),
+            Beat::call(
+                ToolCall::new(next_tool_call_id(), format!("Edit {path}")).kind(ToolKind::Edit),
+                ToolCallContent::Diff(
+                    Diff::new(path, "const FIXTURES: &str = \"tests/fixtures\";\n")
+                        .old_text(old.to_owned()),
+                ),
+            ),
+            Beat::call(test(), "test result: ok"),
+        ];
+        let mut steered = Vec::new();
+        for (index, beat) in beats.into_iter().enumerate() {
+            if index > 0 && self.cancel.sleep(Duration::from_millis(300)).await {
+                return Ok(());
+            }
+            while let Some(message) = self.steering.take() {
+                self.record(SessionUpdate::UserMessageChunk(ContentChunk::new(
+                    ContentBlock::from(message.clone()),
+                )));
+                let search = ToolCall::new(next_tool_call_id(), format!("Search for {message}"))
+                    .kind(ToolKind::Search);
+                let found = format!("{path}:12");
+                if self
+                    .step(cx, search, ToolCallStatus::Completed, found)
+                    .await?
+                {
+                    return Ok(());
+                }
+                steered.push(message);
+            }
+            match beat {
+                Beat::Say(text) => self.say(cx, text).await?,
+                Beat::Call(call) => {
+                    let (call, content) = *call;
+                    if self
+                        .step(cx, call, ToolCallStatus::Completed, content)
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        if fails {
+            return Err(Error::internal_error().data("the turn failed after its work, as asked"));
+        }
+        let answer = "Done: the parser reads its fixtures from tests/fixtures, and the tests pass.";
+        if steered.is_empty() {
+            self.say(cx, answer).await
+        } else {
+            let asked = steered.join("; ");
+            self.say(
+                cx,
+                &format!("{answer} I looked into what you added too: {asked}"),
+            )
+            .await
+        }
+    }
+
     /// Start `call`, and a moment later finish it as `status` with `content`; true when the
     /// turn was cancelled meanwhile.
     async fn step(
@@ -1193,6 +1279,18 @@ impl Turn {
             .collect::<Vec<_>>()
             .join("; ");
         self.say(cx, &format!("MCP servers: {servers}.")).await
+    }
+}
+
+/// A step of [`Turn::narrate`]: a line of commentary, or a tool call and what it finds.
+enum Beat {
+    Say(&'static str),
+    Call(Box<(ToolCall, ToolCallContent)>),
+}
+
+impl Beat {
+    fn call(call: ToolCall, content: impl Into<ToolCallContent>) -> Self {
+        Self::Call(Box::new((call, content.into())))
     }
 }
 

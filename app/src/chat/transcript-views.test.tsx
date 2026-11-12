@@ -1,9 +1,11 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { PromptImage } from '@/app/app-controller';
 import { type AcpTranscriptEvent, createTranscript, reduceAcpEvent, reduceJournalEvent } from './acp-transcript';
+import { createAcpShowcaseTranscript, createFinishedTurnsTranscript } from './acp-showcase';
 import { ChatPane, type ChatPaneActions } from './chat-pane';
+import { follow, recordings } from './fixtures/recordings';
 import { urlCheck } from './pending-request';
 import { scaledSize } from './prompt-images';
 import { terminalText } from './terminal-text';
@@ -136,7 +138,9 @@ describe('runs of work', () => {
     ];
     const model = journal.reduce((transcript, [event, at]) => reduceJournalEvent(transcript, event, at), createTranscript('main'));
     render(<ChatPane model={model} actions={actions()} />);
-    expect(screen.getByRole('button', { name: /^Worked/ })).toHaveTextContent('Worked for 2m 17s2 commands');
+    // The turn has ended, so its run is in the turn's fold.
+    fireEvent.click(screen.getByRole('button', { name: 'Worked' }));
+    expect(screen.getByRole('button', { name: /^Worked for/ })).toHaveTextContent('Worked for 2m 17s2 commands');
   });
 
   it('counts how long it has been working', () => {
@@ -166,6 +170,129 @@ describe('runs of work', () => {
     expect(screen.queryByText('Step a')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Allow' }));
     expect(handlers.respondToPermission).toHaveBeenCalledWith('p-1', 'allow');
+  });
+});
+
+describe('finished turns, folded to their final message (WVE-218)', () => {
+  const prompt = '/narrate';
+  const asked = "I'll read the parser and find where it loads its fixtures.";
+  const commentary = "It reads them from the old path. I'll point it at tests/fixtures and run the tests.";
+  const answer = 'Done: the parser reads its fixtures from tests/fixtures, and the tests pass.';
+  const worked = /^Worked for \d+s$/;
+  const turnEnded = ({ event }: { event: { kind: string } }) => event.kind === 'turnEnded';
+
+  /** What shows between the turn's prompt and its final message, in order: messages, and runs of work by what they did. */
+  const work = () => Array.from(document.querySelectorAll('[data-slot="message-scroller-content"] [data-slot="work-run"], [data-slot="message-scroller-content"] [data-slot="bubble-content"]'))
+    .map((element) => element.getAttribute('data-slot') === 'work-run' ? `[${element.querySelector('button')?.textContent?.replace(/^Worked for \d+s/, '')}]` : element.textContent)
+    .filter((row) => !row?.startsWith(prompt) && !row?.startsWith(answer));
+
+  it('shows its prompt, a row saying how long it worked, and its final message', async () => {
+    const user = userEvent.setup();
+    render(<ChatPane model={follow(recordings.narrate, 'live')} actions={actions()} />);
+    expect(screen.getByText(prompt)).toBeInTheDocument();
+    expect(screen.getByText(answer)).toBeInTheDocument();
+    const row = screen.getByRole('button', { name: worked });
+    expect(row).toHaveAttribute('aria-expanded', 'false');
+    expect(row.closest('[data-slot="turn-fold"]')).toBeInTheDocument();
+    expect(work()).toEqual([]);
+    expect(screen.queryByText(asked)).not.toBeInTheDocument();
+
+    // Open, the turn shows as it did before it ended.
+    await user.click(row);
+    expect(row).toHaveAttribute('aria-expanded', 'true');
+    expect(work()).toEqual([asked, '[1 read, 1 search]', commentary, '[1 command, 1 edit]']);
+    expect(screen.getByText(prompt).compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText(commentary).compareDocumentPosition(screen.getByText(answer)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await user.click(row);
+    expect(row).toHaveAttribute('aria-expanded', 'false');
+    expect(work()).toEqual([]);
+  });
+
+  it('opens and closes from the keyboard', async () => {
+    const user = userEvent.setup();
+    render(<ChatPane model={follow(recordings.narrate, 'live')} actions={actions()} readOnly />);
+    const row = screen.getByRole('button', { name: worked });
+    row.focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByText(asked)).toBeInTheDocument();
+    await user.keyboard(' ');
+    expect(screen.queryByText(asked)).not.toBeInTheDocument();
+  });
+
+  it('shows a running turn as it is, and folds it when it ends', () => {
+    const running = follow(recordings.narrate, 'live', turnEnded);
+    expect(running.turn.status).toBe('running');
+    const { rerender } = render(<ChatPane model={running} actions={actions()} />);
+    expect(screen.queryByRole('button', { name: worked })).not.toBeInTheDocument();
+    expect(work()).toEqual([asked, '[1 read, 1 search]', commentary, '[1 command, 1 edit]']);
+
+    rerender(<ChatPane model={follow(recordings.narrate, 'live')} actions={actions()} />);
+    expect(screen.getByRole('button', { name: worked })).toHaveAttribute('aria-expanded', 'false');
+    expect(work()).toEqual([]);
+    expect(screen.getByText(answer)).toBeInTheDocument();
+  });
+
+  it('folds the same when the journal is replayed', () => {
+    render(<ChatPane model={follow(recordings.narrate, 'replayed')} actions={actions()} />);
+    expect(screen.getByRole('button', { name: worked })).toBeInTheDocument();
+    expect(work()).toEqual([]);
+    expect(screen.getByText(answer)).toBeInTheDocument();
+  });
+
+  it('keeps a steer in sight, with the work after it under a row of its own', async () => {
+    const user = userEvent.setup();
+    render(<ChatPane model={follow(recordings['narrate-steer'], 'live')} actions={actions()} />);
+    const steer = screen.getByText('And check the lexer too.');
+    const continued = screen.getByRole('button', { name: /^Continued for \d+s$/ });
+    expect(screen.getByRole('button', { name: worked }).compareDocumentPosition(steer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(steer.compareDocumentPosition(continued) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(work()).toEqual(['And check the lexer too.']);
+    await user.click(continued);
+    expect(work()).toEqual(['And check the lexer too.', '[2 searches]', commentary, '[1 command, 1 edit]']);
+  });
+
+  it('says the person stopped a cancelled turn', () => {
+    render(<ChatPane model={follow(recordings['narrate-cancel'], 'live')} actions={actions()} />);
+    expect(screen.getByRole('button', { name: /^You stopped after \d+s$/ })).toBeInTheDocument();
+    expect(screen.getByText(commentary)).toBeInTheDocument();
+    expect(screen.getByText('Turn cancelled')).toBeInTheDocument();
+  });
+
+  it('leaves a failed turn open', () => {
+    const { container } = render(<ChatPane model={follow(recordings['narrate-fail'], 'live')} actions={actions()} />);
+    expect(container.querySelector('[data-slot="turn-fold"]')).not.toBeInTheDocument();
+    expect(work()).toEqual([asked, '[1 read, 1 search]', commentary, '[1 command, 1 edit]']);
+    expect(screen.getByText(/^Turn failed/)).toBeInTheDocument();
+  });
+
+  it('shows the mock scenarios\' earlier turns folded, and a running turn as it is', () => {
+    const model = createAcpShowcaseTranscript(createFinishedTurnsTranscript('showcase', 1_000_000));
+    const { rerender } = render(<ChatPane model={model} actions={actions()} />);
+    const folds = () => screen.getAllByRole('button', { expanded: false }).filter((button) => button.parentElement?.getAttribute('data-slot') === 'turn-fold');
+    expect(folds().map(({ textContent }) => textContent)).toEqual(
+      ['Worked for 2m 17s', 'Worked for 57s', 'Continued for 40s', 'You stopped after 1m 5s', 'Worked', 'You stopped the turn'],
+    );
+    rerender(<ChatPane model={reduceAcpEvent(model, { type: 'turn/started' })} actions={actions()} />);
+    expect(folds().map(({ textContent }) => textContent)).toEqual(['Worked for 2m 17s', 'Worked for 57s', 'Continued for 40s', 'You stopped after 1m 5s', 'Worked']);
+  });
+
+  it('stays open while the thread is on screen, and folds again when it\'s shown again', async () => {
+    const user = userEvent.setup();
+    const { rerender, unmount } = render(<ChatPane model={follow(recordings.narrate, 'live')} actions={actions()} />);
+    await user.click(screen.getByRole('button', { name: worked }));
+    // The transcript made again, as each update makes it.
+    rerender(<ChatPane model={follow(recordings.narrate, 'live')} actions={actions()} />);
+    expect(screen.getByRole('button', { name: worked })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(asked)).toBeInTheDocument();
+    // Another thread in the same pane has its own.
+    rerender(<ChatPane model={{ ...follow(recordings.narrate, 'live'), threadId: 'another' }} actions={actions()} />);
+    expect(screen.getByRole('button', { name: worked })).toHaveAttribute('aria-expanded', 'false');
+    unmount();
+
+    render(<ChatPane model={follow(recordings.narrate, 'live')} actions={actions()} />);
+    expect(screen.getByRole('button', { name: worked })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(asked)).not.toBeInTheDocument();
   });
 });
 

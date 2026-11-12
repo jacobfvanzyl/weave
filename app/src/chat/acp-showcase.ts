@@ -6,6 +6,7 @@ import type {
 import {
   createTranscript,
   reduceAcpEvent,
+  reduceJournalEvent,
   type AcpTranscript,
   type AcpTranscriptEvent,
 } from './acp-transcript';
@@ -372,8 +373,55 @@ const events: AcpTranscriptEvent[] = [
   { type: 'turn/ended', stopReason: 'cancelled' },
 ];
 
-export const createAcpShowcaseTranscript = (): AcpTranscript =>
-  structuredClone(events).reduce(reduceAcpEvent, createTranscript('showcase'));
+/** The showcase's turns, after what `earlier` holds. */
+export const createAcpShowcaseTranscript = (earlier = createTranscript('showcase')): AcpTranscript =>
+  structuredClone(events).reduce(reduceAcpEvent, earlier);
+
+const said = (messageId: string, text: string): AcpTranscriptEvent =>
+  ({ type: 'session/update', update: { sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text } }, replayed: true });
+
+const called = (toolCallId: string, title: string, kind: ToolKind, status: 'completed' | 'in_progress' = 'completed'): AcpTranscriptEvent =>
+  ({ type: 'session/update', update: { sessionUpdate: 'tool_call', toolCallId, title, kind, status } });
+
+const prompted = (text: string, steer = false): AcpTranscriptEvent =>
+  ({ type: 'prompt', prompt: [{ type: 'text', text }], ...(steer ? { steer } : {}), replayed: true });
+
+/**
+ * Three finished turns, dated as a journal dates them, from `start` on, for the mock scenarios
+ * (WVE-218): one that worked through its commentary and tool calls for 2m 17s, one steered as it
+ * ran, which continued for 40s after the steer, and one the person stopped after 1m 5s.
+ */
+export function createFinishedTurnsTranscript(threadId: string, start: number): AcpTranscript {
+  const seconds = (at: number) => start + at * 1_000;
+  const journal: [AcpTranscriptEvent, number][] = [
+    [prompted('Find where the parser loads its fixtures, and point it at tests/fixtures.'), seconds(0)],
+    [said('narrate-1', "I'll read the parser and find where it loads its fixtures."), seconds(4)],
+    [called('narrate-read', 'Read src/parser.rs', 'read'), seconds(9)],
+    [called('narrate-search', 'Search for "fixtures"', 'search'), seconds(21)],
+    [said('narrate-2', "It reads them from the old path. I'll point it at tests/fixtures and run the tests."), seconds(38)],
+    [called('narrate-edit', 'Edit src/parser.rs', 'edit'), seconds(52)],
+    [called('narrate-test', 'Run cargo test -p parser', 'execute', 'in_progress'), seconds(60)],
+    [{ type: 'session/update', update: { sessionUpdate: 'tool_call_update', toolCallId: 'narrate-test', status: 'completed' } }, seconds(130)],
+    [said('narrate-3', 'Done: the parser reads its fixtures from tests/fixtures, and the tests pass.'), seconds(132)],
+    [{ type: 'turn/ended', stopReason: 'end_turn' }, seconds(137)],
+
+    [prompted("Tidy the lexer's error messages."), seconds(300)],
+    [said('steer-1', "I'll start with the lexer's errors."), seconds(303)],
+    [called('steer-read', 'Read src/lexer.rs', 'read'), seconds(308)],
+    [prompted('And keep the old error codes in them.', true), seconds(315)],
+    [called('steer-search', 'Search for "ErrorCode"', 'search'), seconds(325)],
+    [called('steer-edit', 'Edit src/lexer.rs', 'edit'), seconds(340)],
+    [said('steer-2', "Done: the lexer's errors read plainly and keep their old codes."), seconds(355)],
+    [{ type: 'turn/ended', stopReason: 'end_turn' }, seconds(357)],
+
+    [prompted('Benchmark the parser on the big fixtures.'), seconds(600)],
+    [called('stop-read', 'Read benches/parser.rs', 'read'), seconds(603)],
+    [said('stop-1', "I'll build in release and run the benchmarks."), seconds(606)],
+    [called('stop-bench', 'Run cargo bench -p parser', 'execute', 'in_progress'), seconds(608)],
+    [{ type: 'turn/ended', stopReason: 'cancelled' }, seconds(665)],
+  ];
+  return journal.reduce((transcript, [event, at]) => reduceJournalEvent(transcript, event, at), createTranscript(threadId));
+}
 
 /**
  * The fake agent's `/markdown` reply (WVE-128) as recorded from a dev Host, for the `markdown` mock

@@ -89,6 +89,11 @@ impl Steering {
         !lock(&self.inner).messages.is_empty()
     }
 
+    /// The next steered message, for a script that answers it mid-turn; the turn goes on.
+    pub fn take(&self) -> Option<String> {
+        lock(&self.inner).messages.pop_front()
+    }
+
     /// The next steered message to answer, or, with none left, the end of the turn: no
     /// message is accepted after that.
     pub fn next_or_finish(&self) -> Option<String> {

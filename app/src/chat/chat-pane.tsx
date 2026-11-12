@@ -1,5 +1,6 @@
 import { composerDrafts, composerDraftListeners, discardComposerDraft, writeComposerDraft, type ComposerDraft } from './composer-drafts';
-import { transcriptItems } from './transcript-runs';
+import { type ShownItem, transcriptItems } from './transcript-runs';
+import { shownItemKey, TurnFoldView } from './turn-fold-view';
 import { WorkRunView } from './work-run-view';
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { PromptImage, QueuedPrompt } from '@/app/app-controller';
@@ -807,10 +808,25 @@ export function ChatPane({
   inScroller?: ReactNode;
 }) {
   const running = model.turn.status === 'running';
-  const items = useMemo(() => loading ? [] : transcriptItems(model.entries, running), [loading, model.entries, running]);
+  const items = useMemo(
+    () => loading ? [] : transcriptItems(model.entries, running, { turnEnds: model.turnEnds, subagents: model.subagents }),
+    [loading, model.entries, model.turnEnds, model.subagents, running],
+  );
+  // Which finished turns are open is this pane's to keep while the thread is on screen, and no
+  // more (WVE-218): each folds again when the thread is shown again.
+  const [opened, setOpened] = useState<{ threadId: string; folds: ReadonlySet<string> }>(() => ({ threadId: model.threadId, folds: new Set() }));
+  const openFolds = opened.threadId === model.threadId ? opened.folds : undefined;
+  const setFoldOpen = (id: string, open: boolean) => setOpened((current) => {
+    const folds = new Set(current.threadId === model.threadId ? current.folds : []);
+    if (open) folds.add(id);
+    else folds.delete(id);
+    return { threadId: model.threadId, folds };
+  });
   const streamingId = running ? model.entries.at(-1)?.id : undefined;
   const thread = root ?? model;
   const context = useMemo<TranscriptContextValue>(() => ({ root: thread, openSubagent: onOpenSubagent }), [thread, onOpenSubagent]);
+  const renderEntry = (entry: TranscriptEntry) => <EntryView entry={entry} transcript={model} actions={actions} isStreaming={entry.id === streamingId} />;
+  const renderItem = (item: ShownItem) => item.kind === 'entry' ? renderEntry(item.entry) : <WorkRunView run={item} renderEntry={renderEntry} />;
   return (
     <TranscriptContext.Provider value={context}>
       <div
@@ -831,18 +847,20 @@ export function ChatPane({
           <MessageScroller>
             <MessageScrollerViewport>
               <MessageScrollerContent className="mx-auto w-full max-w-4xl gap-4 px-3 py-5">
-                {items.map((item) => item.kind === 'entry'
+                {items.map((item) => item.kind === 'fold'
                   ? (
-                    <MessageScrollerItem key={item.entry.id} scrollAnchor={isScrollAnchor(item.entry)}>
-                      <EntryView entry={item.entry} transcript={model} actions={actions} isStreaming={item.entry.id === streamingId} />
+                    <MessageScrollerItem key={item.id}>
+                      <TurnFoldView
+                        fold={item}
+                        open={openFolds?.has(item.id) ?? false}
+                        onOpenChange={(open) => setFoldOpen(item.id, open)}
+                        renderItem={renderItem}
+                      />
                     </MessageScrollerItem>
                   )
                   : (
-                    <MessageScrollerItem key={item.id}>
-                      <WorkRunView
-                        run={item}
-                        renderEntry={(entry) => <EntryView entry={entry} transcript={model} actions={actions} isStreaming={entry.id === streamingId} />}
-                      />
+                    <MessageScrollerItem key={shownItemKey(item)} scrollAnchor={item.kind === 'entry' && isScrollAnchor(item.entry)}>
+                      {renderItem(item)}
                     </MessageScrollerItem>
                   ))}
                 {model.entries.length === 0 && (

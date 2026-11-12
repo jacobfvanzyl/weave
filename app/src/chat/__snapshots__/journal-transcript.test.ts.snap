@@ -166,6 +166,75 @@ exports[`transcripts from recorded journals > shows the modes journal the same l
 assistant: I switched to code mode."
 `;
 
+exports[`transcripts from recorded journals > shows the narrate journal the same live and replayed 1`] = `
+"user (from the TUI): /narrate
+assistant: I'll read the parser and find where it loads its fixtures.
+tool read completed: Read src/parser.rs
+  const FIXTURES: &str = "fixtures";
+
+tool search completed: Search fixtures/
+  src/parser.rs:1
+assistant: It reads them from the old path. I'll point it at tests/fixtures and run the tests.
+tool edit completed: Edit src/parser.rs
+  diff src/parser.rs: const FIXTURES: &str = "fixtures";
+ → const FIXTURES: &str = "tests/fixtures";
+
+tool execute completed: cargo test -p parser
+  test result: ok
+assistant: Done: the parser reads its fixtures from tests/fixtures, and the tests pass."
+`;
+
+exports[`transcripts from recorded journals > shows the narrate-cancel journal the same live and replayed 1`] = `
+"user (from the TUI): /narrate
+assistant: I'll read the parser and find where it loads its fixtures.
+tool read completed: Read src/parser.rs
+  const FIXTURES: &str = "fixtures";
+
+tool search completed: Search fixtures/
+  src/parser.rs:1
+assistant: It reads them from the old path. I'll point it at tests/fixtures and run the tests.
+info: Turn cancelled"
+`;
+
+exports[`transcripts from recorded journals > shows the narrate-fail journal the same live and replayed 1`] = `
+"user (from the TUI): /narrate fail
+assistant: I'll read the parser and find where it loads its fixtures.
+tool read completed: Read src/parser.rs
+  const FIXTURES: &str = "fixtures";
+
+tool search completed: Search fixtures/
+  src/parser.rs:1
+assistant: It reads them from the old path. I'll point it at tests/fixtures and run the tests.
+tool edit completed: Edit src/parser.rs
+  diff src/parser.rs: const FIXTURES: &str = "fixtures";
+ → const FIXTURES: &str = "tests/fixtures";
+
+tool execute completed: cargo test -p parser
+  test result: ok
+error: Turn failed — Internal error"
+`;
+
+exports[`transcripts from recorded journals > shows the narrate-steer journal the same live and replayed 1`] = `
+"user (from the TUI): /narrate
+assistant: I'll read the parser and find where it loads its fixtures.
+tool read completed: Read src/parser.rs
+  const FIXTURES: &str = "fixtures";
+
+user (steer) (from the TUI): And check the lexer too.
+tool search completed: Search for And check the lexer too.
+  src/parser.rs:12
+tool search completed: Search fixtures/
+  src/parser.rs:1
+assistant: It reads them from the old path. I'll point it at tests/fixtures and run the tests.
+tool edit completed: Edit src/parser.rs
+  diff src/parser.rs: const FIXTURES: &str = "fixtures";
+ → const FIXTURES: &str = "tests/fixtures";
+
+tool execute completed: cargo test -p parser
+  test result: ok
+assistant: Done: the parser reads its fixtures from tests/fixtures, and the tests pass. I looked into what you added too: And check the lexer too."
+`;
+
 exports[`transcripts from recorded journals > shows the notice journal the same live and replayed 1`] = `
 "user (from the TUI): /mcp-legacy
 info: This agent's MCP client predates MCP 2026-07-28, so it can't use weave's tools.

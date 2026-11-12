@@ -61,6 +61,22 @@ const scripts: Record<string, Script> = {
     await thread.local.request('turn/cancel', { threadId: thread.id });
     await ended;
   },
+  // A turn told as it goes, which the app folds once it ends (WVE-218): as it is, steered and
+  // cancelled after its first tool call, and failing after its work.
+  narrate: (thread) => thread.prompt('/narrate'),
+  'narrate-steer': async (thread) => {
+    const ended = thread.prompt('/narrate');
+    await Bun.sleep(1_300);
+    await thread.local.request('turn/steer', { threadId: thread.id, prompt: text('And check the lexer too.') });
+    await ended;
+  },
+  'narrate-cancel': async (thread) => {
+    const ended = thread.prompt('/narrate');
+    await Bun.sleep(2_600);
+    await thread.local.request('turn/cancel', { threadId: thread.id });
+    await ended;
+  },
+  'narrate-fail': (thread) => thread.prompt('/narrate fail'),
   modes: (thread) => thread.prompt('/switch-mode'),
   notice: async (thread) => {
     await thread.prompt('/mcp-legacy');
