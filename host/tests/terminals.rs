@@ -336,7 +336,7 @@ impl Owner for FakeOwner {
 
 #[tokio::test]
 async fn a_host_without_an_owner_has_no_terminals() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = home();
     let daemon = daemon(dir.path(), None);
     let client = client(&daemon).await;
     assert!(
@@ -358,7 +358,7 @@ async fn a_host_without_an_owner_has_no_terminals() {
 
 #[tokio::test]
 async fn terminals_through_the_host_with_an_owner_that_isnt_a_holder() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = home();
     let repo = repository(dir.path());
     let daemon = daemon(dir.path(), Some(Arc::new(FakeOwner::default())));
     let mut client = client(&daemon).await;
@@ -444,7 +444,7 @@ async fn terminals_through_the_host_with_an_owner_that_isnt_a_holder() {
 
 #[tokio::test]
 async fn a_worktree_with_a_terminal_running_a_command_isnt_released() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = home();
     let repo = repository(dir.path());
     let running = daemon(dir.path(), Some(Arc::new(FakeOwner::running())));
     let client_ = client(&running).await;
@@ -508,6 +508,73 @@ fn holder_binary() -> PathBuf {
         .clone()
 }
 
+/// A test's directory, which ends the holders left under it when the test ends, passing or
+/// not (WVE-186): a holder outlives its Host by design, so one a test didn't close, or
+/// panicked before closing, would run on, holding a shell in a directory that's gone.
+struct Home(tempfile::TempDir);
+
+fn home() -> Home {
+    Home(tempfile::tempdir().expect("tempdir"))
+}
+
+impl Home {
+    fn path(&self) -> &Path {
+        self.0.path()
+    }
+
+    /// The processes of the holders with a record here, and their shells.
+    fn holders(&self) -> Vec<(libc::pid_t, Option<libc::pid_t>)> {
+        let Ok(entries) = std::fs::read_dir(self.path().join("terminals")) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
+            .filter(|path| !path.to_string_lossy().ends_with(".env.json"))
+            .filter_map(|path| std::fs::read(path).ok())
+            .filter_map(|record| serde_json::from_slice::<Value>(&record).ok())
+            .filter_map(|record| {
+                let pid = |key: &str| {
+                    record[key]
+                        .as_i64()
+                        .and_then(|pid| libc::pid_t::try_from(pid).ok())
+                        .filter(|pid| *pid > 1)
+                };
+                Some((pid("pid")?, pid("child")))
+            })
+            .collect()
+    }
+}
+
+impl Drop for Home {
+    fn drop(&mut self) {
+        let holders = self.holders();
+        let running = |pid: libc::pid_t| unsafe { libc::kill(pid, 0) } == 0;
+        for (holder, _) in &holders {
+            unsafe { libc::kill(*holder, libc::SIGTERM) };
+        }
+        // A holder hangs its shell up and goes; one that doesn't is killed, with its shell.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while holders.iter().any(|(holder, _)| running(*holder))
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        for (holder, shell) in holders {
+            if running(holder) {
+                unsafe { libc::kill(holder, libc::SIGKILL) };
+                if let Some(shell) = shell {
+                    unsafe { libc::kill(shell, libc::SIGKILL) };
+                }
+            }
+        }
+    }
+}
+
 fn holders(dir: &Path) -> Arc<dyn Owner> {
     Arc::new(
         Holders::new(dir.join("terminals"), holder_binary(), Launch::Spawn)
@@ -517,7 +584,7 @@ fn holders(dir: &Path) -> Arc<dyn Owner> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_terminal_in_a_holder_outlives_the_host_that_started_it() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = home();
     let cwd = dir.path().canonicalize().expect("canonical");
     let first = daemon(dir.path(), Some(holders(dir.path())));
     let client_ = client(&first).await;
@@ -592,7 +659,7 @@ async fn a_terminal_in_a_holder_outlives_the_host_that_started_it() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_holder_that_died_is_forgotten() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = home();
     let terminals = dir.path().join("terminals");
     std::fs::create_dir_all(&terminals).expect("the holders' directory");
     std::fs::write(terminals.join("tdead.json"), r#"{"id": "tdead"}"#).expect("a record");
@@ -730,7 +797,7 @@ async fn read_until<S: Stream>(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stream_relays_a_holders_terminal_to_a_ticket() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = home();
     let cwd = dir.path().canonicalize().expect("canonical");
     let daemon = daemon(dir.path(), Some(holders(dir.path())));
     let url = listen(&daemon, dir.path());
@@ -839,7 +906,7 @@ async fn a_stream_relays_a_holders_terminal_to_a_ticket() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_local_client_streams_on_the_terminal_socket_with_history_and_asks_again() {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = home();
     let cwd = dir.path().canonicalize().expect("canonical");
     let daemon = daemon(dir.path(), Some(holders(dir.path())));
     let socket_path = dir.path().join("terminals.sock");
@@ -935,7 +1002,7 @@ async fn a_local_client_streams_on_the_terminal_socket_with_history_and_asks_aga
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_last_device_to_type_sets_the_size() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = home();
     let cwd = dir.path().canonicalize().expect("canonical");
     let daemon = daemon(dir.path(), Some(holders(dir.path())));
     let url = listen(&daemon, dir.path());
@@ -1019,7 +1086,7 @@ async fn the_last_device_to_type_sets_the_size() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stream_without_a_good_ticket_is_closed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = home();
     let daemon = daemon(dir.path(), Some(Arc::new(FakeOwner::default())));
     let url = listen(&daemon, dir.path());
     let mut socket = stream(&url, "made-up", (80, 24), "x").await;
