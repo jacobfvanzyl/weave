@@ -248,7 +248,7 @@ client of the Host (`host-client/`), the `weave` binary (`cli/`), the TUI (`tui/
 agent for tests (`fake-agent/`). [`AGENTS.md`](AGENTS.md) says what each owns, and
 [`CONTEXT.md`](CONTEXT.md) is the glossary.
 
-[The weave app](app/AGENTS.md), a client of the Host for iPad and iPhone, lives in `app/`
+[The weave app](app/AGENTS.md), a client of the Host for the Mac, iPad and iPhone, lives in `app/`
 (WVE-91). The independent [mobile trackpad and Pencil tablet project](trackpad/README.md) lives in
 `trackpad/` (WVE-81), with its own native build.
 

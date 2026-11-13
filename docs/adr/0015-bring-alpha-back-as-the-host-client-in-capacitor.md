@@ -1,5 +1,5 @@
 ---
-status: accepted; amended by ADR 0032: the app runs on the Mac in Tauri, and the iPad and iPhone keep Capacitor
+status: accepted; amended by ADR 0032: the app runs on the Mac in Tauri, and the iPad and iPhone keep Capacitor; amended by ADR 0033: they run the Mac's Tauri shell, and Capacitor goes
 date: 2026-10-20
 ---
 

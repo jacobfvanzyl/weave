@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; superseded for the iPad and iPhone by ADR 0033: they run the Mac's Tauri shell, and Capacitor goes
 date: 2026-11-08
 ---
 

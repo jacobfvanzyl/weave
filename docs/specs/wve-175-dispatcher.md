@@ -420,7 +420,11 @@ every Host; Hosts know nothing of them, and the Host protocol is unchanged.
   `weave_host_protocol::projects::containing(projects, hostId, listing)`: the Project with a
   location on the thread's Host that is the thread's repository (`git.repo`) or contains its
   directory, the deepest winning.
-- **Not yet:** `projects/watch`; clients list once (WVE-203 adds watching for the app).
+- **The app** adds, renames, relocates and removes Projects as the CLI does (WVE-220): it asks
+  the Host where a directory lies in git (`worktrees/list`), offers a clone to the Project with
+  its remote, and puts the Project each request answers with in its own list.
+- **Not yet:** `projects/watch`; clients list once, so one client's change shows in another
+  when it next lists.
 
 ## Bots
 
@@ -1129,8 +1133,8 @@ another's it said what to run there. The Bot's Host makes it now, wherever the C
   it; a network dropped mid-turn and a Host restarting, caught up with nothing missing or
   repeated; the Dispatcher stopping and starting again, its last Hosts shown meanwhile; a Host it
   can't reach, and one it removes; a revoked device; a terminal's stream through it. The app's
-  unit tests do the same against a scripted Dispatcher, and `app/scripts/terminal-check.ts` runs
-  the native terminal through a dev Dispatcher in a simulator.
+  unit tests do the same against a scripted Dispatcher, and the shell's core has its own
+  (`app/src-tauri/tests/relay.rs`), terminals' streams through a dev Dispatcher included.
 - `tests/projects.rs` (WVE-189), two Hosts, through the socket and through a paired device: a
   Project added, renamed, given a second Host's location and removed; a name taken ignoring
   case, a second location on one Host and a clone of another repository refused; a directory
@@ -1223,5 +1227,5 @@ another's it said what to run there. The Bot's Host makes it now, wherever the C
 - Choosing the Host a piece of work runs on, which a delivery's Host can become a rule for, and
   a Bot moving to another Host ([Not yet](#not-yet), WVE-217).
 - What Bots don't do yet ([Not yet](#not-yet)).
-- Projects: `projects/watch` and the app's Projects (WVE-203), agents naming Projects through the
+- Projects: `projects/watch`, agents naming Projects through the
   Host tools (WVE-208), and Sessions of a Project's worktrees (WVE-202).

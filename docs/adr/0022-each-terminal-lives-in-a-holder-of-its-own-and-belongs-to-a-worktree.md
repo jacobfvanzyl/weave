@@ -1,5 +1,5 @@
 ---
-status: accepted; terminals at the desk, as Rex panes beside the TUI, amended on 2026-11-01 (WVE-167); amended by ADR 0031: a Session's layout, kept by its Host, places terminals, and closing a terminal's Block hides it; amended by ADR 0032: the Mac draws terminals in its web view
+status: accepted; terminals at the desk, as Rex panes beside the TUI, amended on 2026-11-01 (WVE-167); amended by ADR 0031: a Session's layout, kept by its Host, places terminals, and closing a terminal's Block hides it; amended by ADR 0032: the Mac draws terminals in its web view; amended by ADR 0033: so do the iPad and iPhone
 date: 2026-10-25
 ---
 
