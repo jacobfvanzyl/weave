@@ -1211,6 +1211,15 @@ export type OccurrenceState = "skipped" | "waiting" | "started" | "finished" | "
  */
 export type ProjectKind = "git" | "directory";
 /**
+ * The colours a Bot's avatar is drawn on (WVE-223), by name: each client draws them in its own
+ * theme's.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "BotColor".
+ */
+export type BotColor =
+  "white" | "brown" | "red" | "orange" | "yellow" | "green" | "teal" | "blue" | "purple" | "pink" | "gray";
+/**
  * What a Bot's current thread is doing, as the Dispatcher last saw it on the Bot's Host.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -8070,6 +8079,14 @@ export interface Bot {
    * ignoring case.
    */
   name: string;
+  /**
+   * Its avatar's emoji (feature `bots_avatar`); absent until it's given one.
+   */
+  emoji?: string | null;
+  /**
+   * The colour its avatar is drawn on; absent until it's given one.
+   */
+  color?: BotColor | null;
   agentId: string;
   /**
    * The Host its threads run on, which it never leaves.
@@ -8242,6 +8259,11 @@ export interface AddBotRequest {
    * [`DEFAULT_PAUSE_AFTER`] when absent.
    */
   pauseAfter?: number | null;
+  /**
+   * Its avatar's emoji, checked as `bots/update` checks it.
+   */
+  emoji?: string | null;
+  color?: BotColor | null;
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -8256,8 +8278,10 @@ export interface AddBotResponse {
 }
 /**
  * `bots/update`: change what's given, all or none, checked as `bots/add` checks it. A policy
- * or mode applies to threads started from then on: an open thread keeps its own. `mode` and
- * `newThreadAt` are cleared with `null`.
+ * or mode applies to threads started from then on: an open thread keeps its own. `mode`,
+ * `newThreadAt`, `emoji` and `color` are cleared with `null`. An `emoji` (feature
+ * `bots_avatar`) is invalid params when it's empty, longer than [`MAX_BOT_EMOJI`] bytes, or has
+ * a space, a letter or digit of ASCII, or a control character in it.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "UpdateBotRequest".
@@ -8273,6 +8297,8 @@ export interface UpdateBotRequest {
   newThreadAt?: string | null;
   zone?: string | null;
   pauseAfter?: number | null;
+  emoji?: string | null;
+  color?: BotColor | null;
 }
 /**
  * `bots/remove`: forget a Bot, by id or name, its schedules and the prompts still waiting for
@@ -8330,6 +8356,14 @@ export interface Bot1 {
    * ignoring case.
    */
   name: string;
+  /**
+   * Its avatar's emoji (feature `bots_avatar`); absent until it's given one.
+   */
+  emoji?: string | null;
+  /**
+   * The colour its avatar is drawn on; absent until it's given one.
+   */
+  color?: BotColor | null;
   agentId: string;
   /**
    * The Host its threads run on, which it never leaves.
@@ -8543,7 +8577,8 @@ export const HOST_PROTOCOL = {
       "projects": "projects",
       "bots": "bots",
       "botsHome": "bots_home",
-      "botsWatch": "bots_watch"
+      "botsWatch": "bots_watch",
+      "botsAvatar": "bots_avatar"
     },
     "defaultPauseAfter": 43200000
   },

@@ -192,7 +192,7 @@ export function NewSessionDialog({ controller, sessions, target, onClose, onCrea
                     row.kind !== 'project' && rows[index - 1]?.kind === 'project' && 'mt-1')}
                   onPointerMove={() => setPicked(index)} onClick={() => pick(row)}>
                   <HugeiconsIcon icon={row.kind === 'project' ? Folder01Icon : row.kind === 'add' ? FolderAddIcon : FolderOpenIcon} strokeWidth={1.75}
-                    className='size-3.5 shrink-0 text-icon-muted' aria-hidden />
+                    className={cn('size-3.5 shrink-0', row.kind === 'project' ? 'text-green' : 'text-icon-muted')} aria-hidden />
                   {row.kind === 'project'
                     ? (
                       <>
@@ -236,7 +236,7 @@ export function NewSessionDialog({ controller, sessions, target, onClose, onCrea
           {lists && (
             <div className='grid gap-1.5'>
               <Label htmlFor='new-session-project'>Project</Label>
-              <PickerField id='new-session-project' icon={project ? Folder01Icon : FolderOpenIcon} onOpen={() => setView('projects')}>
+              <PickerField id='new-session-project' icon={project ? Folder01Icon : FolderOpenIcon} iconClassName={project ? 'text-green' : undefined} onOpen={() => setView('projects')}>
                 {project ? <span className='min-w-0 truncate font-medium'>{project.name}</span> : <span className='text-muted-foreground'>None: another directory</span>}
               </PickerField>
             </div>

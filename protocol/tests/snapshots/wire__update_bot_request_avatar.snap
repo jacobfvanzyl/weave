@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&UpdateBotRequest\n{\n    bot: \"odin\".to_owned(), emoji: Some(None), color:\n    Some(Some(BotColor::Purple)), ..UpdateBotRequest::default()\n})"
+---
+{
+  "method": "bots/update",
+  "params": {
+    "bot": "odin",
+    "emoji": null,
+    "color": "purple"
+  }
+}

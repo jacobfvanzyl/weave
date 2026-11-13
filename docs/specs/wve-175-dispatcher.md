@@ -558,17 +558,18 @@ new one until it's named.
 ### A Bot's tools
 
 The Dispatcher declares its own service tools on every Host that joined it
-([Service tools](wve-85-host-protocol.md#service-tools), WVE-171): ten, all a Bot's. Agents see
+([Service tools](wve-85-host-protocol.md#service-tools), WVE-171): eleven, all a Bot's. Agents see
 them as any service's, `<the Dispatcher's name>__<tool>`, in this order: the wake-ups
 (WVE-118), `wake_me`, `list_wakeups` and `cancel_wakeup`; its schedules (WVE-178),
 `add_schedule`, `list_schedules`, `pause_schedule`, `resume_schedule` and `remove_schedule`; and
-making Bots (WVE-178), `create_bot` and `list_bots`. The rules for all of them:
+making Bots (WVE-178), `create_bot` and `list_bots`, with `set_avatar` (WVE-223) after them. The
+rules for all of them:
 
 - **Only a Bot's own thread** is answered: on the Bot's Host, its current thread, one it had, or
   the new one it's starting. Any other thread gets a tool error saying only a Bot's thread may do
   what the tool does, as every tool's description tells every agent first.
 - **Only the calling Bot.** None changes another Bot, prompts it or schedules it; `create_bot`
-  makes one, and `list_bots` reads them all.
+  makes one, `list_bots` reads them all, and `set_avatar` changes the caller's own.
 - **Answers** are JSON text. A call refused, by the tool or by the API under it, is a tool error
   in words for the agent: the API's reason made a sentence.
 - **New tools come with new threads.** A thread keeps the tools it was set up with
@@ -657,9 +658,13 @@ the CLI, or asks one of their Bots for another (ADR 0028).
   it's for, and says so when its home kept files that were there, so its job isn't written down,
   or its first memory files went uncommitted.
 - `list_bots {}`: the person's Bots, by name, `{bots}`, each `{name, agent, host, home, state,
-  paused?, madeBy?, you?}`: `host` by its name, `home` whole, `state` `working`, `needsYou` or
-  `idle`, `paused` why its schedules are, `madeBy` the Bot that made it by name, or "a Bot since
-  removed", and `you` on the calling Bot.
+  paused?, emoji?, color?, madeBy?, you?}`: `host` by its name, `home` whole, `state` `working`,
+  `needsYou` or `idle`, `paused` why its schedules are, `emoji` and `color` its avatar's, `madeBy`
+  the Bot that made it by name, or "a Bot since removed", and `you` on the calling Bot.
+- `set_avatar {emoji?, color?}` (WVE-223): the calling Bot's own avatar, changed as `bots/update`
+  changes it, when the person asks. What's absent stays, `null` clears it, and one of them is
+  needed. `color` is one of the eleven names; another doesn't fit the tool's input. It answers
+  with the Bot as `list_bots` gives it.
 
 The rules:
 
@@ -715,6 +720,11 @@ The app shows the Bots from a Dispatcher that keeps them (WVE-178, ADR 0031), wa
   removed, its Session is an ordinary one, under its Host.
 - **Before its first thread** the Bot shows an empty conversation, whose first prompt goes
   through `bots/send` and starts the thread; the Session is made once the Bot lists it.
+- **Its avatar** (WVE-223) is its emoji on its colour, in a circle, in its row in the list, atop
+  its Session and on its page, with the robot for one with no emoji and a neutral circle for one
+  with no colour. Its page's avatar opens a picker, on a Dispatcher with `bots_avatar`: emoji to
+  pick from or type, the eleven colours, and Reset, each pick saved as it's made. Shapes, pictures
+  and animation, as Grok Bot's avatars have, are left for later.
 - **Its page,** from its name: its settings, changed with `bots/update` (name, mode, a new thread
   daily and how long a request may wait), its policy, shown only; its schedules and wake-ups,
   each paused or resumed, run now or removed, with no form to add one; its earlier threads,
@@ -765,8 +775,9 @@ and none on the socket; `device` is the paired device a WebSocket client connect
 (WVE-189); `bots` for `bots/*`, `schedules/add`'s `bot` and `at`, and what `Schedule` says
 of them (WVE-118); `bots_home` for `bots/add` having the Bot's Host make its home, without
 `home` for `~/bots/<name>`, with `job`, answering what making it did, `Bot`'s `createdBy` and
-`createdByName`, and `schedules/list`'s `bot` (WVE-178); and `bots_watch` for `bots/watch` and
-`bots/unwatch` (WVE-178). One from before them says none, and the API's version stays 2; the CLI
+`createdByName`, and `schedules/list`'s `bot` (WVE-178); `bots_watch` for `bots/watch` and
+`bots/unwatch` (WVE-178); and `bots_avatar` for a Bot's `emoji` and `color`, which `bots/add` and
+`bots/update` take (WVE-223). One from before them says none, and the API's version stays 2; the CLI
 says such a Dispatcher is older than what it asks for, and to update it.
 
 **`dispatcher/status`** `{}` → `{version, pid, startedAt, name, database, pending, id, remote?,
@@ -929,6 +940,8 @@ Forgets it and its locations; what's in its directories stays.
 type Bot = {
   id: string;                 // "b-" and 20 hex digits
   name: string;
+  emoji?: string;             // its avatar's emoji, once given one (feature bots_avatar)
+  color?: BotColor;           // the colour its avatar is drawn on, once given one
   agentId: string;
   hostId: string;
   hostName: string;           // what the Dispatcher calls its Host now
@@ -950,6 +963,9 @@ type Bot = {
   createdBy?: string;         // the Bot that made it, by id, when one did (feature bots_home)
   createdByName?: string;     // that Bot's name now; absent once it's gone
 };
+
+type BotColor = "white" | "brown" | "red" | "orange" | "yellow" | "green" | "teal" | "blue"
+  | "purple" | "pink" | "gray";   // by name: each client draws them in its own theme's
 ```
 
 By name. Only with the `bots` feature, as are the rest.
@@ -959,7 +975,7 @@ By name. Only with the `bots` feature, as are the rest.
 By id or name, ignoring case; invalid params, "there's no Bot …", for none.
 
 **`bots/add`** `{name, host, agentId, home?, job?, policy?, mode?, newThreadAt?, zone?,
-pauseAfter?}` → `{bot, home?}`
+pauseAfter?, emoji?, color?}` → `{bot, home?}`
 
 A new Bot, with no thread yet ([Bots](#bots)), whose Host makes its home first (feature
 `bots_home`, WVE-178; [Its home](#its-home)). `home` is `~/bots/<name>` when absent, the name
@@ -974,16 +990,21 @@ the Bot's `home` is that directory.
 Invalid params, saying why, for an empty name or one of more than one line, a name another Bot
 has ignoring case, a Host that hasn't joined, an empty agent, a home neither whole nor under
 `~`, a name that makes no directory name without a `home`, a zone that doesn't parse, or a
-`newThreadAt` that isn't `HH:MM`; then `host_unavailable` while the Host isn't connected, or the
+`newThreadAt` that isn't `HH:MM`, or an `emoji` `bots/update` would refuse; then `host_unavailable` while the Host isn't connected, or the
 Dispatcher's request to it fails on the way, and invalid params when its weave is too old to
 make a home (no `repos_init`) or it refuses, as for a directory inside another repository,
 saying why in its words. No Bot is added then, and for any of the first, nothing is made. Before
 `bots_home`, `home` was needed and `{bot}` the answer, and the CLI made the home itself.
 
-**`bots/update`** `{bot, name?, policy?, mode?, newThreadAt?, zone?, pauseAfter?}` → `{bot}`
+**`bots/update`** `{bot, name?, policy?, mode?, newThreadAt?, zone?, pauseAfter?, emoji?,
+color?}` → `{bot}`
 
 All or none, checked as `bots/add` checks them. Absent leaves a field as it is; `null` clears
-`mode` and `newThreadAt`. A policy or mode applies to threads started from then on. A changed
+`mode`, `newThreadAt`, `emoji` and `color`. An `emoji` (feature `bots_avatar`, WVE-223) is
+trimmed, and invalid params when it's empty, longer than 64 bytes, or has a space, an ASCII
+letter or digit, or a control character in it: the Dispatcher takes it for one emoji, whatever
+that's made of, and doesn't check further. A policy or mode applies to threads started from then
+on. A changed
 `newThreadAt` or `zone` is considered from then, so it doesn't start a missed one. `updatedAt`
 moves when anything changed.
 
@@ -1048,9 +1069,9 @@ come before it, and is newer than it.
 | `weave --project <p>`, `weave run --project <p>`, `weave schedules add --project <p>` | work in the Project's location on the Host in question: `--host`'s, or this computer's without it (`schedules add` always names one), a git Project's primary worktree. Never another Host's: a Project with no location there is refused, saying where it is and `weave projects add --to <p> [--host <h>] <dir>`. Refused with `--cwd`. While the Dispatcher doesn't answer, it goes by the last list |
 | `weave threads [list] --project <p> [--host <h>]` | only the threads `containing` places in that Project on that Host, the thread's Host id from its hello |
 | `weave bots [list] [--json]` | the Bots, a line each: its state, agent, Host, and thread or none yet, and "made by" the Bot that made it, if one did |
-| `weave bots add <name> --agent <id> [--host <host>] [--home <dir>] [--job <text>] [--approve <kinds>] [--mode] [--new-thread-at HH:MM] [--zone] [--pause-after <duration>] [--json]` | adds a Bot on this computer's Host, or `--host`'s, whose Host makes its home first ([Its home](#its-home)), here or on another computer alike, and says what that did (on stderr with `--json`). `--home` is `~/bots/<name>` when omitted; a directory there, whole or `~/…`, and on this computer's Host one relative to this directory too. `--job` is what it's for, which its first `AGENTS.md` says. `--approve` names what its threads approve without asking, as `weave run`'s does, and it asks about the rest; `--pause-after` takes `90s`, `30m`, `12h`. A Dispatcher without `bots_home` is said to need updating (WVE-178) |
+| `weave bots add <name> --agent <id> [--host <host>] [--home <dir>] [--job <text>] [--approve <kinds>] [--mode] [--new-thread-at HH:MM] [--zone] [--pause-after <duration>] [--emoji] [--color] [--json]` | adds a Bot on this computer's Host, or `--host`'s, whose Host makes its home first ([Its home](#its-home)), here or on another computer alike, and says what that did (on stderr with `--json`). `--home` is `~/bots/<name>` when omitted; a directory there, whole or `~/…`, and on this computer's Host one relative to this directory too. `--job` is what it's for, which its first `AGENTS.md` says. `--approve` names what its threads approve without asking, as `weave run`'s does, and it asks about the rest; `--pause-after` takes `90s`, `30m`, `12h`. A Dispatcher without `bots_home` is said to need updating (WVE-178) |
 | `weave bots show <bot> [--json]` | one, by the flags that set it: its threads, its schedules (`schedules/list` with `bot`), wake-ups said to be its own, and the Bot that made it |
-| `weave bots update <bot> [--name] [--approve <kinds> \| --no-approve] [--mode \| --no-mode] [--new-thread-at HH:MM \| --no-new-thread-at] [--zone] [--pause-after] [--json]` | `bots/update`, refused with nothing to change; it says when the thread it has open keeps the approvals and mode it started with |
+| `weave bots update <bot> [--name] [--approve <kinds> \| --no-approve] [--mode \| --no-mode] [--new-thread-at HH:MM \| --no-new-thread-at] [--zone] [--pause-after] [--emoji] [--color] [--no-avatar] [--json]` | `bots/update`, refused with nothing to change; `--color` is one of the eleven names, and `--no-avatar` clears both; it says when the thread it has open keeps the approvals and mode it started with |
 | `weave bots remove <bot> [--json]` | forgets it and its schedules, saying its threads and home stay where they are; `--json` prints `{}` |
 | `weave bots send <bot> [<prompt>…] [--key <key>] [--json]` | `bots/send`, the prompt read from stdin when omitted or `-`; it says where the prompt goes: into the thread, after the turn running there, starting the first, or waiting for a new thread or for the Bot's Host |
 | `weave bots new-thread <bot> [--json]` | `bots/newThread`, saying what happens next |
@@ -1191,7 +1212,9 @@ another's it said what to run there. The Bot's Host makes it now, wherever the C
   for a Bot listing only its schedules, its wake-ups too; a Bot's thread making another with
   `create_bot`, its maker, home, job, agent and zone recorded and nothing else happening until
   the person prompts it, watchers hearing of it, `list_bots` listing both, and what `bots/add`
-  refuses coming back as the tool's error; a thread that isn't a Bot's refused by every new tool;
+  refuses coming back as the tool's error; a Bot's avatar, each part given, changed and cleared
+  alone, a word for an emoji refused with nothing changed, and the Bot setting its own with
+  `set_avatar` and no other's (WVE-223); a thread that isn't a Bot's refused by every new tool;
   a Bot making another only while there are fewer than 20, the person adding one regardless; a
   Bot adding a schedule of its own, listing it with the person's for it but not its wake-ups or
   another Bot's, it coming into the Bot's thread at its time with its origin saying the Bot made

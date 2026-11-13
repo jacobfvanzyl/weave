@@ -10,7 +10,7 @@ import { HostStore } from './host-store';
 import { type DispatcherRecord, memoryStorage } from './storage';
 
 const PAIRED: DispatcherRecord = { dispatcherId: 'dispatcher-1', name: 'homelab', url: 'wss://homelab', deviceId: 'd-1', keyId: 'k' };
-const { bots: BOTS, botsHome: BOTS_HOME, botsWatch: BOTS_WATCH } = HOST_PROTOCOL.dispatcher.features;
+const { bots: BOTS, botsHome: BOTS_HOME, botsWatch: BOTS_WATCH, botsAvatar: BOTS_AVATAR } = HOST_PROTOCOL.dispatcher.features;
 
 const bot = (id: string, name: string, change: Partial<Bot> = {}): Bot => ({
   id, name, agentId: 'claude', hostId: 'host-1', hostName: 'mac', connected: true, home: `/home/jaco/bots/${name.toLowerCase()}`,
@@ -113,6 +113,39 @@ describe("the store's Bots", () => {
     expect(store.snapshot().bots).toBeUndefined();
     expect(dispatcher.asked.filter((method) => method.startsWith('bots/'))).toEqual([]);
     store.stop();
+  });
+
+  it("keeps a Bot's avatar, and sends a change to it, where the Dispatcher keeps avatars", async () => {
+    const sent: unknown[] = [];
+    const answer = (method: string, params: unknown) => {
+      if (method === 'bots/watch') return { bots: [bot('b-1', 'Scout', { emoji: '🦉', color: 'purple' }), bot('b-2', 'Plain')] };
+      if (method === 'bots/update') {
+        sent.push(params);
+        return { bot: bot('b-1', 'Scout', { color: 'teal' }) };
+      }
+      return undefined;
+    };
+    const dispatcher = scriptedDispatcher([BOTS, BOTS_WATCH, BOTS_AVATAR], answer);
+    const store = storeFor(dispatcher.socket);
+    await store.start();
+    await settle();
+    expect(store.snapshot().canSetBotAvatars).toBe(true);
+    expect(store.snapshot().bots?.map(({ name, emoji, color }) => ({ name, emoji, color }))).toEqual([
+      { name: 'Plain', emoji: undefined, color: undefined },
+      { name: 'Scout', emoji: '🦉', color: 'purple' },
+    ]);
+    await store.actions.updateBot?.('b-1', { emoji: null, color: 'teal' });
+    expect(sent).toEqual([{ bot: 'b-1', emoji: null, color: 'teal' }]);
+    const scout = store.snapshot().bots?.find(({ id }) => id === 'b-1');
+    expect([scout?.emoji, scout?.color]).toEqual([undefined, 'teal']);
+    store.stop();
+
+    const older = scriptedDispatcher([BOTS, BOTS_WATCH], answer);
+    const before = storeFor(older.socket);
+    await before.start();
+    await settle();
+    expect(before.snapshot().canSetBotAvatars).toBeUndefined();
+    before.stop();
   });
 
   it("asks the Dispatcher to add, change and remove one, saying why when it won't", async () => {

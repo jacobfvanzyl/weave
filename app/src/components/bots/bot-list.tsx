@@ -1,8 +1,9 @@
 // The Bots in the list of Sessions (WVE-178): a group above the Projects, a row for each Bot, as a
 // chat app lists its conversations, with what it's doing. A Bot's Session is listed here only.
 import { HugeiconsIcon } from '@hugeicons/react';
-import { Add01Icon, BotIcon } from '@hugeicons/core-free-icons';
+import { Add01Icon } from '@hugeicons/core-free-icons';
 import type { BotSummary } from '@/app/app-controller';
+import { BotAvatar } from '@/components/bots/bot-avatar';
 import { SidebarGroup, SidebarGroupAction, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar';
 import { cn } from '@/lib/utils';
 import { type BotRowState, botRowState, botStateLabel } from '@/session/bots';
@@ -40,10 +41,9 @@ function BotRow({ bot, unread, selected, onOpen }: { bot: BotSummary; unread: Re
         className={cn('h-auto min-h-11 gap-2.5 rounded-xl border border-transparent py-1.5 pl-1.5 data-active:border-sidebar-border', state === 'away' && 'opacity-60')}
         title={state === 'away' ? `${bot.hostName} isn't connected to the Dispatcher.` : undefined}
         onClick={onOpen}>
-        <span className='relative grid size-7 shrink-0 place-items-center rounded-full border border-sidebar-border bg-sidebar-accent text-sidebar-foreground/80'>
-          <HugeiconsIcon icon={BotIcon} strokeWidth={2} className='size-3.5!' aria-hidden />
+        <BotAvatar bot={bot} className='border-sidebar-border bg-sidebar-accent text-sidebar-foreground/80'>
           <BotStateDot state={state} className='absolute -top-0.5 -right-0.5 size-2.5 ring-2 ring-sidebar' />
-        </span>
+        </BotAvatar>
         <span className='flex min-w-0 flex-1 flex-col gap-0.5'>
           <span className={cn('truncate text-sidebar-foreground', state === 'unread' || state === 'needsYou' ? 'font-semibold' : 'font-medium')}>{bot.name}</span>
           <span className={cn('truncate text-[0.6875rem]', state === 'needsYou' ? 'text-warning' : 'text-muted-foreground')}>{detail}</span>
@@ -75,12 +75,12 @@ export function BotList({ bots, unread, canAdd, canStart, query, selected, onOpe
   if (filter && shown.length === 0) return null;
   return (
     <SidebarGroup role='group' aria-label='Bots' data-slot='bot-list' className='py-1.5'>
-      <SidebarGroupLabel className='h-9 gap-2 pr-9 text-sm font-medium text-sidebar-foreground [&>svg]:size-4.5'>
-        <HugeiconsIcon icon={BotIcon} strokeWidth={1.75} className='text-icon-muted' aria-hidden />
+      {/* A section's title, as Projects' is (WVE-223). */}
+      <SidebarGroupLabel className='h-8 px-2 text-[0.6875rem] font-medium tracking-wide text-muted-foreground'>
         <span className='min-w-0 truncate'>Bots</span>
       </SidebarGroupLabel>
       {canAdd && (
-        <SidebarGroupAction aria-label='New Bot' title='New Bot' className='top-3.5 right-2.5' disabled={!canStart} onClick={onNewBot}>
+        <SidebarGroupAction aria-label='New Bot' title='New Bot' className='top-3 right-2.5 text-muted-foreground' disabled={!canStart} onClick={onNewBot}>
           <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
         </SidebarGroupAction>
       )}

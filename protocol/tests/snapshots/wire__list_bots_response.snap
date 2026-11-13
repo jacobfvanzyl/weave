@@ -41,6 +41,8 @@ expression: "round_trip(&ListBotsResponse { bots: vec![odin.clone(), new], })"
     {
       "id": "b-0a1b2c3d4e5f60718293",
       "name": "scribe",
+      "emoji": "📝",
+      "color": "teal",
       "agentId": "claude",
       "hostId": "Lw4nB7cR2tY9uI0oP5aS3d",
       "hostName": "homelab",

@@ -11,6 +11,7 @@ use rusqlite::Connection;
 use rusqlite::OptionalExtension as _;
 use rusqlite::Transaction;
 use rusqlite::params;
+use weave_host_protocol::dispatcher::BotColor;
 use weave_host_protocol::policy::PermissionPolicy;
 
 use super::Delivery;
@@ -49,6 +50,9 @@ impl From<rusqlite::Error> for BotError {
 pub(crate) struct StoredBot {
     pub(crate) id: String,
     pub(crate) name: String,
+    /// Its avatar's emoji and the colour it's drawn on.
+    pub(crate) emoji: Option<String>,
+    pub(crate) color: Option<BotColor>,
     pub(crate) agent_id: String,
     pub(crate) host_id: String,
     pub(crate) home: PathBuf,
@@ -161,6 +165,8 @@ pub(crate) struct NewBot {
     pub(crate) pause_after: u64,
     /// The Bot that makes it, by id, if one does.
     pub(crate) created_by: Option<String>,
+    pub(crate) emoji: Option<String>,
+    pub(crate) color: Option<BotColor>,
 }
 
 /// What `bots/update` changes, checked but for the name.
@@ -172,6 +178,8 @@ pub(crate) struct BotChange {
     pub(crate) new_thread_at: Option<Option<String>>,
     pub(crate) zone: Option<String>,
     pub(crate) pause_after: Option<u64>,
+    pub(crate) emoji: Option<Option<String>>,
+    pub(crate) color: Option<Option<BotColor>>,
 }
 
 impl Store {
@@ -208,8 +216,9 @@ impl Store {
         let created = now_ms();
         transaction.execute(
             "INSERT INTO bots (id, name, agent_id, host_id, home, policy, mode, new_thread_at, \
-             zone, pause_after, new_thread_considered, created_at, updated_at, created_by) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13)",
+             zone, pause_after, new_thread_considered, created_at, updated_at, created_by, emoji, \
+             color) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13, ?14, ?15)",
             params![
                 id,
                 name,
@@ -223,7 +232,9 @@ impl Store {
                 to_sql(new.pause_after),
                 to_sql(now),
                 to_sql(created),
-                new.created_by
+                new.created_by,
+                new.emoji,
+                new.color.map(BotColor::name)
             ],
         )?;
         let bot = find(&transaction, &id)?.ok_or_else(|| missing(&id))?;
@@ -251,7 +262,11 @@ impl Store {
         let new_thread_at = change.new_thread_at.as_ref().unwrap_or(&bot.new_thread_at);
         let zone = change.zone.as_ref().unwrap_or(&bot.zone);
         let pause_after = change.pause_after.unwrap_or(bot.pause_after);
+        let emoji = change.emoji.as_ref().unwrap_or(&bot.emoji);
+        let color = change.color.unwrap_or(bot.color);
         let changed = name != bot.name
+            || *emoji != bot.emoji
+            || color != bot.color
             || *policy != bot.policy
             || *mode != bot.mode
             || *new_thread_at != bot.new_thread_at
@@ -264,8 +279,8 @@ impl Store {
             };
             transaction.execute(
                 "UPDATE bots SET name = ?2, policy = ?3, mode = ?4, new_thread_at = ?5, \
-                 zone = ?6, pause_after = ?7, new_thread_considered = ?8, updated_at = ?9 \
-                 WHERE id = ?1",
+                 zone = ?6, pause_after = ?7, new_thread_considered = ?8, updated_at = ?9, \
+                 emoji = ?10, color = ?11 WHERE id = ?1",
                 params![
                     bot.id,
                     name,
@@ -275,7 +290,9 @@ impl Store {
                     zone,
                     to_sql(pause_after),
                     to_sql(considered),
-                    to_sql(now_ms())
+                    to_sql(now_ms()),
+                    emoji,
+                    color.map(BotColor::name)
                 ],
             )?;
         }
@@ -703,7 +720,7 @@ fn all(connection: &Connection) -> rusqlite::Result<Vec<StoredBot>> {
         "SELECT id, name, agent_id, host_id, home, policy, mode, new_thread_at, zone, \
          pause_after, thread_id, paused, waiting_since, new_thread_considered, new_thread_due, \
          new_threads, created_at, updated_at, created_by, \
-         (SELECT maker.name FROM bots AS maker WHERE maker.id = bots.created_by) \
+         (SELECT maker.name FROM bots AS maker WHERE maker.id = bots.created_by), emoji, color \
          FROM bots ORDER BY name COLLATE NOCASE, id",
     )?;
     let mut bots: Vec<StoredBot> = statement
@@ -729,6 +746,12 @@ fn all(connection: &Connection) -> rusqlite::Result<Vec<StoredBot>> {
                 updated_at: from_sql(row.get(17)?),
                 created_by: row.get(18)?,
                 created_by_name: row.get(19)?,
+                emoji: row.get(20)?,
+                // A colour this Dispatcher doesn't know, as one newer wrote, is none.
+                color: row
+                    .get::<_, Option<String>>(21)?
+                    .as_deref()
+                    .and_then(BotColor::named),
                 threads: Vec::new(),
                 new_thread: None,
             })
@@ -834,6 +857,8 @@ mod tests {
             zone: "UTC".to_owned(),
             pause_after: 1000,
             created_by: None,
+            emoji: None,
+            color: None,
         }
     }
 

@@ -75,6 +75,7 @@ use weave_host_protocol::dispatcher::AddProjectRequest;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
 use weave_host_protocol::dispatcher::BOTS_FEATURE;
 use weave_host_protocol::dispatcher::Bot;
+use weave_host_protocol::dispatcher::BotColor;
 use weave_host_protocol::dispatcher::BotRemovedNotification;
 use weave_host_protocol::dispatcher::BotResponse;
 use weave_host_protocol::dispatcher::BotState;
@@ -2352,6 +2353,8 @@ fn bots() {
     let odin = Bot {
         id: "b-5e1d0c9b8a7f6e5d4c3b".to_owned(),
         name: "odin".to_owned(),
+        emoji: None,
+        color: None,
         agent_id: "claude".to_owned(),
         host_id: "Lw4nB7cR2tY9uI0oP5aS3d".to_owned(),
         host_name: "homelab".to_owned(),
@@ -2387,10 +2390,12 @@ fn bots() {
         created_by: None,
         created_by_name: None,
     };
-    // Made by odin, which another Bot can do (WVE-178).
+    // Made by odin, which another Bot can do (WVE-178), and with an avatar (WVE-223).
     let new = Bot {
         id: "b-0a1b2c3d4e5f60718293".to_owned(),
         name: "scribe".to_owned(),
+        emoji: Some("📝".to_owned()),
+        color: Some(BotColor::Teal),
         home: "/srv/scribe".into(),
         policy: PermissionPolicy::ask(),
         new_thread_at: None,
@@ -2441,6 +2446,8 @@ fn bots() {
             new_thread_at: Some("04:00".to_owned()),
             zone: None,
             pause_after: None,
+            emoji: None,
+            color: None,
         })
     );
     // Its home `~/bots/<name>`, with what it's for (WVE-178).
@@ -2457,6 +2464,8 @@ fn bots() {
             new_thread_at: None,
             zone: None,
             pause_after: None,
+            emoji: Some("📝".to_owned()),
+            color: Some(BotColor::Teal),
         })
     );
     insta::assert_json_snapshot!(
@@ -2506,12 +2515,30 @@ fn bots() {
             new_thread_at: Some(Some("05:30".to_owned())),
             zone: None,
             pause_after: Some(3_600_000),
+            emoji: None,
+            color: None,
+        })
+    );
+    // An avatar's colour given and its emoji cleared (WVE-223).
+    insta::assert_json_snapshot!(
+        "update_bot_request_avatar",
+        message(&UpdateBotRequest {
+            bot: "odin".to_owned(),
+            emoji: Some(None),
+            color: Some(Some(BotColor::Purple)),
+            ..UpdateBotRequest::default()
         })
     );
     // `null` clears; absent leaves it as it is.
     let cleared: UpdateBotRequest =
-        serde_json::from_value(json!({"bot": "odin", "newThreadAt": null})).expect("parses");
+        serde_json::from_value(json!({"bot": "odin", "newThreadAt": null, "color": null}))
+            .expect("parses");
     assert_eq!((cleared.new_thread_at, cleared.mode), (Some(None), None));
+    assert_eq!((cleared.color, cleared.emoji), (Some(None), None));
+    for color in BotColor::ALL {
+        assert_eq!(json!(color), json!(color.name()));
+        assert_eq!(BotColor::named(color.name()), Some(color));
+    }
     insta::assert_json_snapshot!(
         "remove_bot_request",
         message(&RemoveBotRequest {

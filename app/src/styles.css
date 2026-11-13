@@ -90,6 +90,7 @@
   --zed-icon-muted: #7f849c;
   --zed-accent: #cba6f7;
   --zed-peach: #fab387;
+  --zed-green: #a6e3a1;
   --zed-focus: #b4befe;
   --rail-height: 2rem;
   --zed-border: #313244;
@@ -184,6 +185,7 @@
   --color-status-bar: var(--status-bar);
   --color-title-bar: var(--title-bar);
   --color-peach: var(--zed-peach);
+  --color-green: var(--zed-green);
   --color-status-active: var(--status-active);
   --color-success-background: var(--success-background);
   --color-success: var(--success);

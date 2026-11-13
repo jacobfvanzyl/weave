@@ -105,6 +105,10 @@ pub const BOTS_HOME_FEATURE: &str = "bots_home";
 /// `bots/unwatch` (WVE-178).
 pub const BOTS_WATCH_FEATURE: &str = "bots_watch";
 
+/// The [`DispatcherHello::features`] entry of a Dispatcher that keeps a Bot's avatar (WVE-223):
+/// a Bot's `emoji` and `color`, which `bots/add` and `bots/update` take.
+pub const BOTS_AVATAR_FEATURE: &str = "bots_avatar";
+
 /// How long a pending request in a Bot's thread waits for the person before the Bot's schedules
 /// pause, unless the Bot says otherwise: 12 hours, in milliseconds.
 pub const DEFAULT_PAUSE_AFTER: u64 = 12 * 60 * 60 * 1000;
@@ -911,6 +915,67 @@ pub struct BotThread {
     pub ended_at: Option<Timestamp>,
 }
 
+/// The colours a Bot's avatar is drawn on (WVE-223), by name: each client draws them in its own
+/// theme's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum BotColor {
+    White,
+    Brown,
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Teal,
+    Blue,
+    Purple,
+    Pink,
+    Gray,
+}
+
+impl BotColor {
+    /// Every colour, in the order a picker shows them.
+    pub const ALL: [Self; 11] = [
+        Self::White,
+        Self::Brown,
+        Self::Red,
+        Self::Orange,
+        Self::Yellow,
+        Self::Green,
+        Self::Teal,
+        Self::Blue,
+        Self::Purple,
+        Self::Pink,
+        Self::Gray,
+    ];
+
+    /// Its name on the wire.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::White => "white",
+            Self::Brown => "brown",
+            Self::Red => "red",
+            Self::Orange => "orange",
+            Self::Yellow => "yellow",
+            Self::Green => "green",
+            Self::Teal => "teal",
+            Self::Blue => "blue",
+            Self::Purple => "purple",
+            Self::Pink => "pink",
+            Self::Gray => "gray",
+        }
+    }
+
+    /// The colour `name` names on the wire.
+    pub fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|color| color.name() == name)
+    }
+}
+
+/// The most bytes a Bot's emoji may take: room for one joined of several.
+pub const MAX_BOT_EMOJI: usize = 64;
+
 /// A named assistant the Dispatcher keeps (ADR 0028, WVE-118), whose work goes on in ordinary
 /// threads, one at a time, on the one Host it names, in its home. Its prompts, from the person
 /// through the Dispatcher and from its schedules, go into its current thread; a new thread takes
@@ -925,6 +990,12 @@ pub struct Bot {
     /// What it's shown as and named by, with its id: unique among the Dispatcher's Bots,
     /// ignoring case.
     pub name: String,
+    /// Its avatar's emoji (feature `bots_avatar`); absent until it's given one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<String>,
+    /// The colour its avatar is drawn on; absent until it's given one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<BotColor>,
     pub agent_id: AgentId,
     /// The Host its threads run on, which it never leaves.
     pub host_id: String,
@@ -1048,6 +1119,11 @@ pub struct AddBotRequest {
     /// [`DEFAULT_PAUSE_AFTER`] when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pause_after: Option<u64>,
+    /// Its avatar's emoji, checked as `bots/update` checks it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<BotColor>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
@@ -1092,8 +1168,10 @@ pub struct BotRemovedNotification {
 }
 
 /// `bots/update`: change what's given, all or none, checked as `bots/add` checks it. A policy
-/// or mode applies to threads started from then on: an open thread keeps its own. `mode` and
-/// `newThreadAt` are cleared with `null`.
+/// or mode applies to threads started from then on: an open thread keeps its own. `mode`,
+/// `newThreadAt`, `emoji` and `color` are cleared with `null`. An `emoji` (feature
+/// `bots_avatar`) is invalid params when it's empty, longer than [`MAX_BOT_EMOJI`] bytes, or has
+/// a space, a letter or digit of ASCII, or a control character in it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "bots/update", response = BotResponse)]
@@ -1123,6 +1201,20 @@ pub struct UpdateBotRequest {
     pub zone: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pause_after: Option<u64>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub emoji: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<BotColor>"))]
+    pub color: Option<Option<BotColor>>,
 }
 
 /// A field an update leaves as it is when absent, clears when `null`, and sets otherwise.

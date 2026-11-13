@@ -968,6 +968,12 @@ Options:
       --pause-after <DURATION>
           How long a request in its thread may wait for you before its schedules pause, until it's answered: 90s, 30m, 12h. 12h when omitted
 
+      --emoji <EMOJI>
+          Its avatar's emoji
+
+      --color <COLOR>
+          The colour its avatar is drawn on: white, brown, red, orange, yellow, green, teal, blue, purple, pink or gray
+
       --json
           Print the Bot as JSON
 
@@ -1026,6 +1032,15 @@ Options:
 
       --pause-after <DURATION>
           How long a request in its thread may wait for you before its schedules pause: 90s, 30m, 12h
+
+      --emoji <EMOJI>
+          Its avatar's emoji
+
+      --color <COLOR>
+          The colour its avatar is drawn on: white, brown, red, orange, yellow, green, teal, blue, purple, pink or gray
+
+      --no-avatar
+          Give it no avatar of its own: neither emoji nor colour
 
       --json
           Print the Bot as JSON

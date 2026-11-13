@@ -4,7 +4,7 @@
 // way (`botLayout`), refuses what would move another Block before it (`botAllows`), and says what
 // a Bot's row in the list shows (`botRowState`).
 import { type BotSummary, type HostSummary, type ProjectSummary, type ThreadSummary, threadKey } from '@/app/app-controller';
-import type { SessionBlock, SessionLayout } from '@/host/protocol';
+import type { BotColor, SessionBlock, SessionLayout } from '@/host/protocol';
 import { THREAD_BLOCK, threadBlock, threadOf } from './blocks';
 import { type Target, docked, layoutBlocks, newId, placeBlock, removeBlock, replaceBlock, tidy } from './layout';
 import { containing, threadDirectory } from './sessions';
@@ -33,6 +33,27 @@ export const botStateLabel: Record<BotRowState, string> = {
   unread: 'unread',
   idle: 'idle',
 };
+
+/** The colours a Bot's avatar is drawn on (WVE-223), in the order they're offered. */
+export const BOT_COLORS: readonly BotColor[] = ['white', 'brown', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink', 'gray'];
+
+/** The emoji offered for a Bot's avatar; any other can be typed. */
+export const BOT_EMOJI: readonly string[] = [
+  '🤖', '🦉', '🐙', '🦊', '🐝', '🐢', '🦄', '🐳',
+  '🦜', '🐺', '🧠', '👾', '🛰️', '🔭', '🧪', '📚',
+  '📝', '🗂️', '📬', '🧭', '🔧', '🌱', '⚡', '✨',
+];
+
+/**
+ * The emoji in what was typed for a Bot's avatar: the first one, whatever it's made of, or none
+ * when what's first is a letter, a digit or nothing, as the Dispatcher would refuse it.
+ */
+export function typedEmoji(text: string): string | undefined {
+  const [first] = new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text.trim());
+  const emoji = first?.segment;
+  if (!emoji || /[A-Za-z0-9\s\p{Cc}]/u.test(emoji)) return undefined;
+  return emoji;
+}
 
 /** How many Bots other than `except` need the person. */
 export const waitingBots = (bots: readonly BotSummary[] = [], except?: string) =>

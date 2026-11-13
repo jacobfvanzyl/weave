@@ -1,4 +1,4 @@
-import type { CreateElicitationResponse, McpServerStatus, PermissionPolicy, ProgramStatus, SessionLayout } from '@/host/protocol';
+import type { BotColor, CreateElicitationResponse, McpServerStatus, PermissionPolicy, ProgramStatus, SessionLayout } from '@/host/protocol';
 import type { AcpTranscript } from '@/chat/acp-transcript';
 
 /**
@@ -327,6 +327,9 @@ export type BotState = 'working' | 'needsYou' | 'idle';
 export type BotSummary = {
   id: string;
   name: string;
+  /** Its avatar (WVE-223): an emoji, and the colour it's drawn on, each there once given. */
+  emoji?: string;
+  color?: BotColor;
   agentId: string;
   hostId: string;
   /** What the Dispatcher calls its Host now. */
@@ -360,9 +363,11 @@ export type BotSummary = {
   updatedAt: number;
 };
 
-/** What `updateBot` changes: what's given. `mode` and `newThreadAt` are cleared with `null`. */
+/** What `updateBot` changes: what's given. `mode`, `newThreadAt`, `emoji` and `color` are cleared with `null`. */
 export type BotChange = {
   name?: string;
+  emoji?: string | null;
+  color?: BotColor | null;
   policy?: PermissionPolicy;
   mode?: string | null;
   newThreadAt?: string | null;
@@ -427,6 +432,8 @@ export type AppModel = {
   bots?: BotSummary[];
   /** The Dispatcher makes a new Bot's home on its Host (`bots_home`), so the app can add Bots. */
   canAddBots?: boolean;
+  /** The Dispatcher keeps a Bot's avatar (`bots_avatar`), so the app offers to pick one. */
+  canSetBotAvatars?: boolean;
   /** What failed that belongs to no thread: pairing, listing, a Session's layout. */
   error?: string;
   /**

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { Add01Icon, Cancel01Icon, Folder01Icon, FolderAddIcon, GitBranchIcon, LaptopIcon, Search01Icon, ServerStack01Icon } from '@hugeicons/core-free-icons';
+import { Add01Icon, Cancel01Icon, FolderAddIcon, GitBranchIcon, LaptopIcon, Search01Icon, ServerStack01Icon } from '@hugeicons/core-free-icons';
 import type { AppController, DispatcherSummary, HostStatus, HostSummary, ProjectSummary, SessionSummary } from '@/app/app-controller';
 import { dragsWindow, platform } from '@/app/platform';
 import { ActivityIndicator } from '@/components/activity-indicator';
@@ -21,6 +21,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarSeparator,
 } from '@/components/ui/sidebar';
 import { cn } from '@/lib/utils';
 import type { AddProjectTarget } from '@/components/add-project-dialog';
@@ -69,16 +70,15 @@ function SessionRow({ session, host, label, selected, onOpen, onEnd, actions }: 
       size='lg'
       isActive={selected}
       aria-current={selected ? 'page' : undefined}
-      className='h-auto min-h-12 gap-2.5 rounded-xl border border-transparent py-1.5 pl-1.5 data-active:border-sidebar-border'
+      className='h-auto min-h-12 rounded-xl border border-transparent py-1.5 pl-3.5 data-active:border-sidebar-border'
       onClick={onOpen}
     >
-      <span className='relative grid size-7 shrink-0 place-items-center rounded-md border border-sidebar-border bg-sidebar-accent text-sidebar-foreground/80'>
-        <HugeiconsIcon icon={git ? GitBranchIcon : Folder01Icon} strokeWidth={2} className='size-3.5!' aria-hidden />
-        <ActivityIndicator activity={activity} unread={session.unread} className='absolute -top-1 -right-1 size-2.5 ring-2 ring-sidebar' />
-      </span>
+      {/* No icon of its own (WVE-223): a small indent under its heading, and what its threads
+          are doing as a dot after its name. */}
       <span className='flex min-w-0 flex-1 flex-col gap-0.5'>
         <span className='flex min-w-0 items-center gap-2'>
           <span className='truncate font-medium text-sidebar-foreground'>{session.name}</span>
+          <ActivityIndicator activity={activity} unread={session.unread} className='size-2 shrink-0' />
           <span className='ml-auto shrink-0 text-[0.6875rem] text-muted-foreground'>{sinceLabel(session.lastActivityAt)}</span>
         </span>
         <span className='flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground'>
@@ -134,7 +134,7 @@ function HostHeading({ host, onNewSession }: { host: HostSummary; onNewSession()
   return (
     <>
       <SidebarGroupLabel title={host.error} className='h-9 gap-2 pr-9 text-sm font-medium text-sidebar-foreground [&>svg]:size-4.5'>
-        <HugeiconsIcon icon={LaptopIcon} strokeWidth={1.75} className='text-icon-muted' aria-hidden />
+        <HugeiconsIcon icon={LaptopIcon} strokeWidth={1.75} className='text-peach' aria-hidden />
         <span className='min-w-0 truncate'>{host.name}</span>
         {status && <span className='shrink-0 text-[0.6875rem] font-normal text-muted-foreground'>· {status}</span>}
       </SidebarGroupLabel>
@@ -250,6 +250,8 @@ export function SessionList({ controller, sessions, selected, selectedBot, leadi
   const view = sessionListView(sessions, model.hosts, model.projects, { query });
   const listed = view.projects.length > 0 || view.hosts.length > 0;
   const canStart = model.hosts.some(({ status }) => status === 'connected');
+  const canAddProject = Boolean(model.canManageProjects && onAddProject && model.hosts.length > 0);
+  const projectsHeading = view.projects.length > 0 || (canAddProject && !query);
   const { dispatcher } = model;
   const away = dispatcher !== undefined && dispatcher.status !== 'connected';
   // A Host still connected while the Dispatcher is away, as the Mac's own over its socket, isn't greyed out.
@@ -341,6 +343,20 @@ export function SessionList({ controller, sessions, selected, selectedBot, leadi
           <BotList bots={model.bots} unread={model.unread} canAdd={Boolean(model.canAddBots && onNewBot)} canStart={canStart} query={query}
             selected={selectedBot} onOpen={(id) => onOpenBot?.(id)} onNewBot={() => onNewBot?.()} />
         )}
+        {/* What's the person's own to arrange, apart from their Bots: the Projects, under a heading
+            that adds one, where the first is added too. */}
+        {model.bots && !query && (projectsHeading || view.hosts.length > 0) && <SidebarSeparator className='my-1' />}
+        {projectsHeading && (
+          <div data-slot='projects-heading' className='relative flex h-8 items-center px-4 pt-1'>
+            <h2 className='text-[0.6875rem] font-medium tracking-wide text-muted-foreground'>Projects</h2>
+            {canAddProject && (
+              <Button size='icon' variant='ghost' aria-label='Add Project' title='Add Project' className='absolute top-1 right-2.5 size-7 text-muted-foreground'
+                disabled={!canStart} onClick={() => onAddProject?.()}>
+                <HugeiconsIcon icon={FolderAddIcon} strokeWidth={1.75} />
+              </Button>
+            )}
+          </div>
+        )}
         {view.projects.map(({ project, sessions: under }) => (
           <SidebarGroup key={project.id} role='group' aria-label={project.name} className='py-1.5'>
             <ProjectHeading controller={controller} project={project}
@@ -350,15 +366,6 @@ export function SessionList({ controller, sessions, selected, selectedBot, leadi
             {under.length === 0 && <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>No Sessions yet</p>}
           </SidebarGroup>
         ))}
-        {/* After the Projects there are, the way to another: where the first one is added too. */}
-        {model.canManageProjects && onAddProject && !query && model.hosts.length > 0 && (
-          <div className='px-2 py-1'>
-            <Button variant='ghost' className='w-full justify-start gap-2 px-2 text-muted-foreground' disabled={!canStart} onClick={() => onAddProject()}>
-              <HugeiconsIcon icon={FolderAddIcon} strokeWidth={1.75} />
-              Add Project
-            </Button>
-          </div>
-        )}
         {view.hosts.map(({ host, sessions: under }) => (
           <SidebarGroup key={host.id} role='group' aria-label={host.name} data-away={hostAway(host) || undefined}
             className={cn('py-1.5', hostAway(host) && 'opacity-60')}>

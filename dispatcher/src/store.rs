@@ -52,7 +52,7 @@ use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 10] = [
+const MIGRATIONS: [&str; 11] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -273,6 +273,11 @@ const MIGRATIONS: [&str; 10] = [
     "
     ALTER TABLE schedules ADD COLUMN made_call TEXT;
     CREATE UNIQUE INDEX schedules_by_made_call ON schedules (bot_id, made_call);
+",
+    // A Bot's avatar (WVE-223): an emoji, and the colour it's drawn on, by its name on the wire.
+    "
+    ALTER TABLE bots ADD COLUMN emoji TEXT;
+    ALTER TABLE bots ADD COLUMN color TEXT;
 ",
 ];
 

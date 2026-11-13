@@ -754,6 +754,23 @@ describe('Projects (WVE-220)', () => {
     return screen.findByRole('menu');
   };
 
+  it('heads the Projects under a divider from the Bots, with Add Project as an icon there', () => {
+    setIdiom('pad');
+    render(<MockApp />);
+    const projects = screen.getByRole('heading', { name: 'Projects' });
+    const divider = document.querySelector('[data-sidebar="separator"]') as HTMLElement;
+    const after = (earlier: Node, later: Node) => Boolean(earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(after(screen.getByRole('group', { name: 'Bots' }), divider)).toBe(true);
+    expect(after(divider, projects)).toBe(true);
+    expect(after(projects, screen.getByRole('group', { name: 'weave' }))).toBe(true);
+    const add = screen.getByRole('button', { name: 'Add Project' });
+    expect(add).toHaveTextContent('');
+    expect((projects.parentElement as HTMLElement).contains(add)).toBe(true);
+    // A Project's icon is green, a Host's peach.
+    expect(heading('weave').querySelector('svg')).toHaveClass('text-green');
+    expect(heading('build').querySelector('svg')).toHaveClass('text-peach');
+  });
+
   it('adds a directory as a Project from the list, named after it, and puts its Sessions under it', async () => {
     setIdiom('pad');
     const user = userEvent.setup();

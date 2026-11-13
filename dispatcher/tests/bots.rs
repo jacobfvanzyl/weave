@@ -53,6 +53,7 @@ use weave_host_protocol::dispatcher::BOTS_FEATURE;
 use weave_host_protocol::dispatcher::BOTS_HOME_FEATURE;
 use weave_host_protocol::dispatcher::BOTS_WATCH_FEATURE;
 use weave_host_protocol::dispatcher::Bot;
+use weave_host_protocol::dispatcher::BotColor;
 use weave_host_protocol::dispatcher::BotState;
 use weave_host_protocol::dispatcher::DEFAULT_PAUSE_AFTER;
 use weave_host_protocol::dispatcher::DISPATCHER_HOST_SUBPROTOCOL;
@@ -336,6 +337,8 @@ fn add(name: &str, home: &str) -> AddBotRequest {
         new_thread_at: None,
         zone: Some("UTC".to_owned()),
         pause_after: None,
+        emoji: None,
+        color: None,
     }
 }
 
@@ -672,6 +675,8 @@ async fn a_bot_goes_through_its_life(cli: &DispatcherConnection, studio: &World,
             new_thread_at: Some(None),
             zone: None,
             pause_after: Some(60_000),
+            emoji: None,
+            color: None,
         })
         .await
         .expect("bots/update")
@@ -2249,6 +2254,142 @@ async fn a_bot_made_by_another_names_it() {
     setup.dispatcher.stop().await;
 }
 
+/// A Bot's avatar (WVE-223) is an emoji and a colour, each given, changed or cleared alone by
+/// the person, and by the Bot for itself with `set_avatar`; an emoji that's a word is refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bot_has_an_avatar_the_person_or_the_bot_sets() {
+    let setup = Setup::new("2026-11-04T08:00:00Z").await;
+    let odin = setup.odin().await;
+    assert_eq!((odin.emoji, odin.color), (None, None));
+    let scribe = setup
+        .dispatcher
+        .add_bot(AddBotRequest {
+            emoji: Some(" 📝 ".to_owned()),
+            color: Some(BotColor::Teal),
+            ..add("scribe", "~/scribe")
+        })
+        .await
+        .expect("bots/add")
+        .bot;
+    assert_eq!(
+        (scribe.emoji.as_deref(), scribe.color),
+        (Some("📝"), Some(BotColor::Teal))
+    );
+
+    let update = |emoji: Option<Option<&str>>, color: Option<Option<BotColor>>| {
+        setup.dispatcher.update_bot(UpdateBotRequest {
+            bot: "odin".to_owned(),
+            emoji: emoji.map(|emoji| emoji.map(str::to_owned)),
+            color,
+            ..UpdateBotRequest::default()
+        })
+    };
+    let changed = update(Some(Some("🦉")), None).expect("an emoji");
+    assert_eq!(
+        (changed.emoji.as_deref(), changed.color),
+        (Some("🦉"), None)
+    );
+    assert!(changed.updated_at >= odin.updated_at);
+    let changed = update(None, Some(Some(BotColor::Red))).expect("a colour");
+    assert_eq!(
+        (changed.emoji.as_deref(), changed.color),
+        (Some("🦉"), Some(BotColor::Red))
+    );
+    // One joined of several is one emoji.
+    let family = "👩‍👩‍👧‍👦";
+    let changed = update(Some(Some(family)), None).expect("a joined emoji");
+    assert_eq!(changed.emoji.as_deref(), Some(family));
+    for (word, why) in [
+        (
+            "",
+            "a Bot's emoji can't be empty: leave it out, or clear it with null".to_owned(),
+        ),
+        ("owl", "a Bot's emoji is one emoji, not \"owl\"".to_owned()),
+        (
+            "🦉 🦉",
+            "a Bot's emoji is one emoji, not \"🦉 🦉\"".to_owned(),
+        ),
+        (
+            &"🦉".repeat(17),
+            "a Bot's emoji is one emoji, of 64 bytes at most".to_owned(),
+        ),
+    ] {
+        let refused = update(Some(Some(word)), Some(None)).expect_err("no emoji");
+        assert_eq!(refused.message, why, "{word:?}");
+    }
+    // All or none: the colour a refused change would have cleared is kept.
+    let kept = setup.dispatcher.bot("odin").expect("bots/get");
+    assert_eq!(
+        (kept.emoji.as_deref(), kept.color),
+        (Some(family), Some(BotColor::Red))
+    );
+    let cleared = update(Some(None), Some(None)).expect("cleared");
+    assert_eq!((cleared.emoji, cleared.color), (None, None));
+
+    // The Bot changes its own, and no other's.
+    let mut cli = ask(setup.dir.path()).await;
+    cli.send(WatchBotsRequest {}).await.expect("bots/watch");
+    let mut set = setup
+        .calls(
+            "odin",
+            "set_avatar",
+            json!({"emoji": "🐙", "color": "purple"}),
+        )
+        .await
+        .expect("set_avatar");
+    set.as_object_mut().expect("odin").remove("state");
+    assert_eq!(
+        set,
+        json!({
+            "name": "odin",
+            "agent": "fake",
+            "host": "studio",
+            "home": setup.home("odin").display().to_string(),
+            "emoji": "🐙",
+            "color": "purple",
+            "you": true,
+        })
+    );
+    changes_until(
+        &mut cli,
+        |change| matches!(change, BotChange::Updated(bot) if bot.emoji.as_deref() == Some("🐙")),
+    )
+    .await;
+    cli.shutdown().await;
+    let set = setup
+        .calls("odin", "set_avatar", json!({"color": null}))
+        .await
+        .expect("set_avatar");
+    assert_eq!((&set["emoji"], set.get("color")), (&json!("🐙"), None));
+    for (arguments, why) in [
+        (
+            json!({}),
+            "Give an emoji, a color or both: null clears one.",
+        ),
+        (
+            json!({"emoji": "octopus"}),
+            "Couldn't change your avatar: a Bot's emoji is one emoji, not \"octopus\".",
+        ),
+    ] {
+        let refused = setup.calls("odin", "set_avatar", arguments).await;
+        assert_eq!(refused, Err(why.to_owned()));
+    }
+    let wrong = setup
+        .calls("odin", "set_avatar", json!({"color": "mauve"}))
+        .await
+        .expect_err("no such colour");
+    assert!(
+        wrong.starts_with("The arguments don't fit set_avatar's input: "),
+        "{wrong}"
+    );
+    let scribe = setup.dispatcher.bot("scribe").expect("bots/get");
+    assert_eq!(
+        (scribe.emoji.as_deref(), scribe.color),
+        (Some("📝"), Some(BotColor::Teal))
+    );
+    setup.dispatcher.stop().await;
+}
+
 /// The next change to the Bots `cli` hears of, in time.
 async fn change(cli: &mut DispatcherConnection) -> BotChange {
     tokio::time::timeout(WAIT, cli.bot_change())
@@ -2676,11 +2817,14 @@ async fn a_thread_that_isnt_a_bots_cant_manage_schedules_or_make_bots() {
         ("remove_schedule", json!({"id": "tick"})),
         ("create_bot", json!({"name": "Loki", "job": "Mischief."})),
         ("list_bots", json!({})),
+        ("set_avatar", json!({"emoji": "🦉"})),
     ];
     let refused = a_strangers_calls(&setup, &tools).await;
     for ((tool, _), why) in tools.iter().zip(&refused) {
         let can = match *tool {
-            "create_bot" | "list_bots" => "make another Bot or list the person's Bots",
+            "create_bot" | "list_bots" | "set_avatar" => {
+                "make another Bot, list the person's Bots or change its own avatar"
+            }
             _ => "add, list, pause, resume or remove its schedules",
         };
         assert_eq!(

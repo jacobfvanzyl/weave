@@ -42,6 +42,25 @@ describe('the Bots in the list', () => {
     expect(screen.queryByRole('button', { name: /^scout/ })).not.toBeInTheDocument();
   });
 
+  it("shows each Bot's avatar, its emoji on its colour, and the robot for one with neither", async () => {
+    setIdiom('pad');
+    const user = userEvent.setup();
+    render(<MockApp />);
+    const avatar = (row: HTMLElement) => row.querySelector('[data-slot="bot-avatar"]') as HTMLElement;
+    expect(avatar(botRow('Scout'))).toHaveTextContent('🦉');
+    expect(avatar(botRow('Scout'))).toHaveAttribute('data-color', 'purple');
+    // A colour alone keeps the robot; neither is the Bot as it was drawn before.
+    expect(avatar(botRow('Gardener'))).toHaveAttribute('data-color', 'green');
+    expect(avatar(botRow('Gardener')).querySelector('svg')).toBeInTheDocument();
+    expect(avatar(botRow('Reader'))).not.toHaveAttribute('data-color');
+    expect(avatar(botRow('Reader')).querySelector('svg')).toBeInTheDocument();
+    // Its state's dot stays at the avatar's corner.
+    expect(within(avatar(botRow('Scout'))).getByRole('img', { name: 'needs you' })).toBeInTheDocument();
+    // And atop its Session.
+    await user.click(botRow('Scout'));
+    expect(avatar(await screen.findByRole('button', { name: /^Scout, .*: about this Bot/ }))).toHaveTextContent('🦉');
+  });
+
   it('says nothing of Bots for a Dispatcher that keeps none, and offers no New Bot where it makes no homes', () => {
     const props = { unread: new Set<string>(), canStart: true, query: '', onOpen() {}, onNewBot() {} };
     const { rerender } = render(<BotList bots={[]} canAdd {...props} />);
@@ -174,6 +193,49 @@ describe("a Bot's page", () => {
     await user.click(within(elsewhere).getByText('Fix the broken docs link'));
     expect(await screen.findByRole('region', { name: 'Session weave.docs-link' })).toBeInTheDocument();
     expect(await screen.findByRole('group', { name: 'Block, Fix the broken docs link' })).toBeInTheDocument();
+  });
+
+  it('picks its avatar: an emoji offered or typed, a colour, and Reset for neither', async () => {
+    setIdiom('pad');
+    const user = userEvent.setup();
+    render(<MockApp />);
+    const page = await openPage(user, 'Reader');
+    const toggle = within(page).getByRole('button', { name: "Change Reader's avatar" });
+    const avatar = () => toggle.querySelector('[data-slot="bot-avatar"]') as HTMLElement;
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+    const picker = within(page).getByRole('group', { name: "Reader's avatar" });
+    expect(within(picker).getByRole('button', { name: 'Reset' })).toBeDisabled();
+    await user.click(within(picker).getByRole('radio', { name: '📚' }));
+    await waitFor(() => expect(avatar()).toHaveTextContent('📚'));
+    expect(within(picker).getByRole('radio', { name: '📚' })).toBeChecked();
+    await user.click(within(picker).getByRole('radio', { name: 'Blue' }));
+    await waitFor(() => expect(avatar()).toHaveAttribute('data-color', 'blue'));
+    expect(avatar()).toHaveTextContent('📚');
+    // Any other emoji is typed; a word isn't one.
+    const typed = within(picker).getByRole('textbox', { name: 'Another emoji' });
+    await user.type(typed, 'book');
+    expect(within(picker).getByRole('button', { name: 'Use' })).toBeDisabled();
+    await user.clear(typed);
+    await user.type(typed, '🪐');
+    await user.click(within(picker).getByRole('button', { name: 'Use' }));
+    await waitFor(() => expect(avatar()).toHaveTextContent('🪐'));
+    expect(typed).toHaveValue('');
+    await user.click(within(picker).getByRole('button', { name: 'Reset' }));
+    await waitFor(() => expect(avatar()).not.toHaveAttribute('data-color'));
+    expect(avatar().querySelector('svg')).toBeInTheDocument();
+    // The list shows what was picked too.
+    await user.click(within(picker).getByRole('radio', { name: '🦊' }));
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(botRow('Reader').querySelector('[data-slot="bot-avatar"]')).toHaveTextContent('🦊'));
+  });
+
+  it("offers no picker on a Dispatcher that keeps no avatars", async () => {
+    setIdiom('pad');
+    const user = userEvent.setup();
+    render(<MockApp change={({ model, actions }) => ({ model: { ...model, canSetBotAvatars: undefined }, actions })} />);
+    const page = await openPage(user, 'Reader');
+    expect(within(page).queryByRole('button', { name: "Change Reader's avatar" })).not.toBeInTheDocument();
   });
 
   it('renames it, and removes it, after which its home is an ordinary Session', async () => {

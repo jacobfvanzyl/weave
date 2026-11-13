@@ -8,8 +8,8 @@
 //! - [`schedules`] (WVE-178): `add_schedule`, `list_schedules`, `pause_schedule`,
 //!   `resume_schedule` and `remove_schedule`, over the recurring schedules that prompt the Bot,
 //!   the person's for it too.
-//! - [`bots`] (WVE-178): `create_bot`, which makes another Bot with the caller as its maker, and
-//!   `list_bots`.
+//! - [`bots`] (WVE-178): `create_bot`, which makes another Bot with the caller as its maker,
+//!   `list_bots`, and `set_avatar` (WVE-223), the caller's own emoji and colour.
 //!
 //! None acts on a Bot other than the caller, but for `create_bot` making one; and a Bot made so
 //! has no thread and no schedules until the person prompts it.
@@ -104,6 +104,7 @@ async fn respond(
         schedules::REMOVE_SCHEDULE => schedules::remove(shared, &bot, arguments(tool, given)?),
         bots::CREATE_BOT => bots::create(shared, &bot, arguments(tool, given)?).await,
         bots::LIST_BOTS => bots::list(shared, &bot),
+        bots::SET_AVATAR => bots::set_avatar(shared, &bot, arguments(tool, given)?),
         _ => Err(format!("The Dispatcher has no tool {tool}.")),
     }
 }

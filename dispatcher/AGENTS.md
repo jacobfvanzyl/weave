@@ -27,7 +27,8 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
 - `store.rs`: its state in SQLite (`rusqlite`, bundled): `hosts` and `deliveries`, and in
   `store/calls.rs` the `calls` from Hosts' agents and the turns they began (`follows`). Migrations are
   numbered SQL in `MIGRATIONS`, applied in order and recorded in `PRAGMA user_version`; never
-  edit one once released, add the next. The tenth (WVE-178) added `made_call` to `schedules`,
+  edit one once released, add the next. The eleventh (WVE-223) added a Bot's avatar, `emoji` and
+  `color` on `bots`, the colour by its name on the wire, and one it doesn't know read as none. The tenth (WVE-178) added `made_call` to `schedules`,
   the Host's id for the `add_schedule` call that added a Bot's own schedule, unique per Bot; the
   ninth (WVE-178), `created_by` on `bots`, the Bot that made one, by id and with no foreign key so
   it outlives its maker. The eighth (WVE-118) added Bots: `bots`, `bot_threads`
@@ -87,7 +88,9 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   only the tools pass (and `Dispatcher::add_bot_made_by`, for tests): such an add is refused at
   `MOST_BOTS` (20), checked before the home is made and again in the store's transaction. Names
   are checked in the transaction that changes them too (`BotError::Refused` is invalid
-  params). A prompt for a Bot is a `Work::Bot` delivery with `bot_id`, from `bots/send` (keyed
+  params). A Bot's avatar (WVE-223, feature `bots_avatar`) is an `emoji`, checked by
+  `emoji_given` to be no word and no longer than `MAX_BOT_EMOJI`, and a `BotColor`, each set and
+  cleared alone by `bots/add` and `bots/update`. A prompt for a Bot is a `Work::Bot` delivery with `bot_id`, from `bots/send` (keyed
   `bot/<id>/send/<key>`, hashed past `MAX_KEY`) or a Bot's schedule, settled at its first send
   (`settle`): `link::into_thread` for its current thread, or `thread/run` in its home with its
   `labels` (`dispatcher`, `bot:<id>`), held while another prompt starts its first thread
@@ -133,8 +136,9 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   - `tools/bots.rs` (WVE-178): `create_bot`, which adds a Bot through `Shared::add_bot` with the
     caller as its maker, `~/bots/<name>` and its job, and the caller's agent, Host and zone unless
     it names others, and answers with what it made, what making its home did and what to tell the
-    person (`next`); and `list_bots`. Nothing here lets a Bot prompt or schedule another, so one a
-    Bot makes does nothing until the person prompts it. A call the Host sends again isn't
+    person (`next`); `list_bots`; and `set_avatar` (WVE-223), the caller's own emoji and colour
+    through `Shared::update_bot`, absent to keep and `null` to clear. Nothing here lets a Bot
+    prompt or schedule another, so one a Bot makes does nothing until the person prompts it. A call the Host sends again isn't
     recognised: it's refused, the name being taken.
 - `store/schedules.rs`: `schedules` and `occurrences`. An occurrence and its delivery are
   written in one transaction, unique on schedule, scheduled time and `manual`; delivering it,
@@ -161,7 +165,7 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   (`dispatcher_auth_message`) or pairs with a code, and may ask everything but `devices/*` and
   `hosts/offer` with `here` (`local_first`, `forbidden`). A Host's own connection asks for
   `weave-dispatcher-host` and goes to `joins.rs` instead. Its hello's features are
-  `api::features`: `projects`, `bots`, `bots_home` and `bots_watch`. `bots/watch` and
+  `api::features`: `projects`, `bots`, `bots_home`, `bots_watch` and `bots_avatar`. `bots/watch` and
   `bots/unwatch` are answered there, and a connection that ends stops watching; `client.rs` hears
   the changes (`DispatcherConnection::bot_change`, `BotChange`).
 - `carry.rs` (WVE-195, ADR 0030): the person's devices' connections carried to their Hosts. A
@@ -216,7 +220,7 @@ pausing while its thread waits on the person, one-offs, and wake-ups its agent a
 and cancels with the Dispatcher's tools; and (WVE-178) its Host making its home, `bots/watch`,
 `schedules/list` for a Bot, a Bot making another (`create_bot`, and the cap of 20), a Bot adding
 and managing its own schedules within their limits, and every new tool refusing a thread that
-isn't a Bot's. Its Hosts run git away from the configuration of whoever runs the tests
+isn't a Bot's; and (WVE-223) a Bot's avatar, from the person and from the Bot's `set_avatar`. Its Hosts run git away from the configuration of whoever runs the tests
 (`common::ISOLATED_GIT`).
 `tests/hosts.rs` runs two or three Hosts whose fake agents call Host tools naming each
 other, the relay deafened to lose an answer, and name Projects the test adds directly

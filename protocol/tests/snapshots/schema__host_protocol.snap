@@ -441,7 +441,8 @@ expression: schema()
         "projects": "projects",
         "bots": "bots",
         "botsHome": "bots_home",
-        "botsWatch": "bots_watch"
+        "botsWatch": "bots_watch",
+        "botsAvatar": "bots_avatar"
       },
       "defaultPauseAfter": 43200000
     },
@@ -12012,6 +12013,24 @@ expression: schema()
           "type": "string",
           "description": "What it's shown as and named by, with its id: unique among the Dispatcher's Bots,\nignoring case."
         },
+        "emoji": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its avatar's emoji (feature `bots_avatar`); absent until it's given one."
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BotColor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The colour its avatar is drawn on; absent until it's given one."
+        },
         "agentId": {
           "type": "string"
         },
@@ -12143,6 +12162,23 @@ expression: schema()
         "updatedAt"
       ],
       "description": "A named assistant the Dispatcher keeps (ADR 0028, WVE-118), whose work goes on in ordinary\nthreads, one at a time, on the one Host it names, in its home. Its prompts, from the person\nthrough the Dispatcher and from its schedules, go into its current thread; a new thread takes\nover when asked or daily, after the one before saves what it learned to the home. Its Host\nlearns nothing of it: its threads carry the labels `dispatcher` and `bot:<id>`."
+    },
+    "BotColor": {
+      "type": "string",
+      "enum": [
+        "white",
+        "brown",
+        "red",
+        "orange",
+        "yellow",
+        "green",
+        "teal",
+        "blue",
+        "purple",
+        "pink",
+        "gray"
+      ],
+      "description": "The colours a Bot's avatar is drawn on (WVE-223), by name: each client draws them in its own\ntheme's."
     },
     "BotThread": {
       "type": "object",
@@ -12281,6 +12317,23 @@ expression: schema()
           "format": "uint64",
           "minimum": 0,
           "description": "[`DEFAULT_PAUSE_AFTER`] when absent."
+        },
+        "emoji": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its avatar's emoji, checked as `bots/update` checks it."
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BotColor"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -12360,12 +12413,28 @@ expression: schema()
           ],
           "format": "uint64",
           "minimum": 0
+        },
+        "emoji": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BotColor"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "bot"
       ],
-      "description": "`bots/update`: change what's given, all or none, checked as `bots/add` checks it. A policy\nor mode applies to threads started from then on: an open thread keeps its own. `mode` and\n`newThreadAt` are cleared with `null`."
+      "description": "`bots/update`: change what's given, all or none, checked as `bots/add` checks it. A policy\nor mode applies to threads started from then on: an open thread keeps its own. `mode`,\n`newThreadAt`, `emoji` and `color` are cleared with `null`. An `emoji` (feature\n`bots_avatar`) is invalid params when it's empty, longer than [`MAX_BOT_EMOJI`] bytes, or has\na space, a letter or digit of ASCII, or a control character in it."
     },
     "RemoveBotRequest": {
       "type": "object",

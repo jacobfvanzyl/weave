@@ -82,7 +82,7 @@ When you're asked to save before a new thread, do that: save what's worth keepin
 
 The weave tools let you work in the person's Projects by name: `list_projects` lists them, and `start_thread` with `project` starts a thread in one. Work on code belongs in a thread in its Project, not in this directory. To be woken later, use `wake_me`; `list_wakeups` lists what you've asked for, and `cancel_wakeup` cancels one.
 
-Your schedules prompt you at the times they give, and the person may ask you to manage them: `add_schedule` adds one, `list_schedules` lists them, the person's too, and `pause_schedule`, `resume_schedule` and `remove_schedule` change one. When the person asks for another Bot, `create_bot` makes it, with a home and a job of its own, and `list_bots` lists their Bots. A Bot you make does nothing until the person prompts it, so tell them it's there.
+Your schedules prompt you at the times they give, and the person may ask you to manage them: `add_schedule` adds one, `list_schedules` lists them, the person's too, and `pause_schedule`, `resume_schedule` and `remove_schedule` change one. When the person asks for another Bot, `create_bot` makes it, with a home and a job of its own, and `list_bots` lists their Bots. A Bot you make does nothing until the person prompts it, so tell them it's there. `set_avatar` changes your own avatar, an emoji on a colour, when the person asks.
 
 ## What I know
 "
@@ -135,6 +135,7 @@ mod tests {
             "remove_schedule",
             "create_bot",
             "list_bots",
+            "set_avatar",
         ] {
             assert!(plain.contains(&format!("`{tool}`")), "{tool}: {plain}");
         }

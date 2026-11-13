@@ -227,10 +227,11 @@ const bots = (now: number): BotSummary[] => {
     ...change,
   });
   return [
-    bot('b-scout', 'Scout', { state: 'needsYou', waitingSince: now - 4 * MINUTE }),
-    bot('b-builder', 'Builder', { state: 'working', agentId: 'codex' }),
+    bot('b-scout', 'Scout', { state: 'needsYou', waitingSince: now - 4 * MINUTE, emoji: '🦉', color: 'purple' }),
+    bot('b-builder', 'Builder', { state: 'working', agentId: 'codex', emoji: '🔧', color: 'orange' }),
     bot('b-reader', 'Reader'),
     bot('b-gardener', 'Gardener', {
+      color: 'green',
       newThreadAt: '07:00',
       createdBy: 'b-scout',
       createdByName: 'Scout',
@@ -469,6 +470,7 @@ const initialState = (scenario: MockScenario, now: number): MockState => {
       unread: new Set(),
       bots: bots(now),
       canAddBots: true,
+      canSetBotAvatars: true,
       canManageProjects: true,
     },
     ...(selected ? { sessionKey: sessionOfThread(selected) } : {}),
@@ -997,7 +999,9 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         }
         if (change.newThreadAt && !/^\d{2}:\d{2}$/.test(change.newThreadAt)) throw new Error(`"${change.newThreadAt}" isn't a time of day, HH:MM.`);
         setBot(id, (bot) => {
-          const { mode: _mode, newThreadAt: _at, ...rest } = bot;
+          const { mode: _mode, newThreadAt: _at, emoji: _emoji, color: _color, ...rest } = bot;
+          const emoji = change.emoji === undefined ? bot.emoji : change.emoji ?? undefined;
+          const color = change.color === undefined ? bot.color : change.color ?? undefined;
           const mode = change.mode === undefined ? bot.mode : change.mode ?? undefined;
           const newThreadAt = change.newThreadAt === undefined ? bot.newThreadAt : change.newThreadAt ?? undefined;
           return {
@@ -1008,6 +1012,8 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
             ...(change.policy ? { policy: change.policy } : {}),
             ...(mode ? { mode } : {}),
             ...(newThreadAt ? { newThreadAt } : {}),
+            ...(emoji ? { emoji } : {}),
+            ...(color ? { color } : {}),
             updatedAt: Date.now(),
           };
         });

@@ -7,6 +7,7 @@ import { HugeiconsIcon } from '@hugeicons/react';
 import { BubbleChatIcon, Clock01Icon, Folder01Icon, LaptopIcon } from '@hugeicons/core-free-icons';
 import type { AppController, BotChange, BotSummary, ScheduleAction, ScheduleSummary, ThreadSummary } from '@/app/app-controller';
 import { threadKey } from '@/app/app-controller';
+import { BotAvatar, BotAvatarPicker } from '@/components/bots/bot-avatar';
 import { BotStateDot } from '@/components/bots/bot-list';
 import { ThreadReader } from '@/components/bots/thread-reader';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -285,14 +286,18 @@ export function BotPage({ controller, bot, open, onOpenChange, phone = false, on
   const [reading, setReading] = useState<{ key: string; title: string; description: string }>();
   const [confirm, setConfirm] = useState<'newThread' | 'remove'>();
   const [error, setError] = useState<string>();
+  const [picking, setPicking] = useState(false);
   useEffect(() => {
-    if (open) setError(undefined);
+    if (!open) return;
+    setError(undefined);
+    setPicking(false);
   }, [open]);
   const started = useMemo(() => bot ? groupStarted(startedByBot(bot, model.threads), model.projects, model.hosts) : undefined, [bot, model.threads, model.projects, model.hosts]);
   if (!bot) return null;
   const state = botRowState(bot, model.unread);
   const agent = model.agents[bot.hostId]?.find(({ id }) => id === bot.agentId)?.name ?? bot.agentId;
   const earlier = earlierThreads(bot);
+  const canPick = Boolean(model.canSetBotAvatars && actions.updateBot);
   const listed = (threadId: string) => model.threads.find(({ key }) => key === threadKey(bot.hostId, threadId));
   const run = async (what: () => Promise<void> | undefined) => {
     setError(undefined);
@@ -312,13 +317,27 @@ export function BotPage({ controller, bot, open, onOpenChange, phone = false, on
         <SheetContent side={phone ? 'bottom' : 'right'} data-slot='bot-page' initialFocus={false}
           className={cn('gap-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]', phone ? 'max-h-[92dvh] rounded-t-xl' : 'w-full sm:max-w-md')}>
           <SheetHeader className='pb-3'>
-            <SheetTitle className='flex items-center gap-2 pr-8 text-base'>
-              {bot.name}
-              <BotStateDot state={state} />
-            </SheetTitle>
-            <SheetDescription>{bot.startingThread ? 'Starting a new thread.' : `A Bot, ${botStateLabel[state]}.`}</SheetDescription>
+            <div className='flex items-center gap-3 pr-8'>
+              {canPick
+                ? (
+                  <button type='button' aria-label={`Change ${bot.name}'s avatar`} title='Change its avatar' aria-expanded={picking}
+                    className='shrink-0 rounded-full outline-none hover:opacity-85 focus-visible:ring-2 focus-visible:ring-ring/60'
+                    onClick={() => setPicking(!picking)}>
+                    <BotAvatar bot={bot} size='lg' className='border-border bg-muted text-foreground/80' />
+                  </button>
+                )
+                : <BotAvatar bot={bot} size='lg' className='border-border bg-muted text-foreground/80' />}
+              <div className='grid min-w-0 gap-1'>
+                <SheetTitle className='flex items-center gap-2 text-base'>
+                  <span className='min-w-0 truncate'>{bot.name}</span>
+                  <BotStateDot state={state} />
+                </SheetTitle>
+                <SheetDescription>{bot.startingThread ? 'Starting a new thread.' : `A Bot, ${botStateLabel[state]}.`}</SheetDescription>
+              </div>
+            </div>
           </SheetHeader>
           <div className='grid gap-2 px-4 pb-3'>
+            {canPick && picking && <BotAvatarPicker bot={bot} onChange={(change) => void run(() => actions.updateBot?.(bot.id, change))} />}
             {bot.paused && (
               <Alert className='border-warning/40'>
                 <AlertDescription>Its schedules are paused: {bot.paused}. They go on once nothing in its thread waits for you.</AlertDescription>
@@ -329,7 +348,7 @@ export function BotPage({ controller, bot, open, onOpenChange, phone = false, on
               <Fact name='Agent'>{agent}</Fact>
               <Fact name='Host'>
                 <span className='inline-flex items-center gap-1'>
-                  <HugeiconsIcon icon={LaptopIcon} strokeWidth={2} className='size-3.5 text-icon-muted' aria-hidden />
+                  <HugeiconsIcon icon={LaptopIcon} strokeWidth={2} className='size-3.5 text-peach' aria-hidden />
                   {bot.hostName}
                   <span className={cn('text-[0.6875rem]', bot.connected ? 'text-muted-foreground' : 'text-warning')}>· {bot.connected ? 'connected' : 'away'}</span>
                 </span>

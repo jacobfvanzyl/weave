@@ -14,6 +14,7 @@ import {
   lockedBlock,
   selectedBot,
   startedByBot,
+  typedEmoji,
   waitingBots,
 } from './bots';
 import { LAYOUT_VERSION, docked, findBlock, layoutBlocks, tidy } from './layout';
@@ -89,6 +90,16 @@ describe("a Bot's row", () => {
     expect(botOfThread([bot()], `${MAC}/t-old`)?.id).toBe('b-scout');
     expect(botOfThread([bot()], `${MAC}/t-now`)?.id).toBe('b-scout');
     expect(botOfThread([bot()], `${LAB}/t-now`)).toBeUndefined();
+  });
+});
+
+describe("a Bot's avatar", () => {
+  it('takes the first emoji of what was typed, whatever it is made of, and no word', () => {
+    expect(typedEmoji(' 🦉 ')).toBe('🦉');
+    expect(typedEmoji('🐙🦊')).toBe('🐙');
+    expect(typedEmoji('👩‍👩‍👧‍👦 family')).toBe('👩‍👩‍👧‍👦');
+    expect(typedEmoji('🛰️')).toBe('🛰️');
+    for (const none of ['', '   ', 'owl', '7', 'a🦉']) expect(typedEmoji(none), none).toBeUndefined();
   });
 });
 

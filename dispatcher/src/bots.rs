@@ -38,6 +38,7 @@ use weave_host_protocol::dispatcher::Bot;
 use weave_host_protocol::dispatcher::BotState;
 use weave_host_protocol::dispatcher::BotThread;
 use weave_host_protocol::dispatcher::DEFAULT_PAUSE_AFTER;
+use weave_host_protocol::dispatcher::MAX_BOT_EMOJI;
 use weave_host_protocol::dispatcher::SendToBotRequest;
 use weave_host_protocol::dispatcher::SentToBot;
 use weave_host_protocol::dispatcher::UpdateBotRequest;
@@ -138,6 +139,12 @@ impl Shared {
             .map(daily)
             .transpose()
             .map_err(invalid)?;
+        let emoji = request
+            .emoji
+            .as_deref()
+            .map(emoji_given)
+            .transpose()
+            .map_err(invalid)?;
         let created_by = match created_by {
             Some(by) => Some(self.find_bot(by)?.id),
             None => None,
@@ -162,6 +169,8 @@ impl Shared {
             zone,
             pause_after: request.pause_after.unwrap_or(DEFAULT_PAUSE_AFTER),
             created_by,
+            emoji,
+            color: request.color,
         };
         let bot = self
             .store
@@ -227,6 +236,10 @@ impl Shared {
             Some(Some(at)) => Some(Some(daily(&at).map_err(invalid)?)),
             other => other,
         };
+        let emoji = match request.emoji {
+            Some(Some(emoji)) => Some(Some(emoji_given(&emoji).map_err(invalid)?)),
+            other => other,
+        };
         let change = BotChange {
             name: request.name,
             policy: request.policy,
@@ -234,6 +247,8 @@ impl Shared {
             new_thread_at,
             zone: request.zone,
             pause_after: request.pause_after,
+            emoji,
+            color: request.color,
         };
         let bot = self
             .store
@@ -333,6 +348,8 @@ impl Shared {
             starting_thread: bot.new_thread.is_some(),
             id: bot.id,
             name: bot.name,
+            emoji: bot.emoji,
+            color: bot.color,
             agent_id: bot.agent_id,
             host_id: bot.host_id,
             home: bot.home,
@@ -347,6 +364,27 @@ impl Shared {
             created_by_name: bot.created_by_name,
         }
     }
+}
+
+/// `emoji`, trimmed, as a Bot's avatar keeps it, or why it can't: it's what one emoji takes,
+/// whatever that is made of, and no word.
+pub(crate) fn emoji_given(emoji: &str) -> Result<String, String> {
+    let emoji = emoji.trim();
+    if emoji.is_empty() {
+        return Err("a Bot's emoji can't be empty: leave it out, or clear it with null".to_owned());
+    }
+    if emoji.len() > MAX_BOT_EMOJI {
+        return Err(format!(
+            "a Bot's emoji is one emoji, of {MAX_BOT_EMOJI} bytes at most"
+        ));
+    }
+    let word = |character: char| {
+        character.is_ascii_alphanumeric() || character.is_whitespace() || character.is_control()
+    };
+    if emoji.chars().any(word) {
+        return Err(format!("a Bot's emoji is one emoji, not {emoji:?}"));
+    }
+    Ok(emoji.to_owned())
 }
 
 fn refused(error: BotError) -> Error {

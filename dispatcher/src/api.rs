@@ -48,6 +48,7 @@ use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::dispatcher::AddBotRequest;
 use weave_host_protocol::dispatcher::AddProjectRequest;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
+use weave_host_protocol::dispatcher::BOTS_AVATAR_FEATURE;
 use weave_host_protocol::dispatcher::BOTS_FEATURE;
 use weave_host_protocol::dispatcher::BOTS_HOME_FEATURE;
 use weave_host_protocol::dispatcher::BOTS_WATCH_FEATURE;
@@ -215,6 +216,7 @@ pub(crate) fn features() -> Vec<String> {
         BOTS_FEATURE.to_owned(),
         BOTS_HOME_FEATURE.to_owned(),
         BOTS_WATCH_FEATURE.to_owned(),
+        BOTS_AVATAR_FEATURE.to_owned(),
     ]
 }
 

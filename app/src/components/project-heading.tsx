@@ -108,7 +108,7 @@ export function ProjectHeading({ controller, project, onNewSession, onAddLocatio
   const hostName = (hostId: string) => model.hosts.find(({ id }) => id === hostId)?.name ?? hostId;
   const label = (
     <SidebarGroupLabel className='h-9 gap-2 pr-9 text-sm font-medium text-sidebar-foreground [&>svg]:size-4.5'>
-      <HugeiconsIcon icon={Folder01Icon} strokeWidth={1.75} className='text-icon-muted' aria-hidden />
+      <HugeiconsIcon icon={Folder01Icon} strokeWidth={1.75} className='text-green' aria-hidden />
       <span className='min-w-0 truncate'>{project.name}</span>
     </SidebarGroupLabel>
   );

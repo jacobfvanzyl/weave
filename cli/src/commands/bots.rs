@@ -24,6 +24,7 @@ use weave_host_protocol::dispatcher::AddBotRequest;
 use weave_host_protocol::dispatcher::BOTS_FEATURE;
 use weave_host_protocol::dispatcher::BOTS_HOME_FEATURE;
 use weave_host_protocol::dispatcher::Bot;
+use weave_host_protocol::dispatcher::BotColor;
 use weave_host_protocol::dispatcher::BotState;
 use weave_host_protocol::dispatcher::GetBotRequest;
 use weave_host_protocol::dispatcher::ListBotsRequest;
@@ -143,6 +144,15 @@ struct AddArgs {
     #[arg(long, value_name = "DURATION", value_parser = parse_timeout)]
     pause_after: Option<Duration>,
 
+    /// Its avatar's emoji.
+    #[arg(long)]
+    emoji: Option<String>,
+
+    /// The colour its avatar is drawn on: white, brown, red, orange, yellow, green, teal, blue,
+    /// purple, pink or gray.
+    #[arg(long, value_parser = parse_color)]
+    color: Option<BotColor>,
+
     /// Print the Bot as JSON.
     #[arg(long)]
     json: bool,
@@ -191,6 +201,19 @@ struct UpdateArgs {
     /// 12h.
     #[arg(long, value_name = "DURATION", value_parser = parse_timeout)]
     pause_after: Option<Duration>,
+
+    /// Its avatar's emoji.
+    #[arg(long)]
+    emoji: Option<String>,
+
+    /// The colour its avatar is drawn on: white, brown, red, orange, yellow, green, teal, blue,
+    /// purple, pink or gray.
+    #[arg(long, value_parser = parse_color)]
+    color: Option<BotColor>,
+
+    /// Give it no avatar of its own: neither emoji nor colour.
+    #[arg(long, conflicts_with_all = ["emoji", "color"])]
+    no_avatar: bool,
 
     /// Print the Bot as JSON.
     #[arg(long)]
@@ -325,6 +348,8 @@ async fn add(dispatcher: &DispatcherConnection, args: AddArgs) -> anyhow::Result
             new_thread_at: args.new_thread_at,
             zone: args.zone,
             pause_after: args.pause_after.map(millis),
+            emoji: args.emoji,
+            color: args.color,
         })
         .await?;
     let bot = added.bot;
@@ -350,6 +375,14 @@ async fn add(dispatcher: &DispatcherConnection, args: AddArgs) -> anyhow::Result
         );
     }
     Ok(())
+}
+
+/// The colour `--color` names.
+fn parse_color(name: &str) -> Result<BotColor, String> {
+    BotColor::named(&name.to_lowercase()).ok_or_else(|| {
+        let names: Vec<&str> = BotColor::ALL.into_iter().map(BotColor::name).collect();
+        format!("no colour {name}: one of {}", names.join(", "))
+    })
 }
 
 /// `home`, as given for a Bot on this computer's Host: `~/…` as it is, for the Host to put under
@@ -392,6 +425,14 @@ async fn update(dispatcher: &DispatcherConnection, args: UpdateArgs) -> anyhow::
         new_thread_at,
         zone: args.zone,
         pause_after: args.pause_after.map(millis),
+        emoji: match args.no_avatar {
+            true => Some(None),
+            false => args.emoji.map(Some),
+        },
+        color: match args.no_avatar {
+            true => Some(None),
+            false => args.color.map(Some),
+        },
     };
     if request
         == (UpdateBotRequest {
@@ -687,6 +728,19 @@ fn describe_one(bot: &Bot, schedules: &[Schedule], now: u64) -> String {
         ("schedules", schedules),
         ("id", vec![bot.id.clone()]),
     ];
+    if bot.emoji.is_some() || bot.color.is_some() {
+        let avatar = [bot.emoji.as_deref(), bot.color.map(BotColor::name)];
+        fields.push((
+            "avatar",
+            vec![
+                avatar
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" on "),
+            ],
+        ));
+    }
     if let Some(maker) = made_by(bot) {
         fields.push(("made by", vec![maker]));
     }
@@ -718,6 +772,8 @@ mod tests {
         Bot {
             id: "b-1".to_owned(),
             name: "odin".to_owned(),
+            emoji: None,
+            color: None,
             agent_id: "claude".into(),
             host_id: "h-1".to_owned(),
             host_name: "studio".to_owned(),

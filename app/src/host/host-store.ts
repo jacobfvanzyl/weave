@@ -299,6 +299,8 @@ const hostAway = (host: DispatcherHost) => {
 const botSummary = (bot: Bot): BotSummary => ({
   id: bot.id,
   name: bot.name,
+  ...(bot.emoji ? { emoji: bot.emoji } : {}),
+  ...(bot.color ? { color: bot.color } : {}),
   agentId: bot.agentId,
   hostId: bot.hostId,
   hostName: bot.hostName,
@@ -390,6 +392,7 @@ export class HostStore {
   #bots?: Map<string, Bot>;
   /** The Dispatcher makes a new Bot's home (`bots_home`). */
   #canAddBots = false;
+  #canSetBotAvatars = false;
   /** A thread shown to read only (`peekThread`), beside the threads on screen. */
   #peeked?: string;
   /** Threads opened only to be read, which close again once nothing needs them. */
@@ -735,8 +738,9 @@ export class HostStore {
     const connection = dispatcher.connection;
     if (!connection || connection.closed) return;
     const features = connection.hello.features ?? [];
-    const { bots, botsHome, botsWatch } = HOST_PROTOCOL.dispatcher.features;
+    const { bots, botsHome, botsWatch, botsAvatar } = HOST_PROTOCOL.dispatcher.features;
     this.#canAddBots = features.includes(botsHome);
+    this.#canSetBotAvatars = features.includes(botsAvatar);
     if (!features.includes(bots) && !features.includes(botsWatch)) {
       this.#bots = undefined;
       this.#changed();
@@ -2372,6 +2376,7 @@ export class HostStore {
     this.#projects = [];
     this.#bots = undefined;
     this.#canAddBots = false;
+    this.#canSetBotAvatars = false;
     this.#peeked = undefined;
     this.#closeWhenLeft.clear();
   }
@@ -2520,6 +2525,7 @@ export class HostStore {
       unread: this.#read.unread(),
       ...(this.#bots ? { bots: [...this.#bots.values()].map(botSummary).sort((left, right) => left.name.localeCompare(right.name)) } : {}),
       ...(this.#bots && this.#canAddBots ? { canAddBots: true } : {}),
+      ...(this.#bots && this.#canSetBotAvatars ? { canSetBotAvatars: true } : {}),
       ...(this.#error ? { error: this.#error } : {}),
       ...(this.#threadErrors.size > 0 ? { threadErrors: Object.fromEntries(this.#threadErrors) } : {}),
     };

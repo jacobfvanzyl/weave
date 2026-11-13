@@ -266,6 +266,7 @@ fn schema() -> Value {
                     "bots": dispatcher::BOTS_FEATURE,
                     "botsHome": dispatcher::BOTS_HOME_FEATURE,
                     "botsWatch": dispatcher::BOTS_WATCH_FEATURE,
+                    "botsAvatar": dispatcher::BOTS_AVATAR_FEATURE,
                 },
                 "defaultPauseAfter": dispatcher::DEFAULT_PAUSE_AFTER,
             },
