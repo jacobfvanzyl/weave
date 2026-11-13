@@ -695,6 +695,34 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("tool")).expect("tool"), b"binary");
     }
 
+    /// GHSA-hjqx-j4rw-g7xv: zip before 9.0 followed a symlink it had just unpacked.
+    #[test]
+    fn a_zip_writes_nothing_through_a_symlink_that_leaves_it() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let agents = root.path().join("agents");
+        std::fs::create_dir(&agents).expect("agents");
+        let agents = agents.canonicalize().expect("canonical");
+        // Where `unpack_into` unpacks, which the archive has to name in full.
+        let staging = agents.join(format!(".unpack-{}", std::process::id()));
+        let staging = staging.to_str().expect("utf-8");
+        let options = zip::write::SimpleFileOptions::default();
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("tool", options).expect("entry");
+        zip.write_all(b"program").expect("data");
+        zip.add_symlink("inner", staging, options).expect("inner");
+        zip.add_symlink("link", format!("{staging}/inner/.."), options)
+            .expect("link");
+        zip.start_file("link/planted", options).expect("entry");
+        zip.write_all(b"planted").expect("data");
+        let bytes = zip.finish().expect("zip").into_inner();
+        let archive = root.path().join("download");
+        std::fs::write(&archive, bytes).expect("write");
+        let dir = agents.join("zipped");
+        let _ = unpack_into(&archive, &target("https://x/tool.zip", "./tool"), &dir);
+        assert!(!agents.join("planted").exists());
+        assert!(!root.path().join("planted").exists());
+    }
+
     #[test]
     fn commands_stay_inside_the_archive() {
         assert_eq!(

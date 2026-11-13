@@ -89,7 +89,7 @@ unicode-segmentation = "1"
 unicode-width = "0.2"
 url = "2"
 vt100 = "0.16.2"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9.5", default-features = false, features = ["deflate"] }
 
 # Debug builds keep line numbers for backtraces and nothing more, and none for dependencies:
 # full debug info left 41 GB after one build of the tests.
