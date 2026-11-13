@@ -91,6 +91,13 @@ url = "2"
 vt100 = "0.16.2"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
+# Debug builds keep line numbers for backtraces and nothing more, and none for dependencies:
+# full debug info left 41 GB after one build of the tests.
+[profile.dev]
+debug = "line-tables-only"
+[profile.dev.package."*"]
+debug = false
+
 # A screenshot's thumbnail takes ~0.6 s to make unoptimized and ~30 ms optimized, so dev builds
 # optimize the crates that decode, shrink and encode images.
 [profile.dev.package.image]

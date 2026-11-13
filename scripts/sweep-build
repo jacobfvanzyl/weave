@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Keep only the latest debug build: bring it up to date, then remove what it didn't use.
+#
+#   scripts/sweep-build
+#
+# Cargo never removes an artifact from its build directory, so each change of dependencies,
+# features or profile leaves the earlier build's beside the new one's, tens of gigabytes at a
+# time. This builds what the workspace's commands build (`cargo build`, `cargo test --no-run`,
+# `cargo clippy --all-targets`), which costs seconds when they're up to date, and then has
+# cargo-sweep (`cargo install cargo-sweep --locked`) remove every debug artifact none of them
+# touched, and the incremental caches of what went. The release build, which
+# `scripts/update-hosts` builds on, is left as it is.
+
+set -euo pipefail
+
+repo=$(cd "$(dirname "$0")/.." && pwd)
+cd "$repo"
+
+if ! command -v cargo-sweep >/dev/null; then
+  echo "sweep-build: cargo-sweep isn't installed; \`cargo install cargo-sweep --locked\` installs it" >&2
+  exit 1
+fi
+
+# Where cargo keeps intermediate artifacts: its build directory (cargo 1.91 and later, when
+# configured apart from the target directory), else the target directory.
+metadata=$(cargo metadata --format-version 1 --no-deps)
+directory() { sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" <<<"$metadata"; }
+build=$(directory build_directory)
+[ -n "$build" ] || build=$(directory target_directory)
+if [ ! -d "$build/debug" ]; then
+  echo "sweep-build: no debug build in $build" >&2
+  exit 1
+fi
+
+size() { du -sh "$build/debug" | cut -f1; }
+before=$(size)
+
+cargo sweep --stamp
+cargo build
+cargo test --no-run
+cargo clippy --all-targets
+
+# cargo-sweep takes a whole directory, every profile in it, and nothing here touched the release
+# build, so that one stands aside meanwhile, beside the directory rather than in it.
+aside=""
+restore() { [ -z "$aside" ] || mv "$aside" "$build/release"; }
+trap restore EXIT
+if [ -d "$build/release" ]; then
+  aside="$build.release-kept-by-sweep-build"
+  if [ -e "$aside" ]; then
+    echo "sweep-build: $aside is in the way: an earlier run left the release build there" >&2
+    aside=""
+    exit 1
+  fi
+  mv "$build/release" "$aside"
+fi
+CARGO_TARGET_DIR="$build" cargo sweep --file
+restore
+aside=""
+
+# rustc links each crate's object files into its incremental cache, so what cargo-sweep removed
+# still takes its space there. A cache whose objects are linked nowhere else is of a build that
+# went; one with no objects, as a check's, goes once nothing has written it for a day.
+if [ -d "$build/debug/incremental" ]; then
+  for cache in "$build/debug/incremental"/*/; do
+    [ -d "$cache" ] || continue
+    if [ -n "$(find "$cache" -name '*.o' -print -quit)" ]; then
+      [ -n "$(find "$cache" -name '*.o' -links +1 -print -quit)" ] || rm -rf "$cache"
+    elif [ -z "$(find "$cache" -mtime -1 -print -quit)" ]; then
+      rm -rf "$cache"
+    fi
+  done
+fi
+
+echo "sweep-build: the debug build in $build was $before and is $(size)"

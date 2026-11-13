@@ -17,7 +17,7 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | `holder/` | The holder (`weave-holder`, ADR 0022): keeps one terminal's PTY, shell and screen alive for the Host, with libghostty-vt, which it builds with Zig at the commit `ghostty.toml` pins. Read `holder/AGENTS.md`. |
 | `app/` | The weave app: a React and Capacitor client of the weave Host for iPad and iPhone; WVE-91. The same React runs on the Mac in Tauri (ADR 0032, WVE-204): `app/src-tauri`, a crate outside the Cargo workspace whose core links `weave-host-client`. It lists the person's Sessions under their Projects and shows each as tabs of Blocks, laid out from the document its Host keeps (ADR 0031, WVE-203), and their Bots above them, each opening as the Session at its home with its thread locked to the top left (WVE-178). On the Mac it draws terminals in the page, with libghostty-vt built to WebAssembly at the holder's pin (WVE-205). Read `app/AGENTS.md` before working in it. |
 | `trackpad/` | Independent native iPhone/iPad trackpad and Mac companion; WVE-81. Read `trackpad/AGENTS.md` before working in it. |
-| `scripts/` | `update-hosts`: rebuild weave in release, install a copy in `~/.local/bin` and restart the Host, here and on the person's other computers over SSH. |
+| `scripts/` | `update-hosts`: rebuild weave in release, install a copy in `~/.local/bin` and restart the Host, here and on the person's other computers over SSH. `sweep-build`: keep only the latest debug build. |
 | `docs/adr/` | Decisions, from ADR 0008 on. |
 | `docs/specs/` | The Host protocol (WVE-85), remote clients (WVE-90) and the Dispatcher (WVE-175). |
 | `docs/research/` | Dated research: evidence, not implementation requirements. |
@@ -108,12 +108,15 @@ finds one: launchd won't start a program in `~/Documents`, where this checkout m
 daemon install` refuses one. A plain `cargo build --release` therefore leaves the installed weave
 as it was; `scripts/update-hosts --here` installs it.
 
-Keep only the latest debug build in `target/debug`, which otherwise grows with every rebuild
-and can fill the disk: clear `target/debug/incremental` (old incremental sessions pile up
-there, gigabytes at a time) when done building, and when it still holds artifacts of earlier
-dependency or profile settings, `cargo clean --profile dev` and build again. Leave
-`target/release` alone too: `scripts/update-hosts` builds on it incrementally, and plain `cargo
-clean` removes it.
+Keep only the latest debug build, which otherwise grows with every rebuild and can fill the
+disk: run `scripts/sweep-build` when done building. It brings the debug build up to date
+(`cargo build`, `cargo test --no-run`, `cargo clippy --all-targets`), then removes every debug
+artifact those didn't use, with cargo-sweep (`cargo install cargo-sweep --locked`), and the
+incremental caches of what went, which hold the same object files by hard links. Debug builds
+carry line numbers only, and none for dependencies (`[profile.dev]` in `Cargo.toml`): full debug
+info took 41 GB for one build of the tests, against 20 GB. `cargo clean --profile dev` and a
+build still starts over. Leave `target/release` alone: `scripts/update-hosts` builds on it
+incrementally, and plain `cargo clean` removes it; `sweep-build` leaves it as it is.
 
 The workspace also builds and passes its tests on Linux, x86_64 and aarch64 (WVE-116), where the
 Host runs as a systemd user service. There's no CI, so check changes to platform code there, in
