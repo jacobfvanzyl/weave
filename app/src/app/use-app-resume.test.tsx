@@ -1,44 +1,28 @@
-import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useAppResume } from "./use-app-resume";
+import { act, renderHook } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { useAppResume } from './use-app-resume';
 
-const lifecycle = vi.hoisted(() => ({
-  listener: undefined as ((state: { isActive: boolean }) => void) | undefined,
-  remove: vi.fn(async () => undefined),
-}));
+const show = (state: DocumentVisibilityState) => {
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue(state);
+  document.dispatchEvent(new Event('visibilitychange'));
+};
 
-vi.mock("@capacitor/app", () => ({
-  App: {
-    addListener: vi.fn(
-      async (
-        _event: string,
-        listener: (state: { isActive: boolean }) => void,
-      ) => {
-        lifecycle.listener = listener;
-        return { remove: lifecycle.remove };
-      },
-    ),
-  },
-}));
+afterEach(() => vi.restoreAllMocks());
 
-beforeEach(() => {
-  lifecycle.listener = undefined;
-  lifecycle.remove.mockClear();
-});
-
-describe("useAppResume", () => {
-  it("runs only after the app returns from an inactive state", async () => {
+describe('useAppResume', () => {
+  it('runs only after the app returns from having been hidden', () => {
     const onResume = vi.fn();
     const { unmount } = renderHook(() => useAppResume(onResume));
-    await act(async () => await Promise.resolve());
 
-    act(() => lifecycle.listener?.({ isActive: true }));
+    act(() => show('visible'));
     expect(onResume).not.toHaveBeenCalled();
-    act(() => lifecycle.listener?.({ isActive: false }));
-    act(() => lifecycle.listener?.({ isActive: true }));
+    act(() => show('hidden'));
+    act(() => show('visible'));
     expect(onResume).toHaveBeenCalledOnce();
 
     unmount();
-    await expect.poll(() => lifecycle.remove).toHaveBeenCalledOnce();
+    act(() => show('hidden'));
+    act(() => show('visible'));
+    expect(onResume).toHaveBeenCalledOnce();
   });
 });

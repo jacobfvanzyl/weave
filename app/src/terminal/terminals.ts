@@ -1,8 +1,31 @@
 import type { TerminalSummary } from '@/app/app-controller';
+import { HOST_PROTOCOL } from '@/host/protocol';
 
 // What the app shows of a terminal (ADR 0022), and the one thing about terminals this device keeps
 // for itself: their font size. Where a terminal shows is its Session's layout (ADR 0031): the
 // layout each device kept for a thread's terminals went with WVE-203.
+
+/** How a terminal's Block stands with its stream. */
+export type SurfaceState =
+  | { kind: 'connecting' }
+  /** `vt`: restored from the screen alone, without the history from before attaching. */
+  | { kind: 'attached'; restore: 'snapshot' | 'vt' }
+  | { kind: 'exited'; exitCode?: number }
+  | { kind: 'failed'; message: string };
+
+/** What a terminal's program asked the device to show, or the device did for the person in it. */
+export type TerminalNotice =
+  | { kind: 'notification'; title: string; body: string }
+  /** It wrote to the clipboard, or the person's selection went there, which now has it. */
+  | { kind: 'clipboard' };
+
+/** The stream's close codes: the Dispatcher's that carries it, and the Host's. */
+export const CLOSE = {
+  revoked: HOST_PROTOCOL.websocket.closeRevoked,
+  unauthenticated: HOST_PROTOCOL.websocket.closeUnauthenticated,
+  ticket: HOST_PROTOCOL.terminalStream.closeTicket,
+  exited: HOST_PROTOCOL.terminalStream.closeExited,
+} as const;
 
 export const FONT_SIZE = { initial: 16, min: 9, max: 24, step: 1 } as const;
 

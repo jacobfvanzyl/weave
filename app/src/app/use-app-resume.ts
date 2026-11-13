@@ -1,24 +1,22 @@
-import { useEffect, useRef } from "react";
-import { App } from "@capacitor/app";
+import { useEffect, useRef } from 'react';
 
+/** Runs `onResume` when the app comes back to the front after having been away. */
 export function useAppResume(onResume: () => void) {
   const onResumeRef = useRef(onResume);
   onResumeRef.current = onResume;
 
   useEffect(() => {
-    let wasInactive = false;
-    const listener = App.addListener("appStateChange", ({ isActive }) => {
-      if (!isActive) {
-        wasInactive = true;
+    let wasHidden = document.visibilityState === 'hidden';
+    const changed = () => {
+      if (document.visibilityState === 'hidden') {
+        wasHidden = true;
         return;
       }
-      if (!wasInactive) return;
-      wasInactive = false;
+      if (!wasHidden) return;
+      wasHidden = false;
       onResumeRef.current();
-    });
-
-    return () => {
-      void listener.then((handle) => handle.remove()).catch(() => undefined);
     };
+    document.addEventListener('visibilitychange', changed);
+    return () => document.removeEventListener('visibilitychange', changed);
   }, []);
 }

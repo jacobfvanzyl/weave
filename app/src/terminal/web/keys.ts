@@ -18,7 +18,9 @@ export function keyFor(event: Pressed, action: 'press' | 'release'): Key | 'comp
   const mods = (event.shiftKey ? MODS.shift : 0) | (event.ctrlKey ? MODS.control : 0) | (event.altKey ? MODS.option : 0);
   const types = [...event.key].length === 1;
   const how = action === 'release' ? 'release' : event.repeat ? 'repeat' : 'press';
-  if (!types) return { code: event.code, mods, action: how };
+  // A software keyboard's keys have no place on one: a key that types nothing goes by its name,
+  // which is its place's too (`Backspace`, `Enter`, `Tab`, an arrow).
+  if (!types) return { code: event.code && event.code !== 'Unidentified' ? event.code : event.key, mods, action: how };
   // Option made the character, so it isn't held over it too.
   if (event.altKey && !event.ctrlKey) return { code: event.code, text: event.key, mods: mods & ~MODS.option, action: how };
   return { code: event.code, text: event.key, mods, action: how };

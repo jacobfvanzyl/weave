@@ -11,7 +11,7 @@
 //! ([`remote`]); a Host listens for none of their own (WVE-197).
 
 pub mod carry;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod enclave;
 mod key_file;
 pub mod paired;

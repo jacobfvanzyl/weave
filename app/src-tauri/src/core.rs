@@ -385,6 +385,10 @@ async fn local_hello(socket: &PathBuf, client: &ClientInfo) -> Option<HelloRespo
 /// directory, `$XDG_STATE_HOME/weave/daemon` (by default `~/.local/state/weave/daemon`). An app
 /// started from the Finder has none of those set, and finds the launchd service's Host there.
 pub fn local_socket() -> Option<PathBuf> {
+    // An iPad or iPhone runs no Host.
+    if cfg!(mobile) {
+        return None;
+    }
     let var = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
     if let Some(dir) = var("WEAVE_DAEMON_DIR") {
         return Some(PathBuf::from(dir).join("daemon.sock"));

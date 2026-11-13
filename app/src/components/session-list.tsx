@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { Add01Icon, Cancel01Icon, ComputerIcon, Folder01Icon, GitBranchIcon, LaptopIcon, Search01Icon } from '@hugeicons/core-free-icons';
+import { Add01Icon, Cancel01Icon, Folder01Icon, FolderAddIcon, GitBranchIcon, LaptopIcon, Search01Icon, ServerStack01Icon } from '@hugeicons/core-free-icons';
 import type { AppController, DispatcherSummary, HostStatus, HostSummary, ProjectSummary, SessionSummary } from '@/app/app-controller';
 import { dragsWindow, platform } from '@/app/platform';
 import { ActivityIndicator } from '@/components/activity-indicator';
@@ -23,7 +23,9 @@ import {
   SidebarMenuItem,
 } from '@/components/ui/sidebar';
 import { cn } from '@/lib/utils';
-import type { NewThreadTarget } from '@/components/new-thread-dialog';
+import type { AddProjectTarget } from '@/components/add-project-dialog';
+import type { NewSessionTarget } from '@/components/new-session-dialog';
+import { ProjectHeading } from '@/components/project-heading';
 import { type ListedSession, sessionLabel, sessionListView } from '@/session/sessions';
 
 export const sinceLabel = (at: number | undefined, now = Date.now()) => {
@@ -144,22 +146,6 @@ function HostHeading({ host, onNewSession }: { host: HostSummary; onNewSession()
   );
 }
 
-/** A Project's heading: its name, over its Sessions on every Host, and a thread to start in it. */
-function ProjectHeading({ project, onNewSession }: { project: ProjectSummary; onNewSession?(): void }) {
-  return (
-    <>
-      <SidebarGroupLabel className='h-9 gap-2 pr-9 text-sm font-medium text-sidebar-foreground [&>svg]:size-4.5'>
-        <HugeiconsIcon icon={Folder01Icon} strokeWidth={1.75} className='text-icon-muted' aria-hidden />
-        <span className='min-w-0 truncate'>{project.name}</span>
-      </SidebarGroupLabel>
-      <SidebarGroupAction aria-label={`New Session in ${project.name}`} title={`New Session in ${project.name}`}
-        className='top-3.5 right-2.5' disabled={!onNewSession} onClick={onNewSession}>
-        <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-      </SidebarGroupAction>
-    </>
-  );
-}
-
 /**
  * The Dispatcher can't be reached, or won't take this device: no Host is reached through it until
  * it can, so the list below is as it last was.
@@ -226,7 +212,7 @@ function usePullToRefresh(onRefresh?: () => Promise<void> | void) {
  * heading. Above them all, the Bots, from a Dispatcher that keeps them (WVE-178). While the Dispatcher can't be reached, a banner says so, and the Sessions of the Hosts
  * it last listed stay, greyed out unless their Host is still connected.
  */
-export function SessionList({ controller, sessions, selected, selectedBot, leading, onOpen, onOpenBot, onNewBot, onOpenHosts, onNewSession, onEndSession }: {
+export function SessionList({ controller, sessions, selected, selectedBot, leading, onOpen, onOpenBot, onNewBot, onOpenHosts, onNewSession, onAddProject, onEndSession }: {
   controller: AppController;
   /** First in its top rail: the toggle that hides it, beside a Session. */
   leading?: ReactNode;
@@ -239,8 +225,10 @@ export function SessionList({ controller, sessions, selected, selectedBot, leadi
   onOpenBot?(id: string): void;
   onNewBot?(): void;
   onOpenHosts(): void;
-  /** Starts a Session: a thread in a directory, a Project's or a Host's when one is named. */
-  onNewSession(target?: NewThreadTarget): void;
+  /** Starts a Session: in a Project, or in a directory on a Host, when one is named. */
+  onNewSession(target?: NewSessionTarget): void;
+  /** Adds a Project, or a location on another Host to one there is (WVE-220). */
+  onAddProject?(target?: AddProjectTarget): void;
   /** Asks to end a Session. */
   onEndSession(session: SessionSummary): void;
 }) {
@@ -284,8 +272,8 @@ export function SessionList({ controller, sessions, selected, selectedBot, leadi
       </div>
     );
   };
-  /** Where a Project's new Session starts: its directory on the first of its Hosts that's connected. */
-  const startIn = (project: ProjectSummary) => project.locations.find(({ hostId }) => model.hosts.some(({ id, status }) => id === hostId && status === 'connected'));
+  /** Whether a Session can start in a Project now: one of its Hosts is connected. */
+  const startable = (project: ProjectSummary) => project.locations.some(({ hostId }) => model.hosts.some(({ id, status }) => id === hostId && status === 'connected'));
 
   return (
     <div data-slot='session-list' className='flex h-full min-h-0 w-full flex-col bg-sidebar text-sidebar-foreground'>
@@ -345,7 +333,7 @@ export function SessionList({ controller, sessions, selected, selectedBot, leadi
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
-              <Button onClick={onOpenHosts}>Hosts</Button>
+              <Button onClick={onOpenHosts}>Connections</Button>
             </EmptyContent>
           </Empty>
         )}
@@ -353,16 +341,24 @@ export function SessionList({ controller, sessions, selected, selectedBot, leadi
           <BotList bots={model.bots} unread={model.unread} canAdd={Boolean(model.canAddBots && onNewBot)} canStart={canStart} query={query}
             selected={selectedBot} onOpen={(id) => onOpenBot?.(id)} onNewBot={() => onNewBot?.()} />
         )}
-        {view.projects.map(({ project, sessions: under }) => {
-          const location = startIn(project);
-          return (
-            <SidebarGroup key={project.id} role='group' aria-label={project.name} className='py-1.5'>
-              <ProjectHeading project={project} onNewSession={location ? () => onNewSession({ hostId: location.hostId, cwd: location.path }) : undefined} />
-              <SidebarMenu className='gap-0.5'>{under.map((listedSession) => row(listedSession, true))}</SidebarMenu>
-              {under.length === 0 && <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>No Sessions yet</p>}
-            </SidebarGroup>
-          );
-        })}
+        {view.projects.map(({ project, sessions: under }) => (
+          <SidebarGroup key={project.id} role='group' aria-label={project.name} className='py-1.5'>
+            <ProjectHeading controller={controller} project={project}
+              onNewSession={startable(project) ? () => onNewSession({ projectId: project.id }) : undefined}
+              onAddLocation={onAddProject ? () => onAddProject({ to: project }) : undefined} />
+            <SidebarMenu className='gap-0.5'>{under.map((listedSession) => row(listedSession, true))}</SidebarMenu>
+            {under.length === 0 && <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>No Sessions yet</p>}
+          </SidebarGroup>
+        ))}
+        {/* After the Projects there are, the way to another: where the first one is added too. */}
+        {model.canManageProjects && onAddProject && !query && model.hosts.length > 0 && (
+          <div className='px-2 py-1'>
+            <Button variant='ghost' className='w-full justify-start gap-2 px-2 text-muted-foreground' disabled={!canStart} onClick={() => onAddProject()}>
+              <HugeiconsIcon icon={FolderAddIcon} strokeWidth={1.75} />
+              Add Project
+            </Button>
+          </div>
+        )}
         {view.hosts.map(({ host, sessions: under }) => (
           <SidebarGroup key={host.id} role='group' aria-label={host.name} data-away={hostAway(host) || undefined}
             className={cn('py-1.5', hostAway(host) && 'opacity-60')}>
@@ -386,10 +382,11 @@ export function SessionList({ controller, sessions, selected, selectedBot, leadi
       </SidebarContent>
 
       <SidebarFooter className='shrink-0 flex-row items-center gap-1 px-2 pt-1.5 pb-[calc(env(safe-area-inset-bottom)+0.375rem)]'>
-        <Button variant='ghost' size='lg' className='ml-auto' onClick={onOpenHosts}>
-          <HugeiconsIcon icon={ComputerIcon} strokeWidth={2} />
-          Hosts
-          {unreachable > 0 && <Badge variant='destructive' aria-label={`${unreachable} unreachable`}>{unreachable}</Badge>}
+        <Button variant='ghost' size='icon-lg' className='relative' aria-label='Connections' title='Connections' onClick={onOpenHosts}>
+          <HugeiconsIcon icon={ServerStack01Icon} strokeWidth={2} />
+          {unreachable > 0 && (
+            <Badge variant='destructive' className='absolute -top-1 -right-1' aria-label={`${unreachable} unreachable`}>{unreachable}</Badge>
+          )}
         </Button>
       </SidebarFooter>
     </div>

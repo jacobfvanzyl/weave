@@ -17,7 +17,6 @@ import {
   PictureInPictureExitIcon,
   PictureInPictureOnIcon,
 } from '@hugeicons/core-free-icons';
-import { platform } from '@/app/platform';
 import { NameInput } from '@/components/session/name-input';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -220,13 +219,12 @@ const HOVERS = '(hover: hover) and (pointer: fine)';
 
 /**
  * Whether a Block's controls wait for the pointer over it, as on the Mac, rather than for a tap:
- * not on a touch screen, nor where terminals are drawn natively beneath the page (the iPad's),
- * which take the touches over a Block's body. Where there's no `matchMedia` to ask, they wait for
+ * not on a touch screen. Where there's no `matchMedia` to ask, they wait for
  * the pointer.
  */
 function useHoverControls() {
-  const query = () => (platform().terminals === 'native' || typeof window.matchMedia !== 'function' ? undefined : window.matchMedia(HOVERS));
-  const [hovers, setHovers] = useState(() => platform().terminals !== 'native' && (query()?.matches ?? true));
+  const query = () => (typeof window.matchMedia !== 'function' ? undefined : window.matchMedia(HOVERS));
+  const [hovers, setHovers] = useState(() => query()?.matches ?? true);
   useEffect(() => {
     const list = query();
     if (!list) return;

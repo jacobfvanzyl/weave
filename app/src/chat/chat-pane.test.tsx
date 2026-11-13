@@ -1,7 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ElicitationSchema } from '@/host/protocol';
-import { Capacitor } from '@capacitor/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createAcpShowcaseTranscript } from './acp-showcase';
 import { createTranscript, formElicitation, reduceAcpEvent } from './acp-transcript';
@@ -478,9 +477,9 @@ describe('ChatPane', () => {
     matchMedia.mockRestore();
   });
 
-  it('releases the native iPad composer after sending at tablet widths', async () => {
+  it('releases the composer after sending on a touch screen at tablet widths', async () => {
     const user = userEvent.setup();
-    const nativePlatform = vi.spyOn(Capacitor, 'isNativePlatform').mockReturnValue(true);
+    const touch = vi.spyOn(navigator, 'maxTouchPoints', 'get').mockReturnValue(5);
     const matchMedia = vi.spyOn(window, 'matchMedia').mockReturnValue({
       matches: false,
     } as MediaQueryList);
@@ -493,7 +492,7 @@ describe('ChatPane', () => {
     await user.click(screen.getByRole('button', { name: 'Send message' }));
     expect(composer).not.toHaveFocus();
 
-    nativePlatform.mockRestore();
+    touch.mockRestore();
     matchMedia.mockRestore();
   });
 

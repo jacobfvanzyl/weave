@@ -27,10 +27,10 @@ const run = async (args: string[], options: { quiet?: boolean; env?: Record<stri
   return output;
 };
 
-/** The team the iOS app signs with, from its Xcode project. */
+/** The team the iPad's and iPhone's app signs with (`bundle.iOS.developmentTeam`). */
 const team = async () => {
-  const project = await Bun.file(resolve(root, 'ios/App/App.xcodeproj/project.pbxproj')).text();
-  return project.match(/DEVELOPMENT_TEAM = (\w+);/)?.[1];
+  const config = await Bun.file(resolve(root, 'src-tauri/tauri.conf.json')).json() as { bundle?: { iOS?: { developmentTeam?: string } } };
+  return config.bundle?.iOS?.developmentTeam;
 };
 
 /** The Apple Development identity of the iOS app's team, or ad hoc. */

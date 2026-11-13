@@ -1,12 +1,13 @@
 // The Block types this app draws (ADR 0031, WVE-203): a name and a mark for a Block's rail, and
 // what fills the Block. A Block of a type that isn't here shows its type and props as text, the
 // floor every device has (ADR 0018).
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { HugeiconsIcon } from '@hugeicons/react';
-import { BubbleChatIcon, ComputerTerminal01Icon } from '@hugeicons/core-free-icons';
+import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { HugeiconsIcon } from '@hugeicons/react';
+import { ArrowDown01Icon, BubbleChatIcon, ComputerTerminal01Icon } from '@hugeicons/core-free-icons';
 import { type AppController, type OpenSession, type TerminalSummary, type ThreadSummary, threadController, threadKey } from '@/app/app-controller';
 import { useCommand } from '@/app/commands';
 import { platform } from '@/app/platform';
+import { useSoftKeyboard } from '@/app/use-soft-keyboard';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { PathLabel } from '@/components/path-label';
 import { ThreadView, askThread } from '@/components/thread-view';
@@ -16,9 +17,7 @@ import type { BlockAction } from '@/components/session/tab-blocks';
 import type { SessionBlock } from '@/host/protocol';
 import { cn } from '@/lib/utils';
 import { TERMINAL_BLOCK, THREAD_BLOCK, terminalOf, threadOf } from '@/session/blocks';
-import type { DeviceSurface } from '@/surface/use-surface';
-import { FONT_SIZE, loadFontSize, onFontSize, setFontSize, terminalName, terminalState } from '@/terminal/terminals';
-import { type SurfaceState, type TerminalNotice, useNativeTerminal } from '@/terminal/use-native-terminal';
+import { FONT_SIZE, loadFontSize, onFontSize, setFontSize, type SurfaceState, type TerminalNotice, terminalName, terminalState } from '@/terminal/terminals';
 import { useWebTerminal } from '@/terminal/web/use-web-terminal';
 
 /** What a Block is drawn with: the app, its Session, and how it stands in the layout. */
@@ -31,8 +30,6 @@ export type BlockContext = {
   onOpenThread(key: string): void;
   /** Takes the Block out of the layout, as for one whose thread or terminal is gone. */
   onRemove(): void;
-  /** The iPhone's Surface, for the thread in front (WVE-183). */
-  surface?: DeviceSurface;
   onSwipeBack?(): void;
 };
 
@@ -76,12 +73,8 @@ const thread: BlockType = {
   actions: (block, context) => {
     const summary = summaryOf(block, context);
     if (!summary) return [];
-    const { surface } = context;
     return [
       { title: 'Thread status', run: () => askThread(summary.key, 'status') },
-      ...(surface?.status.available
-        ? [{ title: surface.status.enabled ? 'Turn the Surface off' : 'Show on the Surface', run: () => surface.setEnabled(!surface.status.enabled) }]
-        : []),
       { title: 'Delete thread…', destructive: true, run: () => askThread(summary.key, 'delete') },
     ];
   },
@@ -102,7 +95,7 @@ const thread: BlockType = {
     if (open) {
       return (
         <ThreadView controller={threadController(controller, key)} thread={open} chrome='block'
-          onOpenThread={context.onOpenThread} surface={context.surface} onSwipeBack={context.onSwipeBack} onDeleted={context.onRemove} />
+          onOpenThread={context.onOpenThread} onSwipeBack={context.onSwipeBack} onDeleted={context.onRemove} />
       );
     }
     const failure = controller.model.threadErrors?.[key];
@@ -180,32 +173,64 @@ function TerminalStatus({ state, notice, retry }: { state: SurfaceState; notice?
   );
 }
 
-/** A terminal drawn natively beneath the page, at this element's frame (ADR 0022): the iPad and iPhone. */
-function NativeTerminal({ terminal, attach, focused }: DrawnProps) {
-  const host = useRef<HTMLDivElement>(null);
-  const fontSize = useSyncExternalStore(onFontSize, loadFontSize);
-  const [notice, setNotice] = useNotice();
-  const { state, focus, retry } = useNativeTerminal(host, { terminalId: terminal.id, fontSize, attach, onNotice: setNotice });
-  useFontSizeCommands(focused, fontSize);
-  useEffect(() => {
-    if (state.kind === 'attached' && focused) focus();
-  }, [state.kind, focused]);
+const BAR_KEYS = [
+  { title: 'esc', key: 'Escape', label: 'Escape' },
+  { title: 'ctrl', key: 'Control', label: 'Control' },
+  { title: 'tab', key: 'Tab', label: 'Tab' },
+  { title: '←', key: 'ArrowLeft', label: 'Left' },
+  { title: '↓', key: 'ArrowDown', label: 'Down' },
+  { title: '↑', key: 'ArrowUp', label: 'Up' },
+  { title: '→', key: 'ArrowRight', label: 'Right' },
+] as const;
+
+/** How long an arrow is held before it repeats, and how often it does, in milliseconds. */
+const REPEAT = { after: 400, every: 70 };
+
+/**
+ * Esc, Ctrl, Tab and the arrows over a software keyboard, which has none of them, and a key that
+ * hides it, which the iPhone's lacks. Ctrl is for the next key, from the bar or the keyboard.
+ * Arrows repeat while held. A press leaves the keyboard with the terminal.
+ */
+function TerminalKeyBar({ control, press }: { control: boolean; press(key: string): void }) {
+  const repeating = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const stop = () => clearTimeout(repeating.current);
+  useEffect(() => stop, []);
+  const down = (key: string) => (event: ReactPointerEvent) => {
+    event.preventDefault();
+    stop();
+    press(key);
+    if (!key.startsWith('Arrow')) return;
+    const again = () => {
+      press(key);
+      repeating.current = setTimeout(again, REPEAT.every);
+    };
+    repeating.current = setTimeout(again, REPEAT.after);
+  };
+  const button = 'h-9 min-w-0 flex-1 rounded-md bg-secondary text-sm text-secondary-foreground select-none touch-manipulation active:bg-accent aria-pressed:bg-primary aria-pressed:text-primary-foreground';
   return (
-    <>
-      <TerminalStatus state={state} notice={notice} retry={retry} />
-      {/* The native terminal shows through this element, which stays transparent, as do its ancestors (`styles.css`). */}
-      <div ref={host} data-slot='native-terminal' data-native-layered='true' aria-label={`Terminal ${terminalName(terminal)}`}
-        className='min-h-0 min-w-0 flex-1 overflow-hidden' />
-    </>
+    <div role='toolbar' aria-label='Terminal keys' data-slot='terminal-key-bar' className='flex shrink-0 gap-1.5 bg-background p-1.5'
+      // The terminal keeps the keyboard: a tap here mustn't move it. WebKit moves it on the mouse
+      // press it makes after a touch ends, which only cancelling the touch's end stops.
+      onTouchEnd={(event) => event.preventDefault()} onMouseDown={(event) => event.preventDefault()}>
+      {BAR_KEYS.map(({ title, key, label }) => (
+        <button key={key} type='button' tabIndex={-1} aria-label={label} aria-pressed={key === 'Control' ? control : undefined} className={button}
+          onPointerDown={down(key)} onPointerUp={stop} onPointerCancel={stop} onPointerLeave={stop}>
+          {title}
+        </button>
+      ))}
+      <button type='button' tabIndex={-1} aria-label='Hide keyboard' className={button} onPointerDown={down('Hide')}>
+        <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} className='mx-auto size-4' />
+      </button>
+    </div>
   );
 }
 
-/** A terminal drawn in the page, on a canvas, by libghostty-vt in WebAssembly (ADR 0032, WVE-205): the Mac. */
+/** A terminal drawn in the page, on a canvas, by libghostty-vt in WebAssembly (ADR 0032, WVE-205), on every device in the app's shell. */
 function PageTerminal({ terminal, attach, focused }: DrawnProps) {
   const host = useRef<HTMLDivElement>(null);
   const fontSize = useSyncExternalStore(onFontSize, loadFontSize);
   const [notice, setNotice] = useNotice();
-  const { state, focus, retry } = useWebTerminal(host, {
+  const { state, focus, retry, focused: typing, control, keys } = useWebTerminal(host, {
     terminalId: terminal.id,
     fontSize,
     attach,
@@ -215,6 +240,7 @@ function PageTerminal({ terminal, attach, focused }: DrawnProps) {
     copy: (text) => platform().writeClipboard(text),
     notify: (title, body) => platform().notify?.({ title: title || terminalName(terminal), body }),
   });
+  const keyboard = useSoftKeyboard();
   useFontSizeCommands(focused, fontSize);
   useEffect(() => {
     if (state.kind === 'attached' && focused) focus();
@@ -224,6 +250,7 @@ function PageTerminal({ terminal, attach, focused }: DrawnProps) {
       <TerminalStatus state={state} notice={notice} retry={retry} />
       <div ref={host} data-slot='page-terminal' role='group' aria-label={`Terminal ${terminalName(terminal)}`}
         className='relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[#1e1e2e]' />
+      {typing && keyboard && <TerminalKeyBar control={control} press={keys} />}
     </>
   );
 }
@@ -270,8 +297,7 @@ const terminal: BlockType = {
     if (!found) return <Notice action={<Button size='sm' variant='outline' onClick={context.onRemove}>Remove from the layout</Button>}>This terminal has ended.</Notice>;
     const drawn = platform().terminals;
     if (drawn === 'text') return <TerminalText terminal={found} />;
-    const Drawn = drawn === 'native' ? NativeTerminal : PageTerminal;
-    return <Drawn terminal={found} attach={controller.actions.attachTerminal} focused={context.focused} />;
+    return <PageTerminal terminal={found} attach={controller.actions.attachTerminal} focused={context.focused} />;
   },
 };
 

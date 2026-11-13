@@ -740,7 +740,7 @@ function UrlElicitation({
   );
 }
 
-/** Opens a page in the system browser: Capacitor hands a new window's URL to iOS. */
+/** Opens a page in the system browser: the app's shell hands a new window's URL to it. */
 const openInBrowser = (url: string) => {
   window.open(url, '_blank', 'noopener,noreferrer');
 };

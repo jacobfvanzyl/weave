@@ -27,7 +27,9 @@ tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-nativ
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
+# The Secure Enclave, on the Mac and on the iPad and iPhone, whose app's core is this crate
+# (WVE-221).
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 core-foundation = { workspace = true }
 security-framework = { workspace = true }
 security-framework-sys = { workspace = true }
@@ -36,3 +38,7 @@ security-framework-sys = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+# The iPad and iPhone give a program no list of the system's roots, so there it trusts Mozilla's.
+[target.'cfg(target_os = "ios")'.dependencies]
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }

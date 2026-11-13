@@ -20,6 +20,7 @@ import type {
   LayoutChange,
   OpenSession,
   OpenThread,
+  ProjectChange,
   ProjectSummary,
   ThreadActions,
   DispatcherStatus,
@@ -29,6 +30,7 @@ import type {
   QueuedPrompt,
   RepositoryListing,
   TerminalSummary,
+  StartedTerminal,
   TerminalTicket,
   ThreadGit,
   ThreadSummary,
@@ -56,6 +58,7 @@ import {
   type HostTerminal,
   type PendingRequest,
   type PendingResolvedNotification,
+  type Project,
   type QueuedPrompt as HostQueuedPrompt,
   type Schedule,
   type ThreadEventNotification,
@@ -350,6 +353,14 @@ const refused = (what: string | undefined, error: unknown) => {
   return new Error(what ? `${what}: ${why}` : why);
 };
 
+const projectSummary = ({ id, name, kind, remote, locations }: Project): ProjectSummary => ({
+  id,
+  name,
+  kind,
+  ...(remote ? { remote } : {}),
+  locations: (locations ?? []).map(({ hostId, path }) => ({ hostId, path })),
+});
+
 const meta = (value: unknown, ...path: string[]): unknown =>
   path.reduce<unknown>((current, key) => typeof current === 'object' && current !== null ? (current as Record<string, unknown>)[key] : undefined, value);
 
@@ -446,7 +457,6 @@ export class HostStore {
     }
     this.#adopt(record);
     this.#changed();
-    await this.#forgetOldHosts();
     await this.#findLocal();
     await this.#connectDispatcher();
   }
@@ -599,6 +609,32 @@ export class HostStore {
     deleteThread: (key) => this.#reportGone(() => this.#delete(key)),
     ...this.#threadActions(() => this.#selected()),
     newTerminal: () => this.#newTerminal(),
+    startTerminal: (input) => this.#startTerminal(input),
+    addProject: async ({ name, location }) => {
+      try {
+        const { project } = await this.#dispatcherApi().request('projects/add', { name, location });
+        return this.#projectUpdated(project);
+      } catch (error) {
+        throw refused(undefined, error);
+      }
+    },
+    updateProject: async (id, change: ProjectChange) => {
+      try {
+        const { project } = await this.#dispatcherApi().request('projects/update', { project: id, ...change });
+        return this.#projectUpdated(project);
+      } catch (error) {
+        throw refused(undefined, error);
+      }
+    },
+    removeProject: async (id) => {
+      try {
+        await this.#dispatcherApi().request('projects/remove', { project: id });
+      } catch (error) {
+        throw refused("Couldn't remove the Project", error);
+      }
+      this.#projects = this.#projects.filter((project) => project.id !== id);
+      this.#changed();
+    },
     closeTerminal: async (id) => {
       const { connection } = this.#sessionHost();
       try {
@@ -902,14 +938,6 @@ export class HostStore {
     return dispatcher;
   }
 
-  /** Deletes the keys of the Hosts an earlier version of the app paired with, and their records. */
-  async #forgetOldHosts() {
-    const keys = await this.#options.storage.oldHostKeys().catch(() => []);
-    if (keys.length === 0) return;
-    await Promise.all(keys.map((keyId) => this.#options.keyFor(keyId).forget().catch(() => {})));
-    await this.#options.storage.forgetOldHosts().catch(() => {});
-  }
-
   /**
    * Proves the device to the Dispatcher again, then lists the Hosts and connects to each it's
    * connected to. A try still under way, as on a network that has since changed, is abandoned.
@@ -976,15 +1004,25 @@ export class HostStore {
     try {
       const { projects } = await connection.request('projects/list', {});
       if (this.#dispatcher !== dispatcher) return;
-      this.#projects = projects.map(({ id, name, locations }) => ({
-        id,
-        name,
-        locations: (locations ?? []).map(({ hostId, path }) => ({ hostId, path })),
-      }));
+      this.#projects = projects.map(projectSummary);
       this.#changed();
     } catch {
       // The Sessions show under their Hosts, as without Projects.
     }
+  }
+
+  /** A Project the Dispatcher just made or changed, in the list at once: it tells no one of it (no `projects/watch`). */
+  #projectUpdated(project: Project): ProjectSummary {
+    const summary = projectSummary(project);
+    this.#projects = [...this.#projects.filter(({ id }) => id !== summary.id), summary].sort((left, right) => left.name.localeCompare(right.name));
+    this.#changed();
+    return summary;
+  }
+
+  /** Whether the Dispatcher keeps Projects and can be asked to change them now. */
+  #canManageProjects() {
+    const connection = this.#dispatcher?.connection;
+    return Boolean(connection && !connection.closed && connection.hello.features?.includes(HOST_PROTOCOL.dispatcher.features.projects));
   }
 
   #dispatcherFailed(dispatcher: DispatcherEntry, error: unknown) {
@@ -1824,6 +1862,19 @@ export class HostStore {
     }
   }
 
+  /** A terminal in a directory that needn't be the Session on screen's: its Session's first Block, which shows it. */
+  async #startTerminal({ hostId, directory }: { hostId: string; directory: string }): Promise<StartedTerminal> {
+    const connection = this.#requestable(hostId);
+    if (!connection.supports(HOST_PROTOCOL.features.terminals)) throw new Error(`${this.#hosts.get(hostId)?.name ?? 'The Host'} has no terminals.`);
+    try {
+      // Its Session lists it once it's on screen: the one there now may be another's.
+      const { terminal } = await connection.request('terminals/new', { directory });
+      return { id: terminal.id, sessionKey: sessionKey(hostId, terminal.scope) };
+    } catch (error) {
+      throw failed("Couldn't start a terminal", error);
+    }
+  }
+
   async #attachTerminal(id: string): Promise<TerminalTicket> {
     const { shown, connection } = this.#sessionHost();
     const { ticket } = await connection.request('terminals/attach', { id });
@@ -1978,6 +2029,7 @@ export class HostStore {
       const listed = await connection.request('worktrees/list', { repo: path });
       return {
         repo: listed.repo,
+        ...(listed.remote ? { remote: listed.remote } : {}),
         ...(listed.defaultBranch ? { defaultBranch: listed.defaultBranch } : {}),
         worktrees: listed.worktrees.map((worktree) => ({
           path: worktree.path,
@@ -2291,7 +2343,6 @@ export class HostStore {
     await this.#options.storage.save(record);
     adopted = this.#adopt(record);
     this.#error = undefined;
-    await this.#forgetOldHosts();
     if (this.#local) this.#adoptLocal();
     else await this.#findLocal();
     await this.#dispatcherConnected(adopted, connection);
@@ -2460,6 +2511,7 @@ export class HostStore {
       threads,
       agents,
       ...(this.#projects.length > 0 ? { projects: this.#projects } : {}),
+      ...(this.#canManageProjects() ? { canManageProjects: true } : {}),
       known: this.#sessions.known(),
       ...this.#openSession(),
       open,

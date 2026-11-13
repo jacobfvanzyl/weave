@@ -1,11 +1,11 @@
-import { registerPlugin } from '@capacitor/core';
 import { toBase64Url } from './base64url';
 import type { Jwk } from './protocol';
 
 /**
  * This device's key for the Dispatcher it pairs with (ADR 0030): it introduces the device at
- * pairing and signs each connection's challenge, its connections carried to Hosts included. On a
- * device it lives in the Secure Enclave and never leaves it.
+ * pairing and signs each connection's challenge, its connections carried to Hosts included. In the
+ * app's shell the core keeps it, in the Secure Enclave, and signs with it; the page holds one
+ * only in a browser.
  */
 export type DeviceKey = {
   publicKey(): Promise<Jwk>;
@@ -14,21 +14,6 @@ export type DeviceKey = {
   /** Deletes the key; the device has to pair again. */
   forget(): Promise<void>;
 };
-
-type DeviceKeyPlugin = {
-  generate(options: { keyId: string }): Promise<{ publicKey: Jwk }>;
-  sign(options: { keyId: string; payload: string }): Promise<{ signature: string }>;
-  delete(options: { keyId: string }): Promise<void>;
-};
-
-const NativeDeviceKey = registerPlugin<DeviceKeyPlugin>('DeviceKey');
-
-/** The key `keyId` in the native shell's Keychain, made on first use (`DeviceKeyPlugin.swift`). */
-export const nativeDeviceKey = (keyId: string): DeviceKey => ({
-  publicKey: async () => (await NativeDeviceKey.generate({ keyId })).publicKey,
-  sign: async (message) => (await NativeDeviceKey.sign({ keyId, payload: message })).signature,
-  forget: () => NativeDeviceKey.delete({ keyId }),
-});
 
 /** A big-endian integer as DER wants it: no leading zeros, and a zero byte before a high bit. */
 const derInteger = (value: Uint8Array) => {
@@ -49,7 +34,7 @@ export function rawSignatureToDer(raw: Uint8Array): Uint8Array {
 
 /**
  * A key WebCrypto holds in memory, for tests and for a browser during development. Its private
- * half can't be exported, but it isn't hardware-backed: devices use `nativeDeviceKey`.
+ * half can't be exported, but it isn't hardware-backed: the app's shell signs in its core, with the Secure Enclave's.
  */
 export async function webCryptoDeviceKey(): Promise<DeviceKey> {
   const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);

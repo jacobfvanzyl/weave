@@ -1,32 +1,32 @@
-// The platform seam (ADR 0032, WVE-203): what differs between the shells the same UI runs in,
-// in one place beside `AppController`. The iPad and iPhone run in Capacitor, the Mac in Tauri,
-// and a browser runs the page alone, for development and with `?mock=`. A shell answers for the
-// device's key and pairing, how it reaches the Dispatcher and the Hosts (the Mac's own Host
-// among them), how it draws terminals, and where its command keys come from.
-import { Clipboard } from '@capacitor/clipboard';
-import { Capacitor } from '@capacitor/core';
+// The platform seam (ADR 0032, WVE-203): what differs between where the same UI runs, in one
+// place beside `AppController`. The Mac, the iPad and the iPhone run it in the app's shell
+// (Tauri, WVE-221), whose core holds the device's key and opens its connections; a browser runs
+// the page alone, which then holds its own key and opens its own WebSockets, for development,
+// with `?mock=`, and for a web build later. Each answers for the device's key and pairing, how
+// it reaches the Dispatcher and the Hosts (the Mac's own Host among them), how it draws
+// terminals, and where its command keys come from. Nothing outside this file and `src/mac` asks
+// which shell it is.
 import { clipboardWrite } from '@/host/client-tools';
 import { websocketConnector } from '@/host/connection';
-import { type DeviceKey, nativeDeviceKey, webCryptoDeviceKey } from '@/host/device-key';
+import { type DeviceKey, webCryptoDeviceKey } from '@/host/device-key';
 import type { HostStoreOptions } from '@/host/host-store';
 import { HOST_PROTOCOL } from '@/host/protocol';
-import { preferencesStorage } from '@/host/storage';
+import { pageStorage } from '@/host/storage';
 import { macNotify } from '@/mac/notify';
-import { MAC_KEY, macKey, macRoutes, macStorage, onMac, tauriCore } from '@/mac/routes';
+import { MAC_KEY, macKey, macRoutes, macStorage, onIos, onMac, tauriCore } from '@/mac/routes';
 
 /** What the store needs of the device: its pairing, its key, its routes and its client tools. */
 export type DeviceStore = Pick<HostStoreOptions, 'storage' | 'keyFor' | 'newKey' | 'socket' | 'routes' | 'clientTools' | 'deviceName'>;
 
 export type Platform = {
-  /** The shell: Capacitor on the iPad and iPhone, Tauri on the Mac, or a browser alone. */
+  /** The device: the iPad or iPhone, or the Mac, in the app's shell, or a browser alone. */
   kind: 'ios' | 'mac' | 'web';
   /**
-   * How it draws terminals (ADR 0022): natively beneath the page on the iPad and iPhone
-   * (`native`), or in the page itself, with libghostty-vt in WebAssembly, on the Mac (`page`,
-   * WVE-205). In a browser alone a terminal's Block says what it is and what runs in it
-   * (`text`).
+   * How it draws terminals (ADR 0022): in the page itself, with libghostty-vt in WebAssembly
+   * (`page`, WVE-205), where the core passes it their streams. In a browser alone a terminal's
+   * Block says what it is and what runs in it (`text`).
    */
-  terminals: 'native' | 'page' | 'text';
+  terminals: 'page' | 'text';
   /**
    * Where a hardware keyboard's command keys come from: the page hears them itself, or the
    * Mac's menu bar has them and runs the command in the page.
@@ -58,10 +58,20 @@ export type Platform = {
 
 const clipboard = (write: (text: string) => Promise<void>) => ({ [HOST_PROTOCOL.clientTools.clipboardWrite]: clipboardWrite(write) });
 
-// The web view lets a page write only while the person is clicking or typing in it.
+// The web view lets a page write only while the person is clicking or typing in it, so the core writes.
 const macClipboard = (text: string) => tauriCore.invoke<void>('clipboard_write', { text });
-// The native plugin writes without a tap first.
-const nativeClipboard = (text: string) => Clipboard.write({ string: text });
+// A browser's own, which may refuse without a click or key first.
+const pageClipboard = (text: string) => navigator.clipboard.writeText(text);
+
+/** The core's side of the store: it holds the key and the pairing, and opens every connection. */
+const coreStore = (deviceName: string): DeviceStore => ({
+  storage: macStorage(),
+  keyFor: () => macKey,
+  newKey: async () => ({ keyId: MAC_KEY, key: macKey }),
+  routes: macRoutes(),
+  clientTools: clipboard(macClipboard),
+  deviceName,
+});
 
 /** The Mac: its core holds the key and reaches everything, with the pairing the computer's CLI shares. */
 const mac: Platform = {
@@ -73,36 +83,19 @@ const mac: Platform = {
   titleBar: 'overlay',
   notify: macNotify,
   writeClipboard: macClipboard,
-  store: () => ({
-    storage: macStorage(),
-    keyFor: () => macKey,
-    newKey: async () => ({ keyId: MAC_KEY, key: macKey }),
-    routes: macRoutes(),
-    clientTools: clipboard(macClipboard),
-    deviceName: 'Mac',
-  }),
+  store: () => coreStore('Mac'),
 };
 
-/** The iPad and iPhone: the key in the Secure Enclave, the pairing in the app's preferences. */
+/** The iPad and iPhone (WVE-221): the Mac's core, with a pairing of the device's own and no Host beside it. */
 const ios: Platform = {
   kind: 'ios',
-  terminals: 'native',
+  terminals: 'page',
   keys: 'page',
   localHost: false,
   windows: 'one',
   titleBar: 'none',
-  writeClipboard: nativeClipboard,
-  store: () => ({
-    storage: preferencesStorage,
-    keyFor: (keyId) => nativeDeviceKey(keyId),
-    newKey: async () => {
-      const keyId = crypto.randomUUID();
-      return { keyId, key: nativeDeviceKey(keyId) };
-    },
-    socket: (url, subprotocol) => websocketConnector(url, subprotocol),
-    clientTools: clipboard(nativeClipboard),
-    deviceName: document.documentElement.dataset.deviceIdiom === 'phone' ? 'iPhone' : 'iPad',
-  }),
+  writeClipboard: macClipboard,
+  store: () => coreStore(document.documentElement.dataset.deviceIdiom === 'phone' ? 'iPhone' : 'iPad'),
 };
 
 // A browser, during development, keeps its keys in memory: after a reload it pairs again.
@@ -120,9 +113,9 @@ const web: Platform = {
   localHost: false,
   windows: 'one',
   titleBar: 'none',
-  writeClipboard: nativeClipboard,
+  writeClipboard: pageClipboard,
   store: () => ({
-    storage: preferencesStorage,
+    storage: pageStorage,
     keyFor: (keyId) => browserKeys.get(keyId) ?? lostKey(),
     newKey: async () => {
       const keyId = crypto.randomUUID();
@@ -131,13 +124,13 @@ const web: Platform = {
       return { keyId, key };
     },
     socket: (url, subprotocol) => websocketConnector(url, subprotocol),
-    clientTools: clipboard(nativeClipboard),
+    clientTools: clipboard(pageClipboard),
     deviceName: 'Browser',
   }),
 };
 
 /** The shell the page runs in. */
-export const platform = (): Platform => onMac() ? mac : Capacitor.isNativePlatform() ? ios : web;
+export const platform = (): Platform => onMac() ? mac : onIos() ? ios : web;
 
 /**
  * What makes a rail in the window's title row drag the window on the Mac: Tauri's `drag.js` moves

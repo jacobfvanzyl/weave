@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { ArrowLeft01Icon, Cancel01Icon, Delete02Icon, Edit02Icon, InformationCircleIcon, MoreHorizontalIcon, SparklesIcon, StopIcon, Tv01Icon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
+import { ArrowLeft01Icon, Cancel01Icon, Delete02Icon, Edit02Icon, InformationCircleIcon, MoreHorizontalIcon, SparklesIcon, StopIcon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
 import type { AgentUpdateNotice, AppController, DispatcherSummary, HostSummary, OpenThread, ThreadSummary } from '@/app/app-controller';
 import { dragsWindow } from '@/app/platform';
 import { usePhoneLayout } from '@/app/use-phone-layout';
 import { useUpdateNotice } from '@/app/use-update-notice';
 import { allSubagents, findSubagent, threadLabel, waitsForAnswer } from '@/chat/acp-transcript';
-import { ChatPane, SurfacedThread } from '@/chat/chat-pane';
+import { ChatPane } from '@/chat/chat-pane';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { DeleteThreadDialog } from '@/components/delete-thread-dialog';
 import { PathLabel } from '@/components/path-label';
@@ -18,8 +18,6 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import { SurfaceScrubber } from '@/surface/surface-scrubber';
-import type { DeviceSurface } from '@/surface/use-surface';
 
 /** The bar above a thread, and above the empty state when none is open. */
 export function ThreadHeader({ leading, divided = true, children }: {
@@ -112,14 +110,12 @@ function useThreadAsks(key: string, answer: (what: ThreadAsk) => void) {
   }, [key]);
 }
 
-function ThreadMenu({ thread, actions, canRename, onStatus, surface }: {
+function ThreadMenu({ thread, actions, canRename, onStatus }: {
   thread: ThreadSummary;
   actions: AppController['actions'];
   canRename?: boolean;
   /** Show the thread's status sheet. */
   onStatus(): void;
-  /** A connected display the thread can be shown on (WVE-183). */
-  surface?: { enabled: boolean; setEnabled(enabled: boolean): void };
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -135,12 +131,6 @@ function ThreadMenu({ thread, actions, canRename, onStatus, surface }: {
               <HugeiconsIcon icon={InformationCircleIcon} strokeWidth={2} />
               Thread status
             </DropdownMenuItem>
-            {surface && (
-              <DropdownMenuItem onClick={() => surface.setEnabled(!surface.enabled)}>
-                <HugeiconsIcon icon={Tv01Icon} strokeWidth={2} />
-                {surface.enabled ? 'Turn the Surface off' : 'Show on the Surface'}
-              </DropdownMenuItem>
-            )}
             {canRename && (
               <DropdownMenuItem disabled={thread.state !== 'open'} onClick={() => setRenaming(true)}>
                 <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} />
@@ -267,16 +257,11 @@ function ConnectionNotice({ host, dispatcher }: { host: HostSummary; dispatcher?
  * what it's doing, renames it in place, and has its menu, which asks here (`askThread`) for its
  * status, or to delete it.
  */
-export function ThreadView({ controller, thread, leading, onSwipeBack, surface, chrome = 'full', onOpenThread, onDeleted }: {
+export function ThreadView({ controller, thread, leading, onSwipeBack, chrome = 'full', onOpenThread, onDeleted }: {
   controller: AppController;
   thread: OpenThread;
   leading?: ReactNode;
   onSwipeBack?: () => void;
-  /**
-   * The iPhone's Surface (WVE-183). While it's connected, the transcript is there, and the
-   * iPhone keeps the requests waiting on the person and the composer.
-   */
-  surface?: DeviceSurface;
   chrome?: 'full' | 'block';
   /** Shows another thread, as the one this one continues in; `selectThread` without it. */
   onOpenThread?(key: string): void;
@@ -288,7 +273,6 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface, 
   const host = model.hosts.find(({ id }) => id === summary?.hostId);
   const others = Math.max(0, (summary?.clients ?? 0) - 1);
   const phone = usePhoneLayout();
-  const surfaced = phone && Boolean(surface?.status.connected);
   // A subagent whose own transcript shows instead of the thread's.
   const [watching, setWatching] = useState<string>();
   useEffect(() => setWatching(undefined), [thread.key]);
@@ -316,13 +300,12 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface, 
         </Badge>
       )}
       {summary && (
-        <ThreadMenu thread={summary} actions={actions} canRename={host?.canRename} onStatus={() => setStatusShown(true)}
-          surface={phone && surface?.status.available ? { enabled: surface.status.enabled, setEnabled: surface.setEnabled } : undefined} />
+        <ThreadMenu thread={summary} actions={actions} canRename={host?.canRename} onStatus={() => setStatusShown(true)} />
       )}
     </>
   );
   // Requests waiting in a transcript not on screen: Main's while a subagent's shows, or a subagent's.
-  const asking = surfaced ? [] : [
+  const asking = [
     ...(subagent && waitsForAnswer(thread.transcript) ? [undefined] : []),
     ...allSubagents(thread.transcript)
       .filter(({ threadId, transcript }) => threadId !== subagent?.threadId && waitsForAnswer(transcript))
@@ -402,21 +385,7 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface, 
           );
         })}
         <div className='flex min-h-0 min-w-0 flex-1 flex-col'>
-          {surfaced && surface
-            ? (
-              <SurfacedThread
-                key={thread.key}
-                draftKey={thread.key}
-                model={thread.transcript}
-                actions={actions}
-                queued={thread.queued}
-                queuePaused={thread.queuePaused}
-                canSteer={thread.canSteer}
-                canAttachImages={thread.canAttachImages}
-                aside={<SurfaceScrubber position={surface.position} onScroll={surface.scroll} onFollow={surface.follow} />}
-              />
-            )
-            : subagent
+          {subagent
             ? (
               <>
                 <div data-slot='subagent-bar' className='flex min-h-9 shrink-0 items-center gap-2 border-b bg-muted/40 px-2 text-xs'>

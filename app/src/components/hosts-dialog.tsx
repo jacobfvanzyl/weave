@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ComputerIcon, Delete02Icon, RefreshIcon, ServerStack01Icon } from '@hugeicons/core-free-icons';
 import type { AppController, DispatcherSummary, HostSummary } from '@/app/app-controller';
@@ -123,6 +123,7 @@ export function HostsDialog({ controller, open, onOpenChange, offer }: {
   const away = dispatcher?.status !== 'connected';
   const unpaired = !dispatcher || dispatcher.status === 'revoked' || dispatcher.status === 'refused';
   const [pairing, setPairing] = useState(false);
+  const hostsHeading = useId();
   useEffect(() => {
     if (offer) setPairing(true);
   }, [offer]);
@@ -134,24 +135,31 @@ export function HostsDialog({ controller, open, onOpenChange, offer }: {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='max-h-[calc(100dvh-2rem)] w-[min(36rem,calc(100%-2rem))] max-w-none overflow-y-auto sm:max-w-xl'>
         <DialogHeader>
-          <DialogTitle>Hosts</DialogTitle>
+          <DialogTitle>Connections</DialogTitle>
           <DialogDescription>
             This device reaches your Hosts through the Dispatcher it's paired with. Its key never leaves this device.
           </DialogDescription>
         </DialogHeader>
         {dispatcher && dispatcher.status !== 'revoked' && <DispatcherRow dispatcher={dispatcher} actions={actions} />}
-        {model.hosts.length > 0 && (
-          <ul aria-label='Hosts' className='grid gap-2'>
-            {model.hosts.map((host) => <HostRow key={host.id} host={host} away={away} actions={actions} />)}
-          </ul>
-        )}
-        {dispatcher?.status === 'connected' && model.hosts.length === 0 && (
-          <p className='text-muted-foreground'>
-            No Host has joined the Dispatcher yet. <code>weave hosts add</code> on a computer has its Host join.
-          </p>
+        {dispatcher && dispatcher.status !== 'revoked' && (
+          <section aria-labelledby={hostsHeading} className='grid gap-2 border-t border-border pt-3'>
+            <h3 id={hostsHeading} className='text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase'>Hosts</h3>
+            {model.hosts.length > 0 && (
+              <ul aria-labelledby={hostsHeading} className='grid gap-2'>
+                {model.hosts.map((host) => <HostRow key={host.id} host={host} away={away} actions={actions} />)}
+              </ul>
+            )}
+            {model.hosts.length === 0 && (
+              <p className='text-muted-foreground'>
+                {dispatcher.status === 'connected'
+                  ? <>No Host has joined the Dispatcher yet. <code>weave hosts add</code> on a computer has its Host join.</>
+                  : 'Your Hosts show once the Dispatcher can be reached.'}
+              </p>
+            )}
+          </section>
         )}
         {unpaired || pairing
-          ? <PairDispatcherForm controller={controller} offer={offer} onPaired={() => setPairing(false)} />
+          ? <PairDispatcherForm className='rounded-lg border border-border p-3' controller={controller} offer={offer} onPaired={() => setPairing(false)} />
           : (
             <div className='flex justify-end'>
               <Button variant='outline' onClick={() => setPairing(true)}>Pair again</Button>

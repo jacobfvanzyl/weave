@@ -13,7 +13,6 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Empty, EmptyDescription, EmptyHeader } from '@/components/ui/empty';
 import { Spinner } from '@/components/ui/spinner';
 import type { ContentBlock } from '@/host/protocol';
-import type { DeviceSurface } from '@/surface/use-surface';
 
 const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -69,7 +68,7 @@ function FirstPrompt({ controller, bot, leading, onOpenBot }: { controller: AppC
   );
 }
 
-export function BotView({ controller, bot, session, leading, phone, reveal, onRevealed, onOpenBot, onOpenThread, onCreated, surface, onBack }: {
+export function BotView({ controller, bot, session, leading, phone, reveal, onRevealed, onOpenBot, onOpenThread, onCreated, onBack }: {
   controller: AppController;
   bot: BotSummary;
   /** Its Session, once the store shows it: the one at its home. */
@@ -81,7 +80,6 @@ export function BotView({ controller, bot, session, leading, phone, reveal, onRe
   onOpenBot(): void;
   onOpenThread(key: string): void;
   onCreated?(thread: CreatedThread): void;
-  surface?: DeviceSurface;
   onBack?(): void;
 }) {
   const { model } = controller;
@@ -89,7 +87,7 @@ export function BotView({ controller, bot, session, leading, phone, reveal, onRe
   if (session) {
     return (
       <SessionView key={session.key} controller={controller} session={session} members={[]} leading={leading} phone={phone}
-        reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} surface={surface} onBack={onBack}
+        reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} onBack={onBack}
         bot={bot} onOpenBot={onOpenBot} />
     );
   }

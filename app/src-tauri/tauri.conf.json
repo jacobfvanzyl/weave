@@ -17,7 +17,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": [
+      "app"
+    ],
     "category": "DeveloperTool",
     "icon": [
       "icons/32x32.png",
@@ -28,13 +30,27 @@
     ],
     "macOS": {
       "minimumSystemVersion": "11.0"
+    },
+    "iOS": {
+      "developmentTeam": "942HB89NL5",
+      "minimumSystemVersion": "15.0"
     }
   },
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["weave"]
-      }
+        "schemes": [
+          "weave"
+        ]
+      },
+      "mobile": [
+        {
+          "scheme": [
+            "weave"
+          ],
+          "appLink": false
+        }
+      ]
     }
   }
 }

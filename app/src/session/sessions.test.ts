@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HostSummary, KnownSession, ProjectSummary, ThreadSummary } from '@/app/app-controller';
-import { containing, sessionLabel, sessionListView, sessionOfThread, sessionSummaries,
+import { containing, projectAt, projectLocation, projectsByUse, projectsOfRepository, sessionLabel, sessionListView, sessionOfThread, sessionSummaries,
   sessionWith,
   threadSessions,
   ownThreads, waitingSessions } from './sessions';
@@ -226,5 +226,43 @@ describe('the sidebar’s list', () => {
     // By the Host a Session is on, too.
     expect(sessionListView(sessions, hosts, projects, { query: 'homelab' }).projects[0].sessions.map(({ session }) => session.key)).toEqual(['h-homelab:/home/jaco/odin']);
     expect(sessionListView(sessions, hosts, projects, { query: 'odin' }).projects[0].sessions).toHaveLength(3);
+  });
+});
+
+describe('a directory as a Project’s location', () => {
+  const weave: ProjectSummary = { ...project('weave', [[MAC, '/code/weave']]), kind: 'git', remote: 'github.com/veezee/weave' };
+  const notes: ProjectSummary = { ...project('notes', [[MAC, '/notes']]), kind: 'directory' };
+  const repository = { repo: '/src/weave', remote: 'github.com/veezee/weave', worktrees: [] };
+
+  it('is its repository, by its primary worktree and remote, or the directory itself outside one', () => {
+    expect(projectLocation(HOMELAB, '/src/weave.fix/tui', repository)).toEqual({ hostId: HOMELAB, path: '/src/weave', kind: 'git', remote: 'github.com/veezee/weave' });
+    expect(projectLocation(HOMELAB, '/src/weave', { repo: '/src/weave', worktrees: [] })).toEqual({ hostId: HOMELAB, path: '/src/weave', kind: 'git' });
+    expect(projectLocation(HOMELAB, '/srv/odin')).toEqual({ hostId: HOMELAB, path: '/srv/odin', kind: 'directory' });
+  });
+
+  it('is a Project’s already only at the same path on the same Host', () => {
+    expect(projectAt([weave, notes], { hostId: MAC, path: '/code/weave' })).toBe(weave);
+    expect(projectAt([weave, notes], { hostId: HOMELAB, path: '/code/weave' })).toBeUndefined();
+    expect(projectAt([weave, notes], { hostId: MAC, path: '/code/weave/tui' })).toBeUndefined();
+  });
+
+  it('may join the git Projects with its remote that have no location on its Host', () => {
+    const clone = projectLocation(HOMELAB, '/src/weave', repository);
+    expect(projectsOfRepository([weave, notes], clone)).toEqual([weave]);
+    // Not on a Host the Project is on already, nor without a remote, nor as a directory.
+    expect(projectsOfRepository([weave], { ...clone, hostId: MAC })).toEqual([]);
+    expect(projectsOfRepository([weave], projectLocation(HOMELAB, '/src/weave', { repo: '/src/weave', worktrees: [] }))).toEqual([]);
+    expect(projectsOfRepository([weave], projectLocation(HOMELAB, '/src/weave'))).toEqual([]);
+    expect(projectsOfRepository([{ ...weave, remote: 'github.com/other/weave' }], clone)).toEqual([]);
+  });
+});
+
+describe('the Projects to start a Session in', () => {
+  it('come the one worked in last first, then those with no Session, by name', () => {
+    const projects = [project('alpha', [[MAC, '/alpha']]), project('beta', [[MAC, '/beta']]), project('gamma', [[MAC, '/gamma']]), project('delta', [[MAC, '/delta']])];
+    const session = (directory: string, lastActivityAt: number) =>
+      ({ key: `${MAC}:${directory}`, hostId: MAC, directory, name: directory, threads: [], waiting: 0, running: 0, unread: false, lastActivityAt });
+    expect(projectsByUse(projects, [session('/beta', 10), session('/gamma/sub', 30), session('/elsewhere', 99)]).map(({ name }) => name))
+      .toEqual(['gamma', 'beta', 'alpha', 'delta']);
   });
 });

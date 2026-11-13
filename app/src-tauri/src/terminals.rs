@@ -29,6 +29,8 @@ use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::net::UnixStream;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::AbortHandle;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
@@ -49,6 +51,9 @@ use crate::core::Failure;
 
 /// How long the page has to open a stream it asked for.
 const KEY_LIFETIME: Duration = Duration::from_secs(30);
+
+/// How long the core waits for its own port to answer before it takes it for gone.
+const PROBE: Duration = Duration::from_millis(250);
 
 /// The built app's page.
 const APP_ORIGIN: &str = "tauri://localhost";
@@ -75,6 +80,8 @@ pub struct Streams {
     dev: bool,
     offered: Mutex<HashMap<String, Offered>>,
     open: Mutex<Vec<AbortHandle>>,
+    /// Takes a new listener to the task that accepts, in place of the one it has.
+    rebound: Mutex<Option<UnboundedSender<std::net::TcpListener>>>,
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -88,17 +95,41 @@ impl Streams {
             dev,
             offered: Mutex::new(HashMap::new()),
             open: Mutex::new(Vec::new()),
+            rebound: Mutex::new(None),
         }
+    }
+
+    /// Where the core listens, on a port that still answers. iOS takes a suspended app's
+    /// listening socket away, and nothing says so when the app comes back: the port just
+    /// refuses. So each offer tries it first, and listens on a new one if it's gone.
+    fn listening(&self) -> Result<SocketAddr, Failure> {
+        let unheard =
+            || Failure::new("connection", "The app isn't listening for its terminals' streams.");
+        let mut address = locked(&self.address);
+        let current = (*address).ok_or_else(unheard)?;
+        if std::net::TcpStream::connect_timeout(&current, PROBE).is_ok() {
+            return Ok(current);
+        }
+        let listener = bind().map_err(|error| {
+            Failure::new(
+                "connection",
+                format!("The app couldn't listen for its terminals' streams again: {error}"),
+            )
+        })?;
+        let again = listener.local_addr().map_err(|_| unheard())?;
+        locked(&self.rebound)
+            .as_ref()
+            .ok_or_else(unheard)?
+            .send(listener)
+            .map_err(|_| unheard())?;
+        tracing::info!(%again, "listening for terminals' streams again");
+        *address = Some(again);
+        Ok(again)
     }
 
     /// An address the page opens one WebSocket at, soon, for a stream to `target`.
     pub fn offer(&self, target: Target) -> Result<String, Failure> {
-        let address = (*locked(&self.address)).ok_or_else(|| {
-            Failure::new(
-                "connection",
-                "The app isn't listening for its terminals' streams.",
-            )
-        })?;
+        let address = self.listening()?;
         let mut bytes = [0_u8; 32];
         getrandom::fill(&mut bytes)
             .map_err(|error| Failure::new("connection", format!("no random key: {error}")))?;
@@ -163,15 +194,26 @@ impl Streams {
 /// Starts listening for the page's streams on a loopback port of its own. Call it once, inside
 /// the runtime.
 pub fn listen(core: &Arc<Core>) -> std::io::Result<SocketAddr> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    listener.set_nonblocking(true)?;
-    let listener = TcpListener::from_std(listener)?;
+    let listener = bind()?;
     let address = listener.local_addr()?;
+    let mut listener = TcpListener::from_std(listener)?;
+    let (rebound, mut rebinding) = unbounded_channel();
     *locked(&core.streams().address) = Some(address);
+    *locked(&core.streams().rebound) = Some(rebound);
     let core = Arc::clone(core);
     tokio::spawn(async move {
         loop {
-            let Ok((stream, _)) = listener.accept().await else {
+            let accepted = tokio::select! {
+                accepted = listener.accept() => accepted,
+                Some(again) = rebinding.recv() => {
+                    match TcpListener::from_std(again) {
+                        Ok(again) => listener = again,
+                        Err(error) => tracing::warn!(%error, "couldn't listen for terminals' streams again"),
+                    }
+                    continue;
+                }
+            };
+            let Ok((stream, _)) = accepted else {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
             };
@@ -184,6 +226,13 @@ pub fn listen(core: &Arc<Core>) -> std::io::Result<SocketAddr> {
         }
     });
     Ok(address)
+}
+
+/// A listener on a loopback port of its own.
+fn bind() -> std::io::Result<std::net::TcpListener> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    Ok(listener)
 }
 
 fn refuse(status: StatusCode, why: &str) -> ErrorResponse {
@@ -396,9 +445,11 @@ mod tests {
             streams.offer(Target::Local).map_err(|failure| failure.kind),
             Err("connection")
         );
-        *locked(&streams.address) = Some(SocketAddr::from(([127, 0, 0, 1], 4000)));
+        let listener = bind().expect("a loopback port");
+        let address = listener.local_addr().expect("its address");
+        *locked(&streams.address) = Some(address);
         let key = |url: String| {
-            url.strip_prefix("ws://127.0.0.1:4000/")
+            url.strip_prefix(&format!("ws://{address}/"))
                 .map(str::to_owned)
                 .unwrap_or_default()
         };
@@ -413,5 +464,25 @@ mod tests {
         assert_ne!(second, first);
         streams.close_all();
         assert_eq!(streams.take(&second), None);
+    }
+
+    #[test]
+    fn a_port_that_stopped_answering_is_replaced_by_one_that_does() {
+        let streams = Streams::new(false);
+        let gone = bind().expect("a loopback port");
+        let address = gone.local_addr().expect("its address");
+        drop(gone);
+        *locked(&streams.address) = Some(address);
+        let (rebound, mut rebinding) = unbounded_channel();
+        *locked(&streams.rebound) = Some(rebound);
+        let url = streams.offer(Target::Local).expect("an offer");
+        let again = rebinding.try_recv().expect("a new listener");
+        let now = again.local_addr().expect("its address");
+        assert_ne!(now, address);
+        assert!(url.starts_with(&format!("ws://{now}/")));
+        // While it answers, it stays.
+        let next = streams.offer(Target::Local).expect("an offer");
+        assert!(next.starts_with(&format!("ws://{now}/")));
+        assert!(rebinding.try_recv().is_err());
     }
 }

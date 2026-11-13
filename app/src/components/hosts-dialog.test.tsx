@@ -54,6 +54,16 @@ describe('HostsDialog', () => {
     expect(app.actions.pairDispatcher).toHaveBeenCalledWith({ url: 'wss://homelab.example.ts.net:7342', code: 'ABCD', name: 'Browser' });
   });
 
+  it("fills the URL and code from a pasted `weave pair` link", async () => {
+    const user = userEvent.setup();
+    const app = controller([], { ...DISPATCHER, status: 'refused' });
+    render(<HostsDialog controller={app} open onOpenChange={() => {}} />);
+    await user.click(screen.getByLabelText('URL'));
+    await user.paste('weave://pair-dispatcher?url=wss%3A%2F%2Fhomelab.example.ts.net%3A7342&code=ABCDE12345');
+    expect(screen.getByLabelText('URL')).toHaveValue('wss://homelab.example.ts.net:7342');
+    expect(screen.getByLabelText('Code')).toHaveValue('ABCDE12345');
+  });
+
   it('asks to confirm a pairing link, by its address', () => {
     const app = controller([{ id: 'h1', name: 'mac', status: 'connected' }]);
     render(<HostsDialog controller={app} open onOpenChange={() => {}} offer={{ url: 'wss://homelab.example.ts.net:7342', code: 'ABCD' }} />);

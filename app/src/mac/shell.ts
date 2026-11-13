@@ -13,7 +13,7 @@ import { requestOpenThread } from '@/app/open-thread';
 import { pairingLink } from '@/host/storage';
 import { ownThreads } from '@/session/sessions';
 import { noticesFor, threadLink } from './notices';
-import { onMac } from './routes';
+import { inShell, onMac } from './routes';
 
 /** Brings the window to the front, as a click on a notification or a link should. */
 const front = async () => {
@@ -81,7 +81,8 @@ function useNotifications(controller: AppController) {
 function useLinks() {
   const [offer, setOffer] = useState<{ url: string; code: string }>();
   useEffect(() => {
-    if (!onMac()) return;
+    // The iPad and iPhone open the app with a link too (WVE-221).
+    if (!inShell()) return;
     const take = (urls: string[] | null) => {
       for (const url of urls ?? []) {
         const key = threadLink(url);
@@ -104,7 +105,7 @@ function useLinks() {
   return offer;
 }
 
-/** The Mac's shell around the app: nothing elsewhere. A pairing link it was opened with, for the person to confirm. */
+/** The shell around the app: the Mac's menu bar and notifications, and on every device in it the links that open it; nothing in a browser. A pairing link it was opened with, for the person to confirm. */
 export function useMacShell(controller: AppController) {
   useMenu();
   useNotifications(controller);

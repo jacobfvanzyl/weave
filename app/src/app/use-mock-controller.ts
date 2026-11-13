@@ -107,7 +107,8 @@ const DIRECTORIES: Record<string, Record<string, string[]>> = {
   [SERVER]: {
     '/': ['home', 'srv'],
     '/home': ['jaco'],
-    '/home/jaco': ['.cache'],
+    '/home/jaco': ['.cache', 'weave'],
+    '/home/jaco/weave': ['.git', 'app', 'docs'],
     '/srv': ['odin'],
     '/srv/odin': ['uploads'],
   },
@@ -118,7 +119,11 @@ const HOMES: Record<string, string> = { [MAC]: '/Users/jaco', [SERVER]: '/home/j
 type MockWorktree = { path: string; branch?: string; changes: boolean };
 
 /** Each Host's repositories, by primary worktree: their default branch and worktrees, primary first. */
-type MockRepositories = Record<string, Record<string, { defaultBranch: string; worktrees: MockWorktree[] }>>;
+type MockRepositories = Record<string, Record<string, { defaultBranch: string; remote?: string; worktrees: MockWorktree[] }>>;
+
+const WEAVE_REMOTE = 'github.com/veezee/weave';
+/** A clone of the weave repository on the build Host, which no Project has yet. */
+const WEAVE_CLONE = '/home/jaco/weave';
 
 const RECONNECT = `${WEAVE}.fix-reconnect`;
 
@@ -126,11 +131,15 @@ const repositories = (): MockRepositories => ({
   [MAC]: {
     [WEAVE]: {
       defaultBranch: 'main',
+      remote: WEAVE_REMOTE,
       worktrees: [
         { path: WEAVE, branch: 'main', changes: false },
         { path: RECONNECT, branch: 'fix-reconnect', changes: true },
       ],
     },
+  },
+  [SERVER]: {
+    [WEAVE_CLONE]: { defaultBranch: 'main', remote: WEAVE_REMOTE, worktrees: [{ path: WEAVE_CLONE, branch: 'main', changes: false }] },
   },
 });
 
@@ -376,7 +385,7 @@ type MockState = {
 };
 
 /** The person's Projects: weave, on the Mac. */
-const PROJECTS: ProjectSummary[] = [{ id: 'p-weave', name: 'weave', locations: [{ hostId: MAC, path: WEAVE }] }];
+const PROJECTS: ProjectSummary[] = [{ id: 'p-weave', name: 'weave', kind: 'git', remote: WEAVE_REMOTE, locations: [{ hostId: MAC, path: WEAVE }] }];
 
 /** The `session` scenario's layout of the weave repository's main worktree. */
 const arranged = (): SessionLayout => tidy({
@@ -460,6 +469,7 @@ const initialState = (scenario: MockScenario, now: number): MockState => {
       unread: new Set(),
       bots: bots(now),
       canAddBots: true,
+      canManageProjects: true,
     },
     ...(selected ? { sessionKey: sessionOfThread(selected) } : {}),
     layouts: scenario === 'session' ? { [main]: arranged() } : {},
@@ -825,6 +835,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         if (!repo || !found) return undefined;
         return {
           repo,
+          ...(found.remote ? { remote: found.remote } : {}),
           defaultBranch: found.defaultBranch,
           worktrees: found.worktrees.map((worktree, index) => ({
             ...worktree,
@@ -914,6 +925,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
             known: kept(),
             bots: bots(now),
             canAddBots: true,
+            canManageProjects: true,
           },
           repositories: repositories(),
           terminals: { [MAC]: terminals(now) },
@@ -925,7 +937,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           ...current,
           sessionKey: undefined,
           shown: [],
-          model: { ...current.model, dispatcher: undefined, hosts: [], threads: [], agents: {}, known: [], selectedKey: undefined, bots: undefined, canAddBots: undefined },
+          model: { ...current.model, dispatcher: undefined, hosts: [], threads: [], agents: {}, known: [], selectedKey: undefined, bots: undefined, canAddBots: undefined, projects: undefined, canManageProjects: undefined },
         }));
       },
       reconnectDispatcher() {
@@ -1069,6 +1081,56 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
             }
           })])),
         }));
+      },
+      async startTerminal({ hostId, directory }) {
+        const host = state.current.model.hosts.find(({ id }) => id === hostId);
+        if (!host || host.status !== 'connected') throw new Error(`${host?.name ?? 'The Host'} isn't connected.`);
+        if (!host.canTerminals) throw new Error(`${host.name} has no terminals.`);
+        const id = localId('terminal');
+        const scope = gitOf(state.current.repositories, hostId, directory)?.worktree ?? directory;
+        setTerminals(hostId, (list) => [...list, { id, scope, pwd: directory, process: 'zsh', size: { cols: 80, rows: 24 }, command: { running: false }, startedAt: Date.now() }]);
+        return { id, sessionKey: sessionKey(hostId, scope) };
+      },
+      async addProject({ name, location }) {
+        const named = name.trim();
+        const listed = state.current.model.projects ?? [];
+        if (!named) throw new Error('a Project needs a name');
+        if (listed.some((project) => project.name.toLowerCase() === named.toLowerCase())) throw new Error(`there's a Project called ${named} already`);
+        const taken = listed.find((project) => project.locations.some(({ hostId, path }) => hostId === location.hostId && path === location.path));
+        if (taken) throw new Error(`${location.path} is ${taken.name}'s already`);
+        const made: ProjectSummary = {
+          id: localId('p'),
+          name: named,
+          kind: location.kind,
+          ...(location.remote ? { remote: location.remote } : {}),
+          locations: [{ hostId: location.hostId, path: location.path }],
+        };
+        update((current) => ({ ...current, model: { ...current.model, projects: [...(current.model.projects ?? []), made].sort((left, right) => left.name.localeCompare(right.name)) } }));
+        return made;
+      },
+      async updateProject(id, { name, removeHost, add }) {
+        const listed = state.current.model.projects ?? [];
+        const project = listed.find((candidate) => candidate.id === id);
+        if (!project) throw new Error(`there's no Project ${id}`);
+        const named = name?.trim();
+        if (name !== undefined && !named) throw new Error('a Project needs a name');
+        if (named && listed.some((other) => other.id !== id && other.name.toLowerCase() === named.toLowerCase())) throw new Error(`there's a Project called ${named} already`);
+        let locations = removeHost ? project.locations.filter(({ hostId }) => hostId !== removeHost) : project.locations;
+        if (add) {
+          if (project.kind && add.kind !== project.kind) throw new Error(`${project.name} is a ${project.kind} Project, and ${add.path} is ${add.kind === 'git' ? 'a repository' : 'a directory outside one'}`);
+          if (project.remote && add.remote !== project.remote) throw new Error(`${add.path} isn't a clone of ${project.name}'s repository`);
+          if (locations.some(({ hostId, path }) => hostId === add.hostId && path !== add.path)) throw new Error(`${project.name} has a location on that Host already`);
+          locations = [...locations.filter(({ hostId }) => hostId !== add.hostId), { hostId: add.hostId, path: add.path }];
+        }
+        const changed: ProjectSummary = { ...project, ...(named ? { name: named } : {}), ...(!project.remote && add?.remote ? { remote: add.remote } : {}), locations };
+        update((current) => ({
+          ...current,
+          model: { ...current.model, projects: (current.model.projects ?? []).map((candidate) => candidate.id === id ? changed : candidate).sort((left, right) => left.name.localeCompare(right.name)) },
+        }));
+        return changed;
+      },
+      async removeProject(id) {
+        update((current) => ({ ...current, model: { ...current.model, projects: (current.model.projects ?? []).filter((project) => project.id !== id) } }));
       },
       async newTerminal() {
         const shown = shownHost();

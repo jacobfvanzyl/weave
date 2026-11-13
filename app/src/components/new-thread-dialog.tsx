@@ -1,9 +1,11 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { HugeiconsIcon } from '@hugeicons/react';
-import { Folder01Icon, GitBranchIcon, UnfoldMoreIcon } from '@hugeicons/core-free-icons';
-import type { AppController, CreatedThread, RepositoryListing, WorktreeSummary } from '@/app/app-controller';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Folder01Icon, GitBranchIcon } from '@hugeicons/core-free-icons';
+import type { AppController, CreatedThread } from '@/app/app-controller';
+import { lastUsedFirst, loadLastChoices, saveLastChoices } from '@/app/last-choices';
 import { knownDirectories } from '@/app/thread-list';
 import { DirectoryPicker } from '@/components/directory-picker';
+import { NativeSelect, PickerField, parentOf } from '@/components/fields';
+import { useWorktreeChoice } from '@/components/use-worktree-choice';
 import { WorktreePicker } from '@/components/worktree-picker';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -16,70 +18,14 @@ import { cn } from '@/lib/utils';
 /** Where a new thread starts, as far as the person has chosen already. */
 export type NewThreadTarget = { hostId?: string; cwd?: string };
 
-/** The chosen directory itself, in the worktree it's in. */
-const HERE = '\u0000here';
-
-/** How long typing a directory waits before asking whether it's in a repository. */
-const LOOKUP_DELAY_MS = 300;
-
-/** The worktree `cwd` is in: the deepest one whose directory holds it. */
-const containing = (repository: RepositoryListing, cwd: string) =>
-  repository.worktrees
-    .filter(({ path }) => cwd === path || cwd.startsWith(`${path}/`))
-    .sort((left, right) => right.path.length - left.path.length)[0];
-
-/** The directory a path is in, for showing beside its name. */
-const parentOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf('/'), 1));
-
-// Native selects give iOS its own picker.
-function NativeSelect({ className, ...props }: React.ComponentProps<'select'>) {
-  return (
-    <select
-      className={cn(
-        'h-7 w-full min-w-0 rounded-md border border-input bg-input-background px-2 text-base outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 md:text-xs/relaxed',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-/** A field that shows a choice and opens its picker in place of the form. */
-function PickerField({ id, icon, title, onOpen, children }: {
-  id: string;
-  icon: typeof Folder01Icon;
-  title?: string;
-  onOpen(): void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      id={id}
-      type='button'
-      title={title}
-      className='flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md border border-input bg-input-background px-2 text-left text-base outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 md:text-xs/relaxed'
-      onClick={onOpen}
-    >
-      <HugeiconsIcon icon={icon} strokeWidth={1.75} className='size-3.5 shrink-0 text-muted-foreground' aria-hidden />
-      <span className='flex min-w-0 flex-1 items-baseline gap-1.5'>{children}</span>
-      <HugeiconsIcon icon={UnfoldMoreIcon} strokeWidth={2} className='size-3.5 shrink-0 text-muted-foreground' aria-hidden />
-    </button>
-  );
-}
-
 /**
  * Starts a thread: which Host, which directory (one its threads use, or browsed for), which
  * agent. In a git repository, on a Host that manages worktrees, it can start in another of its
  * worktrees, or in one it creates on a branch of its own.
  */
-export function NewThreadDialog({ controller, target, onClose, onCreated, session = false }: {
+export function NewThreadDialog({ controller, target, onClose, onCreated }: {
   controller: AppController;
   target?: NewThreadTarget;
-  /**
-   * Asked for as a new Session, from the list of Sessions: the same choices, named for what the
-   * person gets, the directory's Session with a thread to start it.
-   */
-  session?: boolean;
   onClose(): void;
   /** The thread it started, and the Session it's in, before it closes. */
   onCreated?(created: CreatedThread): void;
@@ -92,9 +38,6 @@ export function NewThreadDialog({ controller, target, onClose, onCreated, sessio
   const [error, setError] = useState<string>();
   // A picker in place of the form.
   const [view, setView] = useState<'form' | 'directory' | 'worktree'>('form');
-  // The repository the directory is in, once the Host has said.
-  const [repository, setRepository] = useState<RepositoryListing>();
-  const [place, setPlace] = useState(HERE);
   const [starting, setStarting] = useState(false);
   const directories = hostId ? knownDirectories(model.threads, hostId) : [];
   const agents = model.agents[hostId] ?? [];
@@ -105,7 +48,8 @@ export function NewThreadDialog({ controller, target, onClose, onCreated, sessio
     const host = target.hostId ?? connected[0]?.id ?? '';
     setHostId(host);
     setDirectory(target.cwd ?? knownDirectories(model.threads, host)[0] ?? '');
-    setAgentId(model.agents[host]?.[0]?.id ?? '');
+    // The agent this device started a thread with last, where the Host has it.
+    setAgentId(lastUsedFirst(model.agents[host] ?? [], loadLastChoices().agentId)[0]?.id ?? '');
     setError(undefined);
     setView('form');
     setStarting(false);
@@ -116,26 +60,8 @@ export function NewThreadDialog({ controller, target, onClose, onCreated, sessio
   const canBrowse = connected.some(({ id, canBrowse }) => id === hostId && canBrowse);
   const canWorktree = connected.some(({ id, canWorktree }) => id === hostId && canWorktree);
 
-  useEffect(() => {
-    setRepository(undefined);
-    setPlace(HERE);
-    if (target === undefined || !canWorktree || !cwd.startsWith('/')) return;
-    let current = true;
-    const lookup = setTimeout(() => {
-      actions.listWorktrees({ hostId, path: cwd }).then(
-        (found) => { if (current) setRepository(found); },
-        // Worktrees are on offer only when the Host can list them; the directory still works.
-        () => {},
-      );
-    }, canBrowse ? 0 : LOOKUP_DELAY_MS);
-    return () => {
-      current = false;
-      clearTimeout(lookup);
-    };
-  }, [target, hostId, cwd, canWorktree]);
-
-  const here = repository && containing(repository, cwd);
-  const chosen: WorktreeSummary | undefined = repository && (place === HERE ? here : repository.worktrees.find(({ path }) => path === place));
+  const worktree = useWorktreeChoice({ actions, on: target !== undefined, hostId, cwd, canWorktree, immediate: canBrowse });
+  const { repository, chosen } = worktree;
 
   const chooseDirectory = (path: string) => {
     setDirectory(path);
@@ -143,15 +69,8 @@ export function NewThreadDialog({ controller, target, onClose, onCreated, sessio
   };
 
   const chooseWorktree = (path: string) => {
-    setPlace(path === here?.path ? HERE : path);
+    worktree.choose(path);
     setView('form');
-  };
-
-  const createWorktree = async ({ branch, base }: { branch: string; base?: string }) => {
-    const path = await actions.createWorktree({ hostId, repo: cwd, branch, ...(base ? { base } : {}) });
-    const made: WorktreeSummary = { path, branch, primary: false, changes: false, threads: [] };
-    setRepository((listed) => listed && { ...listed, worktrees: [...listed.worktrees, made] });
-    return path;
   };
 
   const create = async (event: FormEvent) => {
@@ -159,7 +78,8 @@ export function NewThreadDialog({ controller, target, onClose, onCreated, sessio
     setError(undefined);
     setStarting(true);
     try {
-      const created = await actions.createThread({ hostId, cwd: repository && place !== HERE ? place : cwd, agentId });
+      const created = await actions.createThread({ hostId, cwd: worktree.directory, agentId });
+      saveLastChoices({ agentId });
       if (created) onCreated?.(created);
       onClose();
     } catch (cause) {
@@ -173,16 +93,8 @@ export function NewThreadDialog({ controller, target, onClose, onCreated, sessio
     <Dialog open={target !== undefined} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className='w-[min(28rem,calc(100%-2rem))] max-w-none sm:max-w-md'>
         <DialogHeader>
-          <DialogTitle>{view === 'directory' ? 'Choose a directory' : view === 'worktree' ? 'Choose a worktree' : session ? 'New Session' : 'New thread'}</DialogTitle>
-          <DialogDescription>
-            {view === 'directory'
-              ? `Where the thread runs, on ${hostName}.`
-              : view === 'worktree' && repository
-                ? `In ${directoryName(repository.repo)}, on ${hostName}.`
-                : session
-                  ? 'A directory on one of your Hosts, and an agent to start a thread in it. A directory that has a Session opens it.'
-                  : 'An agent in a directory on one of your Hosts.'}
-          </DialogDescription>
+          <DialogTitle>{view === 'directory' ? 'Choose a directory' : view === 'worktree' ? 'Choose a worktree' : 'New thread'}</DialogTitle>
+          <DialogDescription className='sr-only'>An agent in a directory on {hostName}.</DialogDescription>
         </DialogHeader>
         {view === 'directory' && (
           <DirectoryPicker
@@ -197,12 +109,12 @@ export function NewThreadDialog({ controller, target, onClose, onCreated, sessio
           <WorktreePicker
             repository={repository}
             selected={chosen?.path}
-            create={createWorktree}
+            create={worktree.create}
             onChoose={chooseWorktree}
             onCancel={() => setView('form')}
           />
         )}
-        <form aria-label={session ? 'New Session' : 'New thread'} className={cn('grid gap-3', view !== 'form' && 'hidden')} onSubmit={create}>
+        <form aria-label='New thread' className={cn('grid gap-3', view !== 'form' && 'hidden')} onSubmit={create}>
           {model.hosts.length > 1 && (
             <div className='grid gap-1.5'>
               <Label htmlFor='new-thread-host'>Host</Label>

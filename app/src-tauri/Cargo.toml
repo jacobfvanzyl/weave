@@ -16,8 +16,11 @@ publish = false
 
 [workspace]
 
+# The iPad's and iPhone's Xcode project links the core as a static library (WVE-221); the Mac's
+# binary and the tests take it as a Rust one.
 [lib]
 name = "weave_app"
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
 name = "weave-app"
@@ -41,6 +44,10 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["h
 tracing = "0.1"
 weave-host-client = { path = "../../host-client" }
 weave-host-protocol = { path = "../../protocol" }
+
+# The iPad's and iPhone's clipboard, which has no `pbcopy` (WVE-221).
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+tauri-plugin-clipboard-manager = "=2.5.0"
 
 [dev-dependencies]
 pretty_assertions = "1"

@@ -7,12 +7,14 @@
 
 mod check;
 pub mod core;
+#[cfg(desktop)]
 mod menu;
 pub mod relay;
 pub mod terminals;
 
 use std::sync::Arc;
 
+#[cfg(target_os = "macos")]
 use tauri::Manager as _;
 use tauri::WebviewUrl;
 use tauri::WebviewWindowBuilder;
@@ -36,6 +38,13 @@ use crate::relay::Sink;
 /// `src/styles.css`), level with their icons.
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHTS: tauri::LogicalPosition<f64> = tauri::LogicalPosition::new(16.0, 27.0);
+
+/// What the page reads before it starts, on the iPad and iPhone: that its shell is theirs
+/// (`src/mac/routes.ts`), and which of the two it's on, as its layout asks
+/// (`data-device-idiom`). The web view names an iPhone as one; an iPad's may say it's a Mac.
+#[cfg(mobile)]
+const DEVICE: &str = "window.__WEAVE_DEVICE__ = 'ios';\
+    document.documentElement.dataset.deviceIdiom = /iPhone|iPod/.test(navigator.userAgent) ? 'phone' : 'pad';";
 
 /// What the app calls itself to the Host and the Dispatcher.
 fn client() -> ClientInfo {
@@ -124,6 +133,7 @@ fn terminal_stream(core: State<'_>, host: Option<String>) -> Result<String, Fail
 /// Puts `text` on the Mac's clipboard, for a program in a terminal that wrote to it (OSC 52) or
 /// an agent's call: the web view lets a page write only while the person is clicking or typing
 /// in it, and neither of those waits for that.
+#[cfg(desktop)]
 #[tauri::command]
 async fn clipboard_write(text: String) -> Result<(), String> {
     use tokio::io::AsyncWriteExt as _;
@@ -150,6 +160,16 @@ async fn clipboard_write(text: String) -> Result<(), String> {
     }
 }
 
+/// Puts `text` on the iPad's or iPhone's clipboard, as on the Mac's.
+#[cfg(mobile)]
+#[tauri::command]
+async fn clipboard_write(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt as _;
+    app.clipboard()
+        .write_text(text)
+        .map_err(|error| error.to_string())
+}
+
 /// What the terminal check's script asked of the page, when the app was started for one
 /// ([`check`]).
 #[tauri::command]
@@ -170,10 +190,16 @@ fn terminal_check_report(
 }
 
 /// Lists the page's commands in the menu bar, with their keys (`src/mac/shell.ts`).
+#[cfg(desktop)]
 #[tauri::command]
 fn set_menu(app: tauri::AppHandle, groups: Vec<menu::Group>) -> Result<(), String> {
     menu::set(&app, &groups).map_err(|error| error.to_string())
 }
+
+/// The iPad and iPhone have no menu bar: a hardware keyboard's keys are the page's.
+#[cfg(mobile)]
+#[tauri::command]
+fn set_menu() {}
 
 /// Whether the page may go to `url` itself: only its own pages, the built app's or, during
 /// development, Vite's on this computer.
@@ -197,6 +223,7 @@ fn open_elsewhere(url: &tauri::Url) {
     }
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let core = Arc::new(Core::new(client(), core::local_socket()).in_development(tauri::is_dev()));
     let (listening, reloading) = (Arc::clone(&core), Arc::clone(&core));
@@ -207,12 +234,16 @@ pub fn run() {
         || "index.html".to_owned(),
         |check| format!("index.html?terminal-check={}", check.terminal),
     );
-    let built = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_deep_link::init())
         .manage(core)
-        .manage(check)
+        .manage(check);
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
+    #[cfg(desktop)]
+    let builder = builder
         .manage(menu::Commands::default())
         .menu(menu::build)
         .on_menu_event(menu::chosen)
@@ -223,7 +254,8 @@ pub fn run() {
                 api.prevent_close();
                 let _ = window.hide();
             }
-        })
+        });
+    let built = builder
         .invoke_handler(tauri::generate_handler![
             pairing,
             forget_pairing,
@@ -248,7 +280,15 @@ pub fn run() {
                     tracing::warn!(%error, "couldn't listen for terminals' streams");
                 }
             });
-            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(page.into()))
+            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(page.into()));
+            #[cfg(mobile)]
+            let window = window.initialization_script(DEVICE);
+            // No row of the system's over the keyboard (its arrows between fields, Done): a
+            // terminal has its own keys there, and nothing else wants one.
+            #[cfg(target_os = "ios")]
+            let window = window.with_input_accessory_view_builder(|_| None);
+            #[cfg(desktop)]
+            let window = window
                 .title("Weave")
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(720.0, 480.0);
@@ -286,21 +326,27 @@ pub fn run() {
                 })
                 .build()?;
             // A check measures what's drawn, and a covered window draws nothing: in front.
+            #[cfg(desktop)]
             if checking {
                 let _ = window.set_focus();
             }
+            #[cfg(mobile)]
+            let _ = (window, checking);
             Ok(())
         })
         .build(tauri::generate_context!());
     match built {
         Ok(app) => app.run(|app, event| {
             // Clicking the Dock icon with no window open shows the window again.
+            #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event
                 && let Some(window) = app.get_webview_window("main")
             {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
         }),
         Err(error) => {
             eprintln!("weave: couldn't start the app: {error}");

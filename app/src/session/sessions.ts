@@ -8,7 +8,9 @@ import {
   type BotSummary,
   type HostSummary,
   type KnownSession,
+  type ProjectLocation,
   type ProjectSummary,
+  type RepositoryListing,
   type SessionSummary,
   type ThreadSummary,
   sessionKey,
@@ -289,3 +291,36 @@ export function sessionListView(
 /** How many Sessions other than `except` have a thread waiting on the person. */
 export const waitingSessions = (sessions: readonly SessionSummary[], except?: string) =>
   sessions.filter(({ key, waiting }) => waiting > 0 && key !== except).length;
+
+/**
+ * A directory as a Project's location (WVE-220), as `weave projects add` registers it: its
+ * repository, by its primary worktree and remote, when the Host says it's in one, else the
+ * directory itself.
+ */
+export function projectLocation(hostId: string, directory: string, repository?: RepositoryListing): ProjectLocation {
+  if (!repository) return { hostId, path: directory, kind: 'directory' };
+  return { hostId, path: repository.repo, kind: 'git', ...(repository.remote ? { remote: repository.remote } : {}) };
+}
+
+/** The Project whose location on its Host `location` is already. */
+export const projectAt = (projects: readonly ProjectSummary[], location: Pick<ProjectLocation, 'hostId' | 'path'>): ProjectSummary | undefined =>
+  projects.find((project) => project.locations.some(({ hostId, path }) => hostId === location.hostId && path === location.path));
+
+/**
+ * The Projects a clone may join instead of becoming one of its own, as the CLI offers: the git
+ * Projects with its remote and no location on its Host yet.
+ */
+export const projectsOfRepository = (projects: readonly ProjectSummary[], location: ProjectLocation): ProjectSummary[] =>
+  location.kind === 'git' && location.remote
+    ? projects.filter((project) => project.kind === 'git' && project.remote === location.remote && !project.locations.some(({ hostId }) => hostId === location.hostId))
+    : [];
+
+/** The Projects, the one worked in most recently first, and after those the ones with no Session, by name. */
+export function projectsByUse(projects: readonly ProjectSummary[], sessions: readonly SessionSummary[]): ProjectSummary[] {
+  const used = new Map<string, number>();
+  for (const session of sessions) {
+    const project = containing(projects, session.hostId, session.directory, session.git?.repo);
+    if (project) used.set(project.id, Math.max(used.get(project.id) ?? 0, session.lastActivityAt ?? 0));
+  }
+  return [...projects].sort((left, right) => (used.get(right.id) ?? -1) - (used.get(left.id) ?? -1) || left.name.localeCompare(right.name));
+}

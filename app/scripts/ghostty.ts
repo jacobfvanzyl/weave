@@ -1,12 +1,8 @@
-// Puts libghostty-vt for Apple's platforms, its headers, Ghostty's license and the terminal fonts
-// into the iOS project's ignored `ios/App/Native/`, for the native terminal (ADR 0022, WVE-153).
+// Builds the terminal the page draws with (WVE-205, WVE-221): libghostty-vt for wasm32 linked
+// with `wasm/terminal.c`, into the ignored `src/terminal/web/generated/`, with the terminal fonts
+// and Ghostty's license.
 //
-//   bun scripts/ghostty.ts
 //   bun scripts/ghostty.ts web
-//
-// `web` instead builds the terminal the Mac's page draws with (WVE-205): libghostty-vt for
-// wasm32 linked with `wasm/terminal.c`, into the ignored `src/terminal/web/generated/`, with the
-// same fonts.
 //
 // They come from the Ghostty commit `../holder/ghostty.toml` pins, as weave-holder's do, so the
 // app's snapshots decode the holder's: built once per pin into the cache weave-holder's build.rs
@@ -26,7 +22,6 @@ type Pin = {
 
 const root = resolve(import.meta.dir, '..');
 const pin = Bun.TOML.parse(await readFile(resolve(root, '../holder/ghostty.toml'), 'utf8')) as Pin;
-const native = resolve(root, 'ios/App/Native');
 const fonts = ['Regular', 'Bold', 'Italic', 'BoldItalic'].map((style) => `JetBrainsMonoNerdFont-${style}.ttf`);
 /** What a cached build holds; another layout is built again. */
 const layout = '1';
@@ -124,7 +119,7 @@ const buildWasm = async (cache: string) => {
 };
 
 /**
- * The page's terminal, for the Mac (WVE-205): `wasm/terminal.c` linked with libghostty-vt into
+ * The page's terminal (WVE-205): `wasm/terminal.c` linked with libghostty-vt into
  * `src/terminal/web/generated/weave-terminal.wasm`, with the fonts and the pin beside it. Built
  * again when the pin or `terminal.c` changes.
  */
@@ -156,52 +151,4 @@ const web = async () => {
   console.log(`Put the terminal for Ghostty ${pin.ghostty.commit.slice(0, 8)} in src/terminal/web/generated.`);
 };
 
-/** Builds the Apple libraries and gathers the rest into `<cache>/<commit>/apple`, once per pin. */
-const build = async (cache: string) => {
-  const commitDir = join(cache, pin.ghostty.commit);
-  const out = join(commitDir, 'apple');
-  if ((await readFile(join(out, '.complete'), 'utf8').catch(() => '')) === layout) return out;
-  console.log(`Building libghostty-vt for iOS at Ghostty ${pin.ghostty.commit.slice(0, 8)}, once per pin…`);
-  const src = join(commitDir, 'src-apple');
-  const local = join(commitDir, 'zig-local-apple');
-  const staging = `${out}.partial`;
-  await fetchSource(src);
-  await rm(staging, { recursive: true, force: true });
-  await run(
-    [await zig(cache), 'build', '-Demit-lib-vt', '-Demit-xcframework=true', '-Doptimize=ReleaseFast', '--prefix', staging, '--cache-dir', local],
-    { cwd: src, env: { ZIG_GLOBAL_CACHE_DIR: join(cache, 'zig-global') } },
-  );
-  await mkdir(join(staging, 'fonts'), { recursive: true });
-  for (const file of [...fonts, 'OFL.txt']) await cp(join(src, 'src/font/res', file), join(staging, 'fonts', file));
-  await cp(join(src, 'LICENSE'), join(staging, 'GHOSTTY-LICENSE'));
-  await writeFile(
-    join(staging, 'include/weave_ghostty_pin.h'),
-    `// The Ghostty commit libghostty-vt was built from (holder/ghostty.toml), which names its snapshots.\n` +
-      `#define WEAVE_GHOSTTY_COMMIT "${pin.ghostty.commit}"\n`,
-  );
-  await writeFile(join(staging, '.complete'), layout);
-  await rm(out, { recursive: true, force: true });
-  await rename(staging, out);
-  await rm(src, { recursive: true, force: true });
-  await rm(local, { recursive: true, force: true });
-  return out;
-};
-
-const stamp = join(native, '.pin');
-if (process.argv[2] === 'web') {
-  await web();
-} else if ((await readFile(stamp, 'utf8').catch(() => '')) === `${pin.ghostty.commit} ${layout}`) {
-  console.log(`ios/App/Native has Ghostty ${pin.ghostty.commit.slice(0, 8)} already.`);
-} else {
-  const cache = cacheDir();
-  await mkdir(cache, { recursive: true });
-  const out = await build(cache);
-  await rm(native, { recursive: true, force: true });
-  await mkdir(native, { recursive: true });
-  await cp(join(out, 'lib/ghostty-vt.xcframework'), join(native, 'ghostty-vt.xcframework'), { recursive: true });
-  await cp(join(out, 'include'), join(native, 'include'), { recursive: true });
-  await cp(join(out, 'fonts'), join(native, 'TerminalFonts'), { recursive: true });
-  await cp(join(out, 'GHOSTTY-LICENSE'), join(native, 'GHOSTTY-LICENSE'));
-  await writeFile(stamp, `${pin.ghostty.commit} ${layout}`);
-  console.log(`Put Ghostty ${pin.ghostty.commit.slice(0, 8)}'s libghostty-vt and fonts in ios/App/Native.`);
-}
+await web();

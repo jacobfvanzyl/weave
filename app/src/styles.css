@@ -292,9 +292,19 @@ html[data-device-idiom="phone"] [data-sidebar="header-action"] { min-width: 44px
 [data-slot="sidebar-wrapper"][data-resizing] * { cursor: col-resize; -webkit-user-select: none; user-select: none; }
 [data-slot="sidebar-wrapper"][data-resizing] :is([data-slot="sidebar-gap"], [data-slot="sidebar-container"]) { transition: none; }
 
+/* A software keyboard covers the bottom of the page (`src/app/use-soft-keyboard.ts`): the shell is
+   as tall as what's left (`h-(--app-height)`), and a dialog sits in the middle of that, no taller. */
+:root { --app-height: 100dvh; }
+html[data-keyboard] [data-slot="dialog-content"],
+html[data-keyboard] [data-slot="alert-dialog-content"] {
+  top: calc(var(--app-height) / 2);
+  max-height: calc(var(--app-height) - 1rem);
+  overflow-y: auto;
+}
+
 html[data-device-idiom="phone"] [data-slot="dialog-content"],
 html[data-device-idiom="phone"] [data-slot="alert-dialog-content"] {
-  max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 2rem);
+  max-height: calc(var(--app-height) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 2rem);
   overflow-y: auto;
 }
 

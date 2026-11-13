@@ -70,7 +70,7 @@ pub struct DeviceKey(Key);
 #[derive(Clone)]
 enum Key {
     Software(SigningKey),
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     SecureEnclave(crate::enclave::EnclaveKey),
 }
 
@@ -98,9 +98,9 @@ impl DeviceKey {
     /// A new key in this computer's Secure Enclave, whose private key never leaves it. Fails
     /// where there's none: on a Mac without one, and on every other system.
     pub fn in_secure_enclave() -> Result<Self, String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         return crate::enclave::EnclaveKey::generate().map(|key| Self(Key::SecureEnclave(key)));
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         Err("this computer has no Secure Enclave".to_owned())
     }
 
@@ -113,10 +113,10 @@ impl DeviceKey {
 
     /// A Secure Enclave key saved with [`Self::wrapped`].
     pub fn from_wrapped(wrapped: &[u8]) -> Result<Self, String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         return crate::enclave::EnclaveKey::from_wrapped(wrapped)
             .map(|key| Self(Key::SecureEnclave(key)));
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
             let _ = wrapped;
             Err("this computer has no Secure Enclave".to_owned())
@@ -128,7 +128,7 @@ impl DeviceKey {
     pub fn to_bytes(&self) -> Option<Vec<u8>> {
         match &self.0 {
             Key::Software(key) => Some(key.to_bytes().to_vec()),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             Key::SecureEnclave(_) => None,
         }
     }
@@ -138,7 +138,7 @@ impl DeviceKey {
     pub fn wrapped(&self) -> Option<Vec<u8>> {
         match &self.0 {
             Key::Software(_) => None,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             Key::SecureEnclave(key) => Some(key.wrapped().to_vec()),
         }
     }
@@ -157,7 +157,7 @@ impl DeviceKey {
                 let bytes = point.as_bytes();
                 jwk(&bytes[1..33], &bytes[33..65])
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             Key::SecureEnclave(key) => {
                 let (x, y) = key.coordinates();
                 jwk(x, y)
@@ -173,7 +173,7 @@ impl DeviceKey {
                 let signature: Signature = key.sign(message.as_bytes());
                 signature.to_der().as_bytes().to_vec()
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             Key::SecureEnclave(key) => key.sign(message.as_bytes())?,
         };
         Ok(URL_SAFE_NO_PAD.encode(der))

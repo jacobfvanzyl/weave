@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ArrowLeft01Icon, SidebarLeftIcon } from '@hugeicons/core-free-icons';
-import type { AppController, BotSummary, CreatedThread, OpenSession, SessionSummary, ThreadSummary } from '@/app/app-controller';
-import { sessionKey, sessionOfKey } from '@/app/app-controller';
+import type { AppController, BotSummary, CreatedThread, OpenSession, SessionSummary, StartedTerminal, ThreadSummary } from '@/app/app-controller';
+import { sessionKey, sessionOfKey, terminalReveal } from '@/app/app-controller';
 import { useCommand, useCommandKeys } from '@/app/commands';
 import { useOpenThreadRequests } from '@/app/open-thread';
 import { platform } from '@/app/platform';
@@ -13,7 +13,8 @@ import { NewBotDialog } from '@/components/bots/new-bot-dialog';
 import { CommandPalette } from '@/components/command-palette';
 import { EndSessionDialog } from '@/components/end-session-dialog';
 import { HostsDialog } from '@/components/hosts-dialog';
-import { type NewThreadTarget, NewThreadDialog } from '@/components/new-thread-dialog';
+import { type AddProjectTarget, AddProjectDialog } from '@/components/add-project-dialog';
+import { type NewSessionTarget, NewSessionDialog } from '@/components/new-session-dialog';
 import { PairingScreen } from '@/components/pair-dispatcher';
 import { SessionList } from '@/components/session-list';
 import { SessionView } from '@/components/session/session-view';
@@ -29,8 +30,6 @@ import { cn } from '@/lib/utils';
 import { botOfThread, botSelection, selectedBot, waitingBots } from '@/session/bots';
 import { botSessionKey, directoryName, sessionListView, sessionSummaries, sessionWith, threadDirectories, threadDirectory, waitingSessions } from '@/session/sessions';
 import { loadLastSession, saveLastSession } from '@/session/view';
-import type { SurfaceLink } from '@/surface/surface-link';
-import { useSurface } from '@/surface/use-surface';
 
 function WaitingBadge({ count }: { count: number }) {
   if (count === 0) return null;
@@ -140,39 +139,32 @@ type ShellProps = {
   /** A thread was started in a directory with no Session shown: its Session's, which it starts. */
   onCreated(thread: CreatedThread): void;
   onOpenHosts(): void;
-  onNewSession(target?: NewThreadTarget): void;
+  onNewSession(target?: NewSessionTarget): void;
+  onAddProject(target?: AddProjectTarget): void;
   onEndSession(session: SessionSummary): void;
 };
 
-function PhoneShell({ controller, sessions, session, selected, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onEndSession, surfaceLink }: ShellProps & {
-  surfaceLink?: SurfaceLink;
-}) {
-  const { model } = controller;
-  // A Surface (WVE-183) shows the thread in front, or the one last there while the list is here.
-  const surface = useSurface(model, surfaceLink);
-  const surfaced = Boolean(surface?.status.connected && model.thread);
-  // With the thread on the Surface, the iPhone may turn for a bigger keyboard; elsewhere it stays upright.
-  useEffect(() => surfaceLink?.setLandscape(surfaced), [surfaceLink, surfaced]);
+function PhoneShell({ controller, sessions, session, selected, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onAddProject, onEndSession }: ShellProps) {
   const back = () => onOpenSession(undefined);
   const leading = <BackButton count={waiting} onBack={back} />;
   if (!selected) {
     return <SessionList controller={controller} sessions={sessions} onOpen={onOpenSession} onOpenBot={(id) => onOpenSession(botSelection(id))} onNewBot={onNewBot}
-      onOpenHosts={onOpenHosts} onNewSession={onNewSession} onEndSession={onEndSession} />;
+      onOpenHosts={onOpenHosts} onNewSession={onNewSession} onAddProject={onAddProject} onEndSession={onEndSession} />;
   }
   if (bot) {
     return (
       <BotView controller={controller} bot={bot} session={botSession} phone leading={leading} reveal={reveal} onRevealed={onRevealed}
-        onOpenBot={onOpenBotPage} onOpenThread={onOpenThread} onCreated={onCreated} surface={surface} onBack={back} />
+        onOpenBot={onOpenBotPage} onOpenThread={onOpenThread} onCreated={onCreated} onBack={back} />
     );
   }
   if (!session) return <NoSession controller={controller} selected={selected} known={sessions.some(({ key }) => key === selected)} leading={leading} />;
   return (
     <SessionView key={session.key} controller={controller} session={session} members={membersOf(sessions, session.key)} phone leading={leading}
-      reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} surface={surface} onBack={back} />
+      reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} onBack={back} />
   );
 }
 
-function SplitShell({ controller, sessions, session, selected, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onEndSession }: ShellProps) {
+function SplitShell({ controller, sessions, session, selected, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onAddProject, onEndSession }: ShellProps) {
   const { setOpenMobile } = useSidebar();
   // The toggle is in the list's rail while the list shows, and in the Session's while it doesn't.
   const hidden = useSidebarHidden();
@@ -186,7 +178,7 @@ function SplitShell({ controller, sessions, session, selected, bot, botSession, 
       {/* No line at its edge: the resize handle shows one under the pointer and while it drags. */}
       <Sidebar collapsible='offcanvas' className='group-data-[side=left]:border-r-0'>
         <SessionList controller={controller} sessions={sessions} selected={selected} selectedBot={selectedBot(selected)} onOpenHosts={onOpenHosts} onNewSession={onNewSession}
-          onEndSession={onEndSession} onOpen={open} onOpenBot={(id) => open(botSelection(id))} onNewBot={onNewBot}
+          onAddProject={onAddProject} onEndSession={onEndSession} onOpen={open} onOpenBot={(id) => open(botSelection(id))} onNewBot={onNewBot}
           leading={hidden ? undefined : <SidebarToggle waiting={waiting} />} />
         <SidebarResizeHandle />
       </Sidebar>
@@ -210,12 +202,10 @@ function SplitShell({ controller, sessions, session, selected, bot, botSession, 
  * the device, not the window's width. Until the app is paired with the Dispatcher, or once the
  * Dispatcher revoked it, it shows the pairing screen instead.
  */
-export function AppShell({ controller, pairingOffer, surfaceLink }: {
+export function AppShell({ controller, pairingOffer }: {
   controller: AppController;
   /** A `weave pair` link the app was opened with, for the person to confirm. */
   pairingOffer?: { url: string; code: string };
-  /** The iPhone's way to a Surface, a display it's connected to (WVE-183). */
-  surfaceLink?: SurfaceLink;
 }) {
   const phone = usePhoneLayout();
   const { model, actions } = controller;
@@ -230,7 +220,9 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
   // A thread asked for before its Host listed it, as by the link the app was opened with.
   const [wanted, setWanted] = useState<string>();
   const [hostsOpen, setHostsOpen] = useState(false);
-  const [newThread, setNewThread] = useState<NewThreadTarget>();
+  const [newSession, setNewSession] = useState<NewSessionTarget>();
+  // Add Project, and whether New Session asked for it, so opens again with the Project it added.
+  const [addProject, setAddProject] = useState<AddProjectTarget & { forSession?: boolean }>();
   const [palette, setPalette] = useState(false);
   // The Session the person asked to end, until they confirm or don't.
   const [ending, setEnding] = useState<SessionSummary>();
@@ -280,6 +272,12 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
     setSelected(thread.sessionKey);
     setReveal(thread.key);
   };
+  /** A Session started with a terminal: its first Block shows it, which makes the Session. */
+  const started = (terminal: StartedTerminal) => {
+    setStarting(terminal.sessionKey);
+    setSelected(terminal.sessionKey);
+    setReveal(terminalReveal(terminal.id));
+  };
   /**
    * A thread a Bot started elsewhere, given a Block in its directory's Session, which is made if
    * there's none: the Host counts it the Session's, and the Session places it as any Block.
@@ -326,7 +324,8 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
   const canStart = model.hosts.some(({ status }) => status === 'connected');
   useCommand('session.next', () => step(1), !unpaired && ordered.length > 1);
   useCommand('session.previous', () => step(-1), !unpaired && ordered.length > 1);
-  useCommand('session.new', () => setNewThread({}), !unpaired && canStart);
+  useCommand('session.new', () => setNewSession({}), !unpaired && canStart);
+  useCommand('project.add', () => setAddProject({}), !unpaired && canStart && Boolean(model.canManageProjects && actions.addProject));
   // The Session on screen, where its Host keeps it and closes what's in it when it ends.
   const current = sessions.find(({ key }) => key === selected);
   const currentHost = current ? model.hosts.find(({ id }) => id === current.hostId) : undefined;
@@ -334,7 +333,7 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
     && model.known?.some((known) => known.hostId === current.hostId && known.directory === current.directory));
   useCommand('session.end', () => setEnding(current), !unpaired && endable);
   // With a Session on screen, a new thread starts in it: the Session's own command.
-  useCommand('thread.new', () => setNewThread({}), !unpaired && canStart && model.session?.key !== showing);
+  useCommand('thread.new', () => setNewSession({}), !unpaired && canStart && model.session?.key !== showing);
   useCommand('palette.open', () => setPalette(true), !unpaired);
 
   if (unpaired) return <PairingScreen controller={controller} offer={pairingOffer} />;
@@ -356,15 +355,19 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
     onOpenThread: openThread,
     onCreated: created,
     onOpenHosts: openHosts,
-    onNewSession: (target) => setNewThread(target ?? {}),
+    onNewSession: (target) => setNewSession(target ?? {}),
+    onAddProject: (target) => setAddProject(target ?? {}),
     onEndSession: setEnding,
   };
   return (
-    <ResizableSidebarProvider className='h-dvh min-h-0' cookieName={false} data-layout={phone ? 'phone' : 'split'}>
-      {phone ? <PhoneShell {...shell} surfaceLink={surfaceLink} /> : <SplitShell {...shell} />}
+    <ResizableSidebarProvider className='h-(--app-height) min-h-0' cookieName={false} data-layout={phone ? 'phone' : 'split'}>
+      {phone ? <PhoneShell {...shell} /> : <SplitShell {...shell} />}
       <WaitingBanner controller={controller} onOpen={openThread} />
       <HostsDialog controller={controller} open={hostsOpen} onOpenChange={setHostsOpen} offer={pairingOffer} />
-      <NewThreadDialog controller={controller} target={newThread} session onCreated={created} onClose={() => setNewThread(undefined)} />
+      <NewSessionDialog controller={controller} sessions={sessions} target={newSession} onCreated={created} onStarted={started}
+        onAddProject={() => setAddProject({ forSession: true })} onClose={() => setNewSession(undefined)} />
+      <AddProjectDialog controller={controller} target={addProject} onClose={() => setAddProject(undefined)}
+        onAdded={(project) => { if (addProject?.forSession) setNewSession({ projectId: project.id }); }} />
       <EndSessionDialog controller={controller} session={ending} onClose={() => setEnding(undefined)}
         onEnded={(key) => { if (key === selected) setSelected(undefined); }} />
       <CommandPalette open={palette} onOpenChange={setPalette} />

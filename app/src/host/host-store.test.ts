@@ -448,9 +448,9 @@ describe('HostStore journal times', () => {
 });
 
 describe('HostStore and the Dispatcher', () => {
-  it('pairs with the Dispatcher, keeps the one record, and deletes the Hosts it paired with before', async () => {
+  it('pairs with the Dispatcher and keeps the one record', async () => {
     const host = scriptedHost(() => []);
-    const storage = memoryStorage(undefined, ['old-mac', 'old-studio']);
+    const storage = memoryStorage();
     const forgotten: string[] = [];
     const store = storeFor(host.socket, {
       storage,
@@ -458,7 +458,7 @@ describe('HostStore and the Dispatcher', () => {
       newKey: async () => ({ keyId: 'new', key: { publicKey: async () => ({ kty: 'EC', crv: 'P-256', x: 'x', y: 'y' }), sign: async () => 'signature', forget: async () => { forgotten.push('new'); } } }),
     });
     await store.start();
-    // Not paired yet: the pairing screen, and nothing deleted.
+    // Not paired yet: the pairing screen.
     expect(store.snapshot()).toMatchObject({ hosts: [], threads: [] });
     expect(store.snapshot().dispatcher).toBeUndefined();
     expect(store.snapshot().starting).toBeUndefined();
@@ -472,21 +472,6 @@ describe('HostStore and the Dispatcher', () => {
       dispatcherId: DISPATCHER_ID, name: 'homelab', url: 'wss://homelab.example.ts.net:7342', deviceId: 'd-1', keyId: 'new',
       hosts: [{ id: HOST, name: 'mac' }],
     });
-    expect(forgotten).toEqual(['old-mac', 'old-studio']);
-    expect(await storage.oldHostKeys()).toEqual([]);
-    store.stop();
-  });
-
-  it('deletes the Hosts an earlier version paired with once it starts paired', async () => {
-    const host = scriptedHost(() => []);
-    const forgotten: string[] = [];
-    const store = storeFor(host.socket, {
-      storage: memoryStorage(PAIRED, ['old-mac']),
-      keyFor: (keyId) => ({ publicKey: async () => ({ kty: 'EC', crv: 'P-256', x: '', y: '' }), sign: async () => 'signature', forget: async () => { forgotten.push(keyId); } }),
-    });
-    await store.start();
-    expect(forgotten).toEqual(['old-mac']);
-    expect(store.snapshot().hosts).toMatchObject([{ id: HOST, status: 'connected' }]);
     store.stop();
   });
 
@@ -1151,7 +1136,8 @@ describe('HostStore Sessions', () => {
     await store.start();
     await settle();
     expect(host.askedDispatcher).toContain('projects/list');
-    expect(store.snapshot().projects).toEqual([{ id: 'p-1', name: 'weave', locations: [{ hostId: HOST, path: '/work' }] }]);
+    expect(store.snapshot().projects).toEqual([{ id: 'p-1', name: 'weave', kind: 'git', locations: [{ hostId: HOST, path: '/work' }] }]);
+    expect(store.snapshot().canManageProjects).toBe(true);
     store.stop();
 
     // One that doesn't isn't asked.
@@ -1161,6 +1147,57 @@ describe('HostStore Sessions', () => {
     await settle();
     expect(plain.askedDispatcher).not.toContain('projects/list');
     expect(without.snapshot()).not.toHaveProperty('projects');
+    expect(without.snapshot()).not.toHaveProperty('canManageProjects');
     without.stop();
+  });
+
+  it('adds, changes and removes a Project through the Dispatcher, and lists it at once', async () => {
+    const weave = { id: 'p-1', name: 'weave', kind: 'git', remote: 'github.com/veezee/weave', locations: [{ hostId: HOST, path: '/work' }], createdAt: 1, updatedAt: 1 };
+    const sent: Record<string, unknown> = {};
+    const host = scriptedHost(() => [], {
+      'dispatcher/hello': () => ({ result: { protocol: DISPATCHER.protocol, version: '0', id: DISPATCHER_ID, device: { id: 'd-1', name: 'iPad' }, features: [DISPATCHER.features.projects] } }),
+      'projects/list': () => ({ result: { projects: [weave] } }),
+      'projects/add': (params) => {
+        sent.add = params;
+        const { name, location } = params as { name: string; location: { hostId: string; path: string; kind: string } };
+        return name === 'weave'
+          ? { error: { code: -32602, message: "there's a Project called weave already" } }
+          : { result: { project: { id: 'p-2', name, kind: location.kind, locations: [{ hostId: location.hostId, path: location.path }], createdAt: 2, updatedAt: 2 } } };
+      },
+      'projects/update': (params) => {
+        sent.update = params;
+        return { result: { project: { ...weave, name: (params as { name?: string }).name ?? weave.name, locations: [] } } };
+      },
+      'projects/remove': (params) => {
+        sent.remove = params;
+        return { result: {} };
+      },
+      'worktrees/list': () => ({ result: { repo: '/work', remote: 'github.com/veezee/weave', worktrees: [{ path: '/work', branch: 'main', primary: true }] } }),
+    });
+    const store = storeFor(host.socket);
+    await store.start();
+    await settle();
+    const names = () => store.snapshot().projects?.map(({ name }) => name);
+
+    // Where a directory lies in git, with the remote a clone is known by.
+    const found = await store.actions.listWorktrees({ hostId: HOST, path: '/work/tui' });
+    expect(found).toMatchObject({ repo: '/work', remote: 'github.com/veezee/weave' });
+
+    const added = await store.actions.addProject?.({ name: 'odin', location: { hostId: HOST, path: '/srv/odin', kind: 'directory' } });
+    expect(sent.add).toEqual({ name: 'odin', location: { hostId: HOST, path: '/srv/odin', kind: 'directory' } });
+    expect(added).toEqual({ id: 'p-2', name: 'odin', kind: 'directory', locations: [{ hostId: HOST, path: '/srv/odin' }] });
+    expect(names()).toEqual(['odin', 'weave']);
+    // A refusal is in the Dispatcher's words.
+    await expect(store.actions.addProject?.({ name: 'weave', location: { hostId: HOST, path: '/x', kind: 'directory' } })).rejects.toThrow("there's a Project called weave already");
+
+    const renamed = await store.actions.updateProject?.('p-1', { name: 'loom', removeHost: HOST });
+    expect(sent.update).toEqual({ project: 'p-1', name: 'loom', removeHost: HOST });
+    expect(renamed).toMatchObject({ id: 'p-1', name: 'loom', locations: [] });
+    expect(names()).toEqual(['loom', 'odin']);
+
+    await store.actions.removeProject?.('p-2');
+    expect(sent.remove).toEqual({ project: 'p-2' });
+    expect(names()).toEqual(['loom']);
+    store.stop();
   });
 });

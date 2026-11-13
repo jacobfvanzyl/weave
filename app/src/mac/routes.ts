@@ -11,8 +11,14 @@ import type { DispatcherHello } from '@/host/protocol';
 import type { Routes } from '@/host/routes';
 import type { DispatcherRecord, PairingStorage } from '@/host/storage';
 
+/** Whether the page runs in the app's shell, whose core opens its connections: on the Mac, the iPad or the iPhone. */
+export const inShell = () => isTauri();
+
+/** Whether that shell is the iPad's or iPhone's (WVE-221), which says so before the page starts (`DEVICE` in the core). */
+export const onIos = () => isTauri() && (globalThis as { __WEAVE_DEVICE__?: string }).__WEAVE_DEVICE__ === 'ios';
+
 /** Whether the page runs in the Mac's app. */
-export const onMac = () => isTauri();
+export const onMac = () => isTauri() && !onIos();
 
 /** What a relayed connection tells the page (`relay::Incoming`). */
 export type Incoming =
@@ -206,6 +212,4 @@ export const macStorage = (core: Core = tauriCore): PairingStorage => ({
       // The Hosts are listed again when the Dispatcher answers.
     }
   },
-  oldHostKeys: async () => [],
-  forgetOldHosts: async () => {},
 });

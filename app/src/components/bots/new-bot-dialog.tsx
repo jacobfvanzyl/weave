@@ -3,26 +3,13 @@
 // everything else is set on the Bot's page afterwards.
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AppController, BotSummary } from '@/app/app-controller';
+import { NativeSelect } from '@/components/fields';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { cn } from '@/lib/utils';
-
-// Native selects give iOS its own picker, as New thread's do.
-function NativeSelect({ className, ...props }: React.ComponentProps<'select'>) {
-  return (
-    <select
-      className={cn(
-        'h-7 w-full min-w-0 rounded-md border border-input bg-input-background px-2 text-base outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 md:text-xs/relaxed',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
 
 export function NewBotDialog({ controller, open, onClose, onAdded }: {
   controller: AppController;

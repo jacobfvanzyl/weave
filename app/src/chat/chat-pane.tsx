@@ -2,9 +2,9 @@ import { composerDrafts, composerDraftListeners, discardComposerDraft, writeComp
 import { type ShownItem, transcriptItems } from './transcript-runs';
 import { shownItemKey, TurnFoldView } from './turn-fold-view';
 import { WorkRunView } from './work-run-view';
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { softKeyboard } from '@/app/use-soft-keyboard';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { PromptImage, QueuedPrompt } from '@/app/app-controller';
-import { Capacitor } from '@capacitor/core';
 import type {
   CreateElicitationResponse,
   SessionConfigOption,
@@ -22,7 +22,6 @@ import {
   SendIcon,
   StopIcon,
 } from '@hugeicons/core-free-icons';
-import { allSubagents, pendingRequests, threadLabel } from './acp-transcript';
 import type {
   AcpTranscript,
   TranscriptClientTool,
@@ -640,7 +639,8 @@ function Composer({
     const clearedDraft = { revision: submittedDraft.revision + 1, text: '' };
     writeComposerDraft(composerKey, clearedDraft);
     if (
-      Capacitor.isNativePlatform() ||
+      // A software keyboard goes away once the message is sent, at any width.
+      softKeyboard() ||
       window.matchMedia?.('(max-width: 767px)').matches
     ) {
       textareaRef.current?.blur();
@@ -783,7 +783,6 @@ export function ChatPane({
   discardDraftOnUnmount,
   draftKey,
   loading = false,
-  inScroller,
 }: {
   model: AcpTranscript;
   actions: ChatPaneActions;
@@ -804,8 +803,6 @@ export function ChatPane({
    * transcript, at its end, without having been laid out a frame at a time.
    */
   loading?: boolean;
-  /** Rendered inside the transcript's scroller, to drive it: a Surface's, from the device (WVE-183). */
-  inScroller?: ReactNode;
 }) {
   const running = model.turn.status === 'running';
   const items = useMemo(
@@ -874,7 +871,6 @@ export function ChatPane({
             </MessageScrollerViewport>
             <MessageScrollerButton />
           </MessageScroller>
-          {inScroller}
         </MessageScrollerProvider>}
         {!readOnly && <Composer
           key={draftKey ?? model.threadId}
@@ -888,74 +884,6 @@ export function ChatPane({
           focusRequest={focusRequest}
           discardDraftOnUnmount={discardDraftOnUnmount}
         />}
-      </div>
-    </TranscriptContext.Provider>
-  );
-}
-
-/**
- * The open thread on the iPhone while its transcript is on a Surface (WVE-183): the requests
- * waiting on the person, its subagents' among them, answered here, and the composer. `aside` sits
- * over the right edge, for the Surface's scrubber.
- */
-export function SurfacedThread({
-  model,
-  actions,
-  queued = [],
-  queuePaused = false,
-  canSteer = false,
-  canAttachImages = false,
-  draftKey,
-  aside,
-}: {
-  model: AcpTranscript;
-  actions: ChatPaneActions;
-  queued?: QueuedPrompt[];
-  queuePaused?: boolean;
-  canSteer?: boolean;
-  canAttachImages?: boolean;
-  draftKey?: string;
-  aside?: ReactNode;
-}) {
-  const requests = [
-    ...pendingRequests(model).map((entry) => ({ entry, transcript: model, from: undefined })),
-    ...allSubagents(model).flatMap(({ threadId, transcript }) =>
-      pendingRequests(transcript).map((entry) => ({ entry, transcript, from: threadLabel(model, threadId) }))),
-  ];
-  const context = useMemo<TranscriptContextValue>(() => ({ root: model }), [model]);
-  return (
-    <TranscriptContext.Provider value={context}>
-      <div className="flex min-h-0 flex-1 flex-col bg-chat-background" data-slot="surfaced-thread">
-        <div className="relative flex min-h-0 flex-1">
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto py-3 pr-10 pl-3">
-            {requests.length > 0
-              ? requests.map(({ entry, transcript, from }) => (
-                <section key={`${transcript.threadId}/${entry.id}`} aria-label={from ? `Waiting for you, from ${from}` : 'Waiting for you'} className="grid gap-1">
-                  {from && <p className="text-[0.6875rem] text-muted-foreground">From {from}</p>}
-                  <EntryView entry={entry} transcript={transcript} actions={actions} isStreaming={false} />
-                </section>
-              ))
-              : (
-                <Empty className="flex-1 p-0">
-                  <EmptyHeader>
-                    <EmptyDescription>The thread is on your Surface.</EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              )}
-          </div>
-          {aside}
-        </div>
-        <Composer
-          key={draftKey ?? model.threadId}
-          draftKey={draftKey}
-          model={model}
-          actions={actions}
-          queued={queued}
-          queuePaused={queuePaused}
-          canSteer={canSteer}
-          canAttachImages={canAttachImages}
-          focusRequest={0}
-        />
       </div>
     </TranscriptContext.Provider>
   );

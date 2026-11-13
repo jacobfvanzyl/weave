@@ -1,12 +1,9 @@
 // A terminal drawn in the page, under an element of it (WVE-205): the view (`view.ts`) attached
-// to the terminal's stream (`stream.ts`), and attached again when the stream drops. The Mac's
-// counterpart of `../use-native-terminal.ts`, with the same states, so a terminal's Block shows
-// either alike.
+// to the terminal's stream (`stream.ts`), and attached again when the stream drops.
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type { TerminalTicket } from '@/app/app-controller';
 import type { TerminalSize } from '@/host/protocol';
-import { CLOSE } from '../native-terminal';
-import type { SurfaceState, TerminalNotice } from '../use-native-terminal';
+import { CLOSE, type SurfaceState, type TerminalNotice } from '../terminals';
 import { FAMILY, terminalRuntime, type TerminalRuntime } from './runtime';
 import { openTerminalStream, type TerminalStream } from './stream';
 import { type Probe, TerminalView } from './view';
@@ -49,6 +46,9 @@ export function useWebTerminal(host: RefObject<HTMLElement | null>, options: Web
   const fitTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const retryTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const failures = useRef(0);
+  // Whether the terminal has the keyboard, and whether the key bar holds Control for its next key.
+  const [focused, setFocused] = useState(false);
+  const [control, setControl] = useState(false);
   /** A snapshot that didn't decode: ask for the screen as VT from then on. */
   const plain = useRef(false);
 
@@ -74,6 +74,11 @@ export function useWebTerminal(host: RefObject<HTMLElement | null>, options: Web
           fitTimer.current = setTimeout(() => stream.current?.resize(size), FIT_DELAY);
         },
         open: (address) => latest.current.open?.(address),
+        copied: (text) => {
+          void latest.current.copy?.(text).then(() => latest.current.onNotice?.({ kind: 'clipboard' })).catch(() => undefined);
+        },
+        focused: setFocused,
+        controlUsed: () => setControl(false),
         probe: {
           written: (bytes) => latest.current.probe?.written(bytes),
           drawn: () => latest.current.probe?.drawn(),
@@ -148,7 +153,7 @@ export function useWebTerminal(host: RefObject<HTMLElement | null>, options: Web
             return;
           }
           if (code === CLOSE.revoked || code === CLOSE.unauthenticated) {
-            setState({ kind: 'failed', message: `The Dispatcher refused this Mac${reason ? ` (${reason})` : ''}. Pair it again to see your terminals.` });
+            setState({ kind: 'failed', message: `The Dispatcher refused this device${reason ? ` (${reason})` : ''}. Pair it again to see your terminals.` });
             return;
           }
           // A Host restarting, a late ticket or a network that dropped: attach again, backing
@@ -176,6 +181,15 @@ export function useWebTerminal(host: RefObject<HTMLElement | null>, options: Web
   }, [view, fontSize]);
 
   const focus = useCallback(() => view?.view.focus(), [view]);
+  /** What a key bar over a software keyboard does: a key by name, Control for the next key, and the keyboard away. */
+  const keys = useCallback((key: 'Control' | 'Hide' | (string & {})) => {
+    if (key === 'Hide') return view?.view.blur();
+    if (key !== 'Control') return view?.view.press(key);
+    setControl((held) => {
+      view?.view.holdControl(!held);
+      return !held;
+    });
+  }, [view]);
 
-  return { state, focus, retry: reattach, view: view?.view };
+  return { state, focus, retry: reattach, view: view?.view, focused, control, keys };
 }

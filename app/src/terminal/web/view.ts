@@ -1,11 +1,11 @@
 // A terminal drawn in the page (WVE-205, ADR 0032): a canvas the screen in WebAssembly
-// (`core.ts`) is painted on, and the keyboard, mouse and clipboard that go with it. It's the
-// Mac's counterpart of the iPad's native view (`ios/App/App/TerminalView.swift` and
-// `WeaveTerminalRenderer.mm`), with the same font, colors and padding. It knows nothing of the
-// stream: what the person types comes out as bytes (`input`), and what the terminal says goes in
+// (`core.ts`) is painted on, and the keyboard, mouse, touches and clipboard that go with it, on
+// the Mac and, since WVE-221, the iPad and iPhone: a tap takes the keyboard, a finger dragged
+// scrolls, and one held selects a word and what it's dragged over, which is copied when it lifts.
+// It knows nothing of the stream: what the person types comes out as bytes (`input`), and what the terminal says goes in
 // (`restore`, `write`, `resized`).
 import type { TerminalSize } from '@/host/protocol';
-import { CELL, CELL_WORDS, CURSOR, type Frame, type Ghostty, type TerminalCore } from './core';
+import { CELL, CELL_WORDS, CURSOR, type Frame, type Ghostty, MODS, type TerminalCore } from './core';
 import { keyFor } from './keys';
 import { addressAt, opens } from './links';
 import type { Restore } from './stream';
@@ -15,6 +15,12 @@ const PADDING = 8;
 const SELECTION = 0x585b70;
 /** Lines a wheel may send a program at once. */
 const WHEEL_LINES = 12;
+/** How far a finger moves, in points, before it's dragging and no longer tapping or holding. */
+const TOUCH_SLOP = 8;
+/** How long a finger rests before it selects, in milliseconds. */
+const HOLD_MS = 450;
+/** What a flick keeps of its speed each millisecond, and the speed, in points a millisecond, it stops under. */
+const GLIDE = { keeps: 0.996, stops: 0.02 };
 
 export type ViewOptions = {
   fontSize: number;
@@ -26,6 +32,12 @@ export type ViewOptions = {
   fit(size: TerminalSize): void;
   /** A link the person ⌘-clicked. */
   open(address: string): void;
+  /** Text a finger selected, to put on the clipboard: a touch screen has no ⌘C. */
+  copied?(text: string): void;
+  /** The terminal took the keyboard, or gave it up. */
+  focused?(focused: boolean): void;
+  /** Control, held for the next key (`holdControl`), was used by one. */
+  controlUsed?(): void;
   /** Hears output arrive and frames drawn: the terminal check's measurements. */
   probe?: Probe;
 };
@@ -78,6 +90,13 @@ export class TerminalView {
   /** The mouse button held over the terminal, and whether it's the program's or a selection's. */
   #held: { button: number; program: boolean } | undefined;
   #selected = false;
+  /** The finger on the terminal: where it came down and was last, and what it's doing. */
+  #touch: { id: number; x: number; y: number; lastY: number; lastAt: number; speed: number; doing: 'resting' | 'scrolling' | 'selecting'; hold?: ReturnType<typeof setTimeout> } | undefined;
+  #glide: number | undefined;
+  /** A finger tapped, and the click the web view makes of it hasn't come yet. */
+  #tapped = false;
+  /** Control from the key bar, for the next key. */
+  #control = false;
 
   constructor(host: HTMLElement, ghostty: Ghostty, options: ViewOptions) {
     this.#host = host;
@@ -86,7 +105,8 @@ export class TerminalView {
     this.#metrics = measure(options.family, options.fontSize);
     this.#canvas = document.createElement('canvas');
     this.#canvas.setAttribute('aria-hidden', 'true');
-    this.#canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;cursor:text';
+    // The terminal has every touch on it: none scrolls or zooms the page.
+    this.#canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;cursor:text;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none';
     this.#context = this.#canvas.getContext('2d', { alpha: false });
     this.#field = document.createElement('textarea');
     this.#field.setAttribute('aria-label', 'Terminal input');
@@ -154,7 +174,27 @@ export class TerminalView {
   }
 
   focus() {
-    if (!this.#disposed && document.activeElement !== this.#field) this.#field.focus({ preventScroll: true });
+    if (this.#disposed || this.#focused) return;
+    // A window that lost the keyboard and has it back leaves the field the page's active element
+    // without it: let go first, or focusing it again does nothing.
+    if (document.activeElement === this.#field) this.#field.blur();
+    this.#field.focus({ preventScroll: true });
+  }
+
+  /** Gives the keyboard up: a software one goes away. */
+  blur() {
+    if (!this.#disposed) this.#field.blur();
+  }
+
+  /** A key by name, as the key bar over a software keyboard sends: `Escape`, `Tab`, an arrow. */
+  press(code: string) {
+    if (this.#disposed) return;
+    this.#send(this.#core.key({ code, mods: this.#takeControl() }));
+  }
+
+  /** Holds Control for the next key, from the key bar or the keyboard, or lets it go. */
+  holdControl(held: boolean) {
+    this.#control = held;
   }
 
   /** The rows on screen as text: for tests, and for what a screen reader is told. */
@@ -182,6 +222,8 @@ export class TerminalView {
     this.#stop.abort();
     this.#observer.disconnect();
     if (this.#frame !== undefined) cancelAnimationFrame(this.#frame);
+    if (this.#glide !== undefined) cancelAnimationFrame(this.#glide);
+    clearTimeout(this.#touch?.hold);
     this.#core.close();
     this.#canvas.remove();
     this.#field.remove();
@@ -234,12 +276,54 @@ export class TerminalView {
     this.#options.input(bytes);
   }
 
-  /** Text that came composed: an accent, an input method's, the emoji picker's. */
-  #typed(text: string) {
-    if (text) this.#send(this.#core.key({ code: '', text, mods: 0 }));
+  /** Control, if the key bar holds it: once. */
+  #takeControl() {
+    if (!this.#control) return 0;
+    this.#control = false;
+    this.#options.controlUsed?.();
+    return MODS.control;
   }
 
-  #cell(event: MouseEvent) {
+  /** Text that came composed: an accent, an input method's, the emoji picker's, a software keyboard's. */
+  #typed(text: string) {
+    if (!text) return;
+    // With Control held from the key bar, a letter is that letter's key.
+    const letter = this.#control && /^[a-z]$/i.test(text) ? text : undefined;
+    this.#send(this.#core.key(letter
+      ? { code: `Key${letter.toUpperCase()}`, text: letter.toLowerCase(), mods: this.#takeControl() }
+      : { code: '', text, mods: 0 }));
+  }
+
+  /** Scrolls by `lines`, down if positive: the program's wheel, an editor's arrows, or the scrollback. */
+  #scroll(lines: number, at: { x: number; y: number }, mods: number, shift: boolean) {
+    const count = Math.min(WHEEL_LINES, Math.abs(lines));
+    if (this.#modes.mouse && !shift) {
+      for (let line = 0; line < count; line += 1) {
+        const bytes = this.#core.mouse({ x: at.x, y: at.y, button: lines < 0 ? 4 : 5, action: 'press', mods, pressed: false });
+        if (bytes?.length) this.#options.input(bytes);
+      }
+    } else if (this.#modes.alternate) {
+      // An editor or a pager has no scrollback of the terminal's: the wheel is its arrows.
+      for (let line = 0; line < count; line += 1) {
+        const bytes = this.#core.key({ code: lines < 0 ? 'ArrowUp' : 'ArrowDown', mods: 0 });
+        if (bytes?.length) this.#options.input(bytes);
+      }
+    } else {
+      this.#core.scroll(lines);
+      this.#invalidate();
+    }
+  }
+
+  /** Scrolls by a distance in points, keeping what's short of a line for the next. */
+  #scrollBy(points: number, at: { x: number; y: number }, mods = 0, shift = false) {
+    this.#wheel += points;
+    const lines = Math.trunc(this.#wheel / this.#metrics.height);
+    if (!lines) return;
+    this.#wheel -= lines * this.#metrics.height;
+    this.#scroll(lines, at, mods, shift);
+  }
+
+  #cell(event: { clientX: number; clientY: number }) {
     const bounds = this.#canvas.getBoundingClientRect();
     const px = event.clientX - bounds.left - PADDING;
     const py = event.clientY - bounds.top - PADDING;
@@ -254,7 +338,7 @@ export class TerminalView {
     field.addEventListener('keydown', (event) => {
       const key = keyFor(event, 'press');
       if (key === undefined || key === 'compose') return;
-      const bytes = this.#core.key(key);
+      const bytes = this.#core.key(this.#control ? { ...key, mods: key.mods | this.#takeControl() } : key);
       // A key the terminal has no bytes for (a modifier alone) is nobody's.
       if (!bytes?.length) return;
       event.preventDefault();
@@ -266,6 +350,15 @@ export class TerminalView {
       // Only a program that asked to hear keys let go gets bytes for one.
       const bytes = this.#core.key(key);
       if (bytes && bytes.length > 0) this.#options.input(bytes);
+    }, { signal });
+    // A software keyboard's Delete and Return may come without a key going down: the field,
+    // which is empty, has nothing to delete, so they're the terminal's keys.
+    field.addEventListener('beforeinput', (event) => {
+      const code = event.inputType === 'deleteContentBackward' ? 'Backspace'
+        : event.inputType === 'insertLineBreak' || event.inputType === 'insertParagraph' ? 'Enter' : undefined;
+      if (!code) return;
+      event.preventDefault();
+      this.#send(this.#core.key({ code, mods: this.#takeControl() }));
     }, { signal });
     field.addEventListener('input', (event) => {
       if ((event as InputEvent).isComposing) return;
@@ -293,16 +386,19 @@ export class TerminalView {
     field.addEventListener('focus', () => {
       this.#focused = true;
       this.#invalidate();
+      this.#options.focused?.(true);
     }, { signal });
     field.addEventListener('blur', () => {
       this.#focused = false;
       this.#invalidate();
+      this.#options.focused?.(false);
     }, { signal });
 
     const mods = (event: MouseEvent) => (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.altKey ? 4 : 0);
     const button = (event: MouseEvent) => event.button === 0 ? 1 : event.button === 1 ? 3 : event.button === 2 ? 2 : 0;
     canvas.addEventListener('mousedown', (event) => {
-      this.focus();
+      // A tap's keyboard waits for its click: WebKit shows none for a field focused before it.
+      if (!this.#tapped) this.focus();
       // The field keeps the keyboard: a press on the canvas mustn't take it.
       event.preventDefault();
       const at = this.#cell(event);
@@ -359,28 +455,138 @@ export class TerminalView {
     }, { signal });
     canvas.addEventListener('wheel', (event) => {
       event.preventDefault();
-      this.#wheel += event.deltaMode === 1 ? event.deltaY * this.#metrics.height : event.deltaY;
-      const lines = Math.trunc(this.#wheel / this.#metrics.height);
-      if (!lines) return;
-      this.#wheel -= lines * this.#metrics.height;
-      const count = Math.min(WHEEL_LINES, Math.abs(lines));
-      if (this.#modes.mouse && !event.shiftKey) {
-        const at = this.#cell(event);
-        for (let line = 0; line < count; line += 1) {
-          const bytes = this.#core.mouse({ x: at.x, y: at.y, button: lines < 0 ? 4 : 5, action: 'press', mods: mods(event), pressed: false });
-          if (bytes?.length) this.#options.input(bytes);
-        }
-      } else if (this.#modes.alternate) {
-        // An editor or a pager has no scrollback of the terminal's: the wheel is its arrows.
-        for (let line = 0; line < count; line += 1) {
-          const bytes = this.#core.key({ code: lines < 0 ? 'ArrowUp' : 'ArrowDown', mods: 0 });
-          if (bytes?.length) this.#options.input(bytes);
-        }
-      } else {
-        this.#core.scroll(lines);
-        this.#invalidate();
-      }
+      this.#scrollBy(event.deltaMode === 1 ? event.deltaY * this.#metrics.height : event.deltaY, this.#cell(event), mods(event), event.shiftKey);
     }, { signal, passive: false });
+    this.#listenToTouches(signal);
+  }
+
+  /**
+   * A finger on the terminal, where there's a touch screen. Dragged, it scrolls, and goes on a
+   * little after a flick. Held, it selects the word under it, and more as it's dragged; what it
+   * selected is copied when it lifts. Lifted where it came down, it's left to the web view, which
+   * makes a click of it: that takes the keyboard, and is a click to a program that follows the
+   * mouse. Only a click counts as the person's asking for the keyboard: WebKit shows none for a
+   * field focused from a touch whose start the page took for itself.
+   */
+  #listenToTouches(signal: AbortSignal) {
+    const canvas = this.#canvas;
+    const point = (at: { px: number; py: number; x: number; y: number }) => ({ x: Math.floor(at.x), y: Math.floor(at.y), px: Math.max(0, at.px), py: Math.max(0, at.py) });
+    const stopGlide = () => {
+      if (this.#glide !== undefined) cancelAnimationFrame(this.#glide);
+      this.#glide = undefined;
+    };
+    const lift = () => {
+      clearTimeout(this.#touch?.hold);
+      this.#touch = undefined;
+    };
+    // WebKit's list of touches has an index and a length, and nothing to iterate it with.
+    const mine = (event: TouchEvent) => Array.from(event.changedTouches).find(({ identifier }) => identifier === this.#touch?.id);
+    canvas.addEventListener('touchstart', (event) => {
+      stopGlide();
+      // A second finger ends what the first was doing.
+      if (this.#touch || event.touches.length !== 1) {
+        lift();
+        return;
+      }
+      const touch = event.changedTouches[0];
+      if (!touch) return;
+      const down = this.#cell(touch);
+      const started = event.timeStamp;
+      this.#touch = {
+        id: touch.identifier,
+        x: touch.clientX,
+        y: touch.clientY,
+        lastY: touch.clientY,
+        lastAt: started,
+        speed: 0,
+        doing: 'resting',
+        hold: setTimeout(() => {
+          if (!this.#touch || this.#touch.doing !== 'resting') return;
+          this.#touch.doing = 'selecting';
+          // Two presses in place select the word.
+          this.#core.select('press', point(down), { ms: started });
+          this.#core.select('release', point(down), { ms: started });
+          this.#selected = this.#core.select('press', point(down), { ms: started + 1 });
+          this.#invalidate();
+        }, HOLD_MS),
+      };
+    }, { signal, passive: true });
+    canvas.addEventListener('touchmove', (event) => {
+      const held = this.#touch;
+      const touch = held && mine(event);
+      if (!held || !touch) return;
+      event.preventDefault();
+      const at = this.#cell(touch);
+      if (held.doing === 'resting') {
+        if (Math.hypot(touch.clientX - held.x, touch.clientY - held.y) < TOUCH_SLOP) return;
+        clearTimeout(held.hold);
+        held.doing = 'scrolling';
+      }
+      if (held.doing === 'selecting') {
+        if (at.py < 0) this.#core.scroll(-1);
+        else if (at.py > at.height) this.#core.scroll(1);
+        this.#selected = this.#core.select('drag', point(at), { ms: event.timeStamp, height: at.height });
+        this.#invalidate();
+        return;
+      }
+      // The text follows the finger: dragged down, it shows what's above.
+      const moved = held.lastY - touch.clientY;
+      const elapsed = Math.max(1, event.timeStamp - held.lastAt);
+      held.speed = 0.6 * (moved / elapsed) + 0.4 * held.speed;
+      held.lastY = touch.clientY;
+      held.lastAt = event.timeStamp;
+      this.#scrollBy(moved, at);
+    }, { signal, passive: false });
+    const ended = (event: TouchEvent, cancelled: boolean) => {
+      const held = this.#touch;
+      const touch = held && mine(event);
+      if (!held || !touch) return;
+      lift();
+      // A tap is the web view's, to make a click of.
+      if (held.doing === 'resting') {
+        this.#tapped = !cancelled;
+        return;
+      }
+      event.preventDefault();
+      const at = this.#cell(touch);
+      if (held.doing === 'selecting') {
+        this.#selected = this.#core.select('release', point(at), { ms: event.timeStamp });
+        this.#invalidate();
+        const text = this.#selected ? this.#core.selection() : undefined;
+        if (text) this.#options.copied?.(text);
+        return;
+      }
+      if (cancelled) return;
+      // A finger that stopped before it lifted leaves the text where it is.
+      let speed = event.timeStamp - held.lastAt > 80 ? 0 : held.speed;
+      let last = performance.now();
+      const glide = (now: number) => {
+        const elapsed = Math.min(50, now - last);
+        last = now;
+        speed *= GLIDE.keeps ** elapsed;
+        if (this.#disposed || Math.abs(speed) < GLIDE.stops) {
+          this.#glide = undefined;
+          return;
+        }
+        this.#scrollBy(speed * elapsed, at);
+        this.#glide = requestAnimationFrame(glide);
+      };
+      if (Math.abs(speed) >= GLIDE.stops) this.#glide = requestAnimationFrame(glide);
+    };
+    canvas.addEventListener('touchend', (event) => ended(event, false), { signal, passive: false });
+    canvas.addEventListener('touchcancel', (event) => ended(event, true), { signal, passive: false });
+    // The click a tap becomes, after its mouse events: with the keyboard, if they didn't bring it.
+    canvas.addEventListener('click', () => {
+      const tapped = this.#tapped;
+      this.#tapped = false;
+      // The field may have been focused already, by the Block as it took the tap, with no
+      // keyboard for it: focused again here, in the click, it gets one. Not while one is up,
+      // which would drop and come back.
+      const viewport = window.visualViewport;
+      const keyboardUp = viewport ? window.innerHeight - viewport.height > 120 : false;
+      if (tapped && this.#focused && !keyboardUp) this.#field.blur();
+      this.focus();
+    }, { signal });
   }
 
   /** Opens what the cell links to: the program's own link, or an address written there. */

@@ -1,14 +1,14 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { Capacitor } from '@capacitor/core';
 import { App } from './App';
 import './styles.css';
 
 document.documentElement.classList.add('dark');
 
-// The native shell says which device it runs on; in a browser, `?idiom=phone` stands in for it.
+// The app's shell says which device it runs on before the page loads; in a browser,
+// `?idiom=phone` stands in for it.
 const idiom = new URLSearchParams(location.search).get('idiom');
-if (!Capacitor.isNativePlatform() && (idiom === 'phone' || idiom === 'pad')) {
+if (!document.documentElement.dataset.deviceIdiom && (idiom === 'phone' || idiom === 'pad')) {
   document.documentElement.dataset.deviceIdiom = idiom;
 }
 

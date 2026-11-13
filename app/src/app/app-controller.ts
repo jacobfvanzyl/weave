@@ -76,6 +76,8 @@ export type WorktreeSummary = {
 export type RepositoryListing = {
   /** Its primary worktree. */
   repo: string;
+  /** Its remote as a host and path, such as `github.com/owner/name`, when it has one. */
+  remote?: string;
   /** The branch new worktrees start from unless told otherwise. */
   defaultBranch?: string;
   /** The primary worktree first. */
@@ -255,8 +257,21 @@ export type SessionSummary = {
 export type ProjectSummary = {
   id: string;
   name: string;
+  /** A repository, or a directory outside one; unknown from a list kept before the app read it. */
+  kind?: ProjectKind;
+  /** A git Project's repository's remote, by which a clone on another Host may join it. */
+  remote?: string;
+  /** At most one for each Host: a repository's primary worktree, or a directory. */
   locations: { hostId: string; path: string }[];
 };
+
+export type ProjectKind = 'git' | 'directory';
+
+/** Where a Project is on one Host, as the Dispatcher is told of it. */
+export type ProjectLocation = { hostId: string; path: string; kind: ProjectKind; remote?: string };
+
+/** What `updateProject` changes, in this order and all or none: its name, a Host's location gone, a location added. */
+export type ProjectChange = { name?: string; removeHost?: string; add?: ProjectLocation };
 
 /** A Session's directory on its Host, as the Host lists it, with or without a layout it keeps. */
 export type KnownSession = {
@@ -392,6 +407,8 @@ export type AppModel = {
   agents: Record<string, AgentChoice[]>;
   /** The person's Projects; none without the Dispatcher, or from one that keeps none. */
   projects?: ProjectSummary[];
+  /** The Dispatcher keeps Projects and can be asked now, so the app adds and changes them (WVE-220). */
+  canManageProjects?: boolean;
   /** The Sessions the Hosts list: directories something was started in, or a layout was kept for. */
   known?: KnownSession[];
   /** The Session on screen. */
@@ -445,6 +462,16 @@ export type ThreadActions = {
 
 /** A thread this device started, and the Session it's in. */
 export type CreatedThread = { key: string; sessionKey: string };
+
+/** A terminal this device started outside the Session on screen, and the Session it's in. */
+export type StartedTerminal = { id: string; sessionKey: string };
+
+/**
+ * What a Session is asked to show once it's on screen: a thread, by its key, or a terminal just
+ * started in it, which has no key of its own.
+ */
+export const terminalReveal = (id: string) => `terminal:${id}`;
+export const revealedTerminal = (reveal: string) => reveal.startsWith('terminal:') ? reveal.slice('terminal:'.length) : undefined;
 
 export type AppActions = ThreadActions & {
   /** Shows one thread alone, in front; with no key, none. */
@@ -504,6 +531,20 @@ export type AppActions = ThreadActions & {
   reconnectHost(hostId: string): Promise<void> | void;
   /** Starts a terminal in the Session on screen's directory; resolves to its id. */
   newTerminal(): Promise<string>;
+  /**
+   * Starts a terminal in a directory that needn't be on screen, as a Session's first Block
+   * (WVE-220): resolves to it and the Session it's in; rejects saying why not.
+   */
+  startTerminal?(input: { hostId: string; directory: string }): Promise<StartedTerminal>;
+  /**
+   * Adds a Project (`projects/add`) at its first location. Rejects in the Dispatcher's words, as
+   * for a name another Project has, or a location that's another's already.
+   */
+  addProject?(input: { name: string; location: ProjectLocation }): Promise<ProjectSummary>;
+  /** Renames a Project, or adds or removes a location of it (`projects/update`); rejects saying why not. */
+  updateProject?(id: string, change: ProjectChange): Promise<ProjectSummary>;
+  /** Forgets a Project (`projects/remove`): what's in its directories stays, and so do its Sessions. */
+  removeProject?(id: string): Promise<void>;
   /** Hangs a terminal's program up, which ends it on every device. */
   closeTerminal(id: string): Promise<void>;
   /** Names a terminal on every device, or without a label clears its name. */

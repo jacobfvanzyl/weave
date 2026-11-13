@@ -9,12 +9,14 @@
 // and other Blocks go beside it, never before it, and no second thread is offered.
 import { useEffect, useMemo, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { Add01Icon, Cancel01Icon, ComputerTerminal01Icon, BubbleChatIcon } from '@hugeicons/core-free-icons';
-import { type AppController, type BotSummary, type CreatedThread, type LayoutChange, type OpenSession, type TerminalSummary, type ThreadSummary, threadKey } from '@/app/app-controller';
+import { Add01Icon, Cancel01Icon, Tick02Icon, UnfoldMoreIcon } from '@hugeicons/core-free-icons';
+import { type AppController, type BotSummary, type CreatedThread, type LayoutChange, type OpenSession, revealedTerminal, threadKey } from '@/app/app-controller';
+import { saveLastChoices } from '@/app/last-choices';
 import { useCommand } from '@/app/commands';
 import { BotHeading } from '@/components/bots/bot-heading';
 import { type NewThreadTarget, NewThreadDialog } from '@/components/new-thread-dialog';
-import { type BlockContext, TerminalMark, blockType } from '@/components/session/blocks';
+import { type BlockContext, blockType } from '@/components/session/blocks';
+import { NewBlockDialog } from '@/components/session/new-block-dialog';
 import { NameInput } from '@/components/session/name-input';
 import { type BlockActions, BlockRail, TabBlocks } from '@/components/session/tab-blocks';
 import { ThreadHeader } from '@/components/thread-view';
@@ -30,7 +32,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import type { SessionBlock, SessionTab } from '@/host/protocol';
 import { cn } from '@/lib/utils';
 import { blockOfTerminal, blockOfThread, place, terminalBlock, terminalOf, threadBlock, threadOf } from '@/session/blocks';
@@ -57,114 +59,9 @@ import {
 } from '@/session/layout';
 import { directoryName, threadDirectories } from '@/session/sessions';
 import { blockOnPhone, blocksShown, focusBlock, focusedBlock, showTab, tabInFront, toggleZoom, trimView, useSessionView, zoomedIn } from '@/session/view';
-import type { DeviceSurface } from '@/surface/use-surface';
-import { terminalBusy, terminalName, terminalsInOrder } from '@/terminal/terminals';
+import { terminalBusy, terminalsInOrder } from '@/terminal/terminals';
 
 const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
-
-/**
- * What a new Block shows: a thread or terminal to start, one the Session has that no Block shows,
- * or one elsewhere in its directory, which a Block brings into the Session.
- */
-function NewBlockDialog({ open, onOpenChange, threads, closed, terminals, elsewhere, canTerminals, canThreads = true, onNewThread, onNewTerminal, onThread, onTerminal }: {
-  open: boolean;
-  onOpenChange(open: boolean): void;
-  /** Whether a thread may be given a Block: not in a Bot's Session, whose one thread is its own. */
-  canThreads?: boolean;
-  /** The Session's open threads no Block shows, and its closed ones. */
-  threads: ThreadSummary[];
-  closed: ThreadSummary[];
-  terminals: TerminalSummary[];
-  /** What's in its directory and not the Session's: started from a terminal, a schedule or another client. */
-  elsewhere: { threads: ThreadSummary[]; terminals: TerminalSummary[] };
-  canTerminals: boolean;
-  onNewThread(): void;
-  onNewTerminal(): void;
-  onThread(thread: ThreadSummary): void;
-  onTerminal(terminal: TerminalSummary): void;
-}) {
-  const row = 'flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted focus-visible:bg-muted outline-none';
-  const none = threads.length === 0 && terminals.length === 0;
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='w-[min(26rem,calc(100%-2rem))] max-w-none sm:max-w-md'>
-        <DialogHeader>
-          <DialogTitle>New Block</DialogTitle>
-          <DialogDescription>
-            {canThreads
-              ? 'What it shows: something new, or a thread or terminal of this Session that no Block shows. It docks beside the Block with the keyboard, on every device.'
-              : "What it shows: a new terminal, or one of this directory's that no Block shows. It docks beside the Block with the keyboard, on every device."}
-          </DialogDescription>
-        </DialogHeader>
-        <div className='grid max-h-[60dvh] gap-3 overflow-y-auto'>
-          <div role='group' aria-label='New' className='grid gap-0.5'>
-            {canThreads && (
-              <button type='button' className={row} onClick={onNewThread}>
-                <HugeiconsIcon icon={BubbleChatIcon} strokeWidth={2} className='size-3.5 text-icon-muted' />
-                New thread…
-              </button>
-            )}
-            {canTerminals && (
-              <button type='button' className={row} onClick={onNewTerminal}>
-                <HugeiconsIcon icon={ComputerTerminal01Icon} strokeWidth={2} className='size-3.5 text-icon-muted' />
-                New terminal
-              </button>
-            )}
-          </div>
-          <div role='group' aria-label='Not shown' className='grid gap-0.5'>
-            <p className='px-2 text-[0.6875rem] font-medium text-muted-foreground'>Not shown</p>
-            {none && <p className='px-2 py-1 text-[0.6875rem] text-muted-foreground'>{canThreads ? 'Every open thread and terminal here has a Block.' : 'Every terminal here has a Block.'}</p>}
-            {threads.map((thread) => (
-              <button key={thread.key} type='button' className={row} onClick={() => onThread(thread)}>
-                <HugeiconsIcon icon={BubbleChatIcon} strokeWidth={2} className='size-3.5 shrink-0 text-icon-muted' />
-                <span className='min-w-0 flex-1 truncate'>{thread.title || 'New thread'}</span>
-                <span className='shrink-0 text-[0.6875rem] text-muted-foreground'>{thread.activity === 'waiting' ? 'waiting on you' : thread.activity === 'running' ? 'running' : thread.agentName}</span>
-              </button>
-            ))}
-            {terminals.map((terminal) => (
-              <button key={terminal.id} type='button' className={row} onClick={() => onTerminal(terminal)}>
-                <HugeiconsIcon icon={ComputerTerminal01Icon} strokeWidth={2} className='size-3.5 shrink-0 text-icon-muted' />
-                <span className='min-w-0 flex-1 truncate'>{terminalName(terminal)}</span>
-                <TerminalMark terminal={terminal} />
-              </button>
-            ))}
-          </div>
-          {(elsewhere.threads.length > 0 || elsewhere.terminals.length > 0) && (
-            <div role='group' aria-label='Elsewhere in this directory' className='grid gap-0.5'>
-              <p className='px-2 text-[0.6875rem] font-medium text-muted-foreground'>Elsewhere in this directory, which a Block brings into the Session</p>
-              {elsewhere.threads.map((thread) => (
-                <button key={thread.key} type='button' className={row} onClick={() => onThread(thread)}>
-                  <HugeiconsIcon icon={BubbleChatIcon} strokeWidth={2} className='size-3.5 shrink-0 text-icon-muted' />
-                  <span className='min-w-0 flex-1 truncate'>{thread.title || 'New thread'}</span>
-                  <span className='shrink-0 text-[0.6875rem] text-muted-foreground'>{thread.activity === 'waiting' ? 'waiting on you' : thread.activity === 'running' ? 'running' : thread.agentName}</span>
-                </button>
-              ))}
-              {elsewhere.terminals.map((terminal) => (
-                <button key={terminal.id} type='button' className={row} onClick={() => onTerminal(terminal)}>
-                  <HugeiconsIcon icon={ComputerTerminal01Icon} strokeWidth={2} className='size-3.5 shrink-0 text-icon-muted' />
-                  <span className='min-w-0 flex-1 truncate'>{terminalName(terminal)}</span>
-                  <TerminalMark terminal={terminal} />
-                </button>
-              ))}
-            </div>
-          )}
-          {closed.length > 0 && (
-            <div role='group' aria-label='Closed threads' className='grid gap-0.5'>
-              <p className='px-2 text-[0.6875rem] font-medium text-muted-foreground'>Closed threads, which open again here</p>
-              {closed.map((thread) => (
-                <button key={thread.key} type='button' className={row} onClick={() => onThread(thread)}>
-                  <HugeiconsIcon icon={BubbleChatIcon} strokeWidth={2} className='size-3.5 shrink-0 text-icon-muted' />
-                  <span className='min-w-0 flex-1 truncate'>{thread.title || 'New thread'}</span>
-                  <span className='shrink-0 text-[0.6875rem] text-muted-foreground'>{thread.agentName}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 /** A swipe sideways, for the iPhone's row of Blocks. */
 function useSwipe(onSwipe: (by: number) => void) {
@@ -201,8 +98,6 @@ export type SessionViewProps = {
   onOpenThread(key: string): void;
   /** A thread was started from here in another directory: its own Session's, which it starts. */
   onCreated?(thread: CreatedThread): void;
-  /** The iPhone's Surface (WVE-183), for the thread in front. */
-  surface?: DeviceSurface;
   onBack?(): void;
   /** The Bot whose Session this is (WVE-178): one tab, its Thread Block locked to the top left. */
   bot?: BotSummary;
@@ -210,7 +105,7 @@ export type SessionViewProps = {
   onOpenBot?(): void;
 };
 
-export function SessionView({ controller, session, members, leading, phone = false, reveal, onRevealed, onOpenThread, onCreated, surface, onBack, bot, onOpenBot }: SessionViewProps) {
+export function SessionView({ controller, session, members, leading, phone = false, reveal, onRevealed, onOpenThread, onCreated, onBack, bot, onOpenBot }: SessionViewProps) {
   const { model, actions } = controller;
   const { layout } = session;
   const [view, changeView] = useSessionView(session.key);
@@ -323,7 +218,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
     focused: block.id === focused?.id,
     onOpenThread,
     onRemove: () => update((current) => removeBlock(current, block.id)),
-    ...(phone ? { surface, onSwipeBack: onBack } : {}),
+    ...(phone ? { onSwipeBack: onBack } : {}),
   });
   const title = (block: SessionBlock) => blockType(block.type).title(block, { controller, session });
   const icon = (block: SessionBlock) => blockType(block.type).icon;
@@ -392,8 +287,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
     }
   };
   const startThread = (target: Target = here()) => setNewThread({ target, dialog: { hostId: session.hostId, cwd: session.directory } });
-  const created = (thread: CreatedThread) => {
-    const target = newThread?.target;
+  const created = (thread: CreatedThread, target: Target | undefined = newThread?.target) => {
     if (thread.sessionKey !== session.key) {
       onCreated?.(thread);
       return;
@@ -401,9 +295,28 @@ export function SessionView({ controller, session, members, leading, phone = fal
     showThread(thread.key.slice(thread.key.indexOf('/') + 1), target);
   };
 
-  // A thread to show, as one a link named or one just started from the sidebar.
+  /** A thread of `agentId` here, in the Session's directory, shown in a Block at `target`: New Block's one step. */
+  const startThreadWith = async (agentId: string, target: Target) => {
+    setError(undefined);
+    try {
+      const thread = await actions.createThread({ hostId: session.hostId, cwd: session.directory, agentId });
+      saveLastChoices({ agentId });
+      if (thread) created(thread, target);
+    } catch (cause) {
+      setError(describe(cause));
+    }
+  };
+
+  // What to show: a thread, as one a link named or one just started from the sidebar, or the
+  // terminal the Session was started with.
   useEffect(() => {
     if (!reveal) return;
+    const terminalId = revealedTerminal(reveal);
+    if (terminalId) {
+      showTerminal(terminalId);
+      onRevealed?.();
+      return;
+    }
     const threadId = reveal.startsWith(`${session.hostId}/`) ? reveal.slice(reveal.indexOf('/') + 1) : undefined;
     // A Bot's Session gives no second thread a Block.
     if (threadId && bot) {
@@ -600,6 +513,66 @@ export function SessionView({ controller, session, members, leading, phone = fal
   // typed in place to rename it, and its own close. A + after them opens a new tab, and takes a
   // Block dragged onto it into one. The pill is only as wide as its tabs, scrolling when they
   // don't fit, so the rest of the rail stays empty, where on the Mac it drags the window.
+  /** The mark of what a tab shows first: the Block in front, in the tab on screen. */
+  const tabIcon = (listed: SessionTab) => {
+    const first = (listed.id === tab.id ? focused : undefined) ?? tabBlocks(listed)[0];
+    return first ? blockType(first.type).icon : undefined;
+  };
+  const tabMark = (listed: SessionTab) => {
+    const icon = tabIcon(listed);
+    return icon && (
+      <span aria-hidden='true' className='grid size-5 shrink-0 place-items-center rounded-md border border-foreground/10 bg-background text-foreground/80'>
+        <HugeiconsIcon icon={icon} strokeWidth={2} className='size-3' />
+      </span>
+    );
+  };
+  // On the iPhone the pill holds the tab in front alone, as wide as the rail. Tapping it lists the
+  // tabs to pick from, where there's more than one, and renames it, which a double click does elsewhere.
+  const phoneTabRail = (
+    <>
+      <div data-slot='tab-picker' className='flex h-9 min-w-0 flex-1 items-stretch rounded-full bg-muted/50 p-1'>
+        <div className={cn('flex min-w-0 flex-1 items-center gap-1.5 rounded-full border border-foreground/10 bg-muted pr-0.5 pl-1 text-xs text-foreground', !tabIcon(tab) && 'pl-3')}>
+          {renaming === tab.id
+            ? (
+              <>
+                {tabMark(tab)}
+                <NameInput label='Tab name' name={tab.title ?? ''} placeholder={tabName({ ...tab, title: undefined })}
+                  onKeep={(next) => update((current) => renameTab(current, tab.id, next))} onDone={() => setRenaming(undefined)} />
+              </>
+            )
+            : (
+              <DropdownMenu>
+                <DropdownMenuTrigger render={<button type='button' aria-label={`Tab ${tabName(tab)}, ${layout.tabs.indexOf(tab) + 1} of ${layout.tabs.length}`}
+                  className='flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-full text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50' />}>
+                  {tabMark(tab)}
+                  <span className='min-w-0 flex-1 truncate'>{tabName(tab)}</span>
+                  {layout.tabs.length > 1 && <HugeiconsIcon icon={UnfoldMoreIcon} strokeWidth={2} className='size-3.5 shrink-0 text-muted-foreground' />}
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align='start' className='w-(--anchor-width) min-w-56'>
+                  {layout.tabs.map((listed) => (
+                    <DropdownMenuItem key={listed.id} aria-current={listed.id === tab.id ? 'true' : undefined}
+                      onClick={() => changeView((current) => showTab(current, listed.id))}>
+                      <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} className={cn('size-3.5', listed.id !== tab.id && 'invisible')} />
+                      {tabMark(listed)}
+                      <span className='min-w-0 flex-1 truncate'>{tabName(listed)}</span>
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => setRenaming(tab.id)}>Rename tab</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          <Button size='icon-xs' variant='ghost' aria-label={`Close tab ${tabName(tab)}`} title='Close tab' className='shrink-0 rounded-full opacity-60 hover:opacity-100'
+            onClick={() => closeTab(tab)}>
+            <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+          </Button>
+        </div>
+      </div>
+      <Button size='icon' variant='ghost' aria-label='New tab' title='New tab' className='shrink-0' onClick={openTab}>
+        <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+      </Button>
+    </>
+  );
   const tabRail = (
     <>
       <div role='tablist' aria-label='Tabs'
@@ -660,7 +633,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
       className='flex min-h-0 min-w-0 flex-1 flex-col'>
       {/* No line under it but on the iPhone: Blocks have edges of their own. */}
       <ThreadHeader leading={leading} divided={phone}>
-        {bot ? <BotHeading bot={bot} unread={model.unread} onOpen={onOpenBot} /> : tabRail}
+        {bot ? <BotHeading bot={bot} unread={model.unread} onOpen={onOpenBot} /> : phone ? phoneTabRail : tabRail}
       </ThreadHeader>
       {bot?.startingThread && (
         <p role='status' data-slot='bot-starting' className='shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground'>
@@ -703,11 +676,11 @@ export function SessionView({ controller, session, members, leading, phone = fal
         terminals={hiddenTerminals}
         elsewhere={bot ? { threads: [], terminals: elsewhere.terminals } : elsewhere}
         canTerminals={canTerminals}
-        canThreads={!bot}
-        onNewThread={() => {
-          const target = adding?.target;
+        agents={bot ? [] : model.agents[session.hostId] ?? []}
+        onNewThread={(agentId) => {
+          const target = adding?.target ?? here();
           setAdding(undefined);
-          startThread(target);
+          void startThreadWith(agentId, target);
         }}
         onNewTerminal={() => {
           const target = adding?.target;

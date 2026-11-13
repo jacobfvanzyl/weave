@@ -30,6 +30,7 @@ export const COMMANDS = [
   spec('block.add', 'New Block…', 'Session', 'Mod+O'),
   spec('session.new', 'New Session…', 'Session'),
   spec('session.end', 'End Session…', 'Session'),
+  spec('project.add', 'Add Project…', 'Session'),
   spec('palette.open', 'Command Palette…', 'Session', 'Mod+K'),
   spec('tab.new', 'New Tab', 'Tab', 'Mod+T'),
   spec('tab.rename', 'Rename Tab…', 'Tab'),

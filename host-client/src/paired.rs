@@ -47,6 +47,12 @@ fn context(error: io::Error, doing: impl std::fmt::Display) -> io::Error {
 /// `$XDG_STATE_HOME/weave/client`, by default `~/.local/state/weave/client`: this computer's
 /// state as a client of the Dispatcher, its pairing and what the CLI last listed there.
 pub fn dir() -> io::Result<PathBuf> {
+    // The iPad's and iPhone's app (WVE-221) may write only inside its container, whose home has
+    // a Library to keep such things in.
+    #[cfg(target_os = "ios")]
+    if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+        return Ok(PathBuf::from(home).join("Library/Application Support/weave/client"));
+    }
     let state = std::env::var_os("XDG_STATE_HOME")
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from)

@@ -1,8 +1,6 @@
-import { Preferences } from '@capacitor/preferences';
-
 /**
  * What this device keeps about the Dispatcher it paired with (ADR 0030): the one pairing it has.
- * The key itself stays in the Keychain.
+ * The key itself stays where the device keeps it: the Secure Enclave, in the app's shell.
  */
 export type DispatcherRecord = {
   /** The Dispatcher's own id, which its challenges are bound to. */
@@ -23,15 +21,9 @@ export type PairingStorage = {
   load(): Promise<DispatcherRecord | undefined>;
   /** Keeps the pairing, or with none forgets it. */
   save(record: DispatcherRecord | undefined): Promise<void>;
-  /** The Keychain keys of the Hosts an earlier version of the app paired with one by one. */
-  oldHostKeys(): Promise<string[]>;
-  /** Forgets those pairings, once this device is paired with the Dispatcher. */
-  forgetOldHosts(): Promise<void>;
 };
 
 const KEY = 'weave.dispatcher';
-/** Where the app kept a record per Host before it paired with the Dispatcher alone (WVE-196). */
-const OLD_HOSTS = 'weave.pairedHosts';
 
 const parsed = (value: string | null): unknown => {
   if (!value) return undefined;
@@ -46,36 +38,33 @@ const isRecord = (value: unknown): value is DispatcherRecord =>
   typeof value === 'object' && value !== null
   && ['dispatcherId', 'name', 'url', 'deviceId', 'keyId'].every((key) => typeof (value as Record<string, unknown>)[key] === 'string');
 
-const keyIds = (value: unknown) => Array.isArray(value)
-  ? value.flatMap((host: unknown) => typeof host === 'object' && host !== null && typeof (host as { keyId?: unknown }).keyId === 'string'
-    ? [(host as { keyId: string }).keyId]
-    : [])
-  : [];
-
-/** The pairing in the app's preferences (UserDefaults on iOS, localStorage in a browser). */
-export const preferencesStorage: PairingStorage = {
+/**
+ * The pairing in the page's own storage, for a browser: `localStorage`, or nothing kept where the
+ * browser gives none.
+ */
+export const pageStorage: PairingStorage = {
   async load() {
-    const record = parsed((await Preferences.get({ key: KEY })).value);
-    return isRecord(record) ? record : undefined;
+    try {
+      const record = parsed(localStorage.getItem(KEY));
+      return isRecord(record) ? record : undefined;
+    } catch {
+      return undefined;
+    }
   },
   async save(record) {
-    if (record) await Preferences.set({ key: KEY, value: JSON.stringify(record) });
-    else await Preferences.remove({ key: KEY });
-  },
-  async oldHostKeys() {
-    return keyIds(parsed((await Preferences.get({ key: OLD_HOSTS })).value));
-  },
-  async forgetOldHosts() {
-    await Preferences.remove({ key: OLD_HOSTS });
+    try {
+      if (record) localStorage.setItem(KEY, JSON.stringify(record));
+      else localStorage.removeItem(KEY);
+    } catch {
+      // A browser that keeps nothing pairs again after a reload, as it does for its key.
+    }
   },
 };
 
-/** The pairing in memory, for tests, with the old Hosts' keys `oldHosts` names. */
-export const memoryStorage = (record?: DispatcherRecord, oldHosts: string[] = []): PairingStorage & { current(): DispatcherRecord | undefined } => ({
+/** The pairing in memory, for tests. */
+export const memoryStorage = (record?: DispatcherRecord): PairingStorage & { current(): DispatcherRecord | undefined } => ({
   load: async () => record && structuredClone(record),
   save: async (next) => { record = next && structuredClone(next); },
-  oldHostKeys: async () => [...oldHosts],
-  forgetOldHosts: async () => { oldHosts = []; },
   current: () => record && structuredClone(record),
 });
 

@@ -72,8 +72,8 @@ describe("a Bot's Session", () => {
     expect(within(view).queryByRole('button', { name: /^New Block/ })).not.toBeInTheDocument();
     await user.click(within(block).getByRole('button', { name: /^Split .* right/ }));
     const dialog = await screen.findByRole('dialog', { name: 'New Block' });
-    expect(within(dialog).queryByRole('button', { name: 'New thread…' })).not.toBeInTheDocument();
-    expect(within(dialog).getByRole('button', { name: 'New terminal' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('option', { name: /^New thread/ })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('option', { name: 'New terminal' })).toBeInTheDocument();
   });
 
   it('starts a Bot with no thread on its first prompt, and carries on in the thread it gets', async () => {
