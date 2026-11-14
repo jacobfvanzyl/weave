@@ -11,12 +11,11 @@ import { useEffect, useMemo, useRef, useState, type ReactNode, type TouchEvent }
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Add01Icon, Cancel01Icon, Tick02Icon, UnfoldMoreIcon } from '@hugeicons/core-free-icons';
 import { type AppController, type BotSummary, type CreatedThread, type LayoutChange, type OpenSession, revealedTerminal, threadKey } from '@/app/app-controller';
-import { saveLastChoices } from '@/app/last-choices';
+import { lastUsedFirst, loadLastChoices, saveLastChoices } from '@/app/last-choices';
 import { useCommand } from '@/app/commands';
 import { BotHeading } from '@/components/bots/bot-heading';
-import { type NewThreadTarget, NewThreadDialog } from '@/components/new-thread-dialog';
 import { type BlockContext, blockType } from '@/components/session/blocks';
-import { NewBlockDialog } from '@/components/session/new-block-dialog';
+import { type NewBlockAnchor, NewBlockMenu } from '@/components/session/new-block-menu';
 import { NameInput } from '@/components/session/name-input';
 import { type BlockActions, BlockRail, TabBlocks } from '@/components/session/tab-blocks';
 import { ThreadHeader } from '@/components/thread-view';
@@ -275,10 +274,24 @@ export function SessionView({ controller, session, members, leading, phone = fal
     return { beside: focused.id, side: roomierSide(tab, focused.id, rect && rect.height > 0 && rect.width > 0 ? rect.width / rect.height : undefined) };
   };
 
+  /** Over the Block with the keyboard, or the tab: where New Block opens from a key, the menu bar or the palette. */
+  const overFocused = (): NewBlockAnchor => ({
+    over: () => {
+      const view = document.querySelector(`[data-session="${CSS.escape(session.key)}"]`);
+      const block = focused ? view?.querySelector(`[data-block-id="${CSS.escape(focused.id)}"]`) : undefined;
+      return (block ?? view?.querySelector('[data-slot="session-tab"]') ?? view ?? document.body).getBoundingClientRect();
+    },
+  });
+  /** The tab bar's New tab button, where New Block opens for a new tab. */
+  const tabButton = (): NewBlockAnchor => {
+    const button = document.querySelector(`[data-session="${CSS.escape(session.key)}"] [aria-label="New tab"]`);
+    return button ? { element: button } : overFocused();
+  };
+
   const sessionName = directoryName(session.directory);
   const [error, setError] = useState<string>();
-  const [adding, setAdding] = useState<{ target: Target }>();
-  const [newThread, setNewThread] = useState<{ target: Target; dialog: NewThreadTarget }>();
+  // New Block, open: where what's picked goes, and where the menu opens.
+  const [adding, setAdding] = useState<{ target: Target; anchor?: NewBlockAnchor }>();
   // The tab being renamed in place, by id.
   const [renaming, setRenaming] = useState<string>();
   const [confirm, setConfirm] = useState<{ title: string; description: string; action: string; run(): void }>();
@@ -320,8 +333,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
       setError(describe(cause));
     }
   };
-  const startThread = (target: Target = here()) => setNewThread({ target, dialog: { hostId: session.hostId, cwd: session.directory } });
-  const created = (thread: CreatedThread, target: Target | undefined = newThread?.target) => {
+  const created = (thread: CreatedThread, target?: Target) => {
     if (thread.sessionKey !== session.key) {
       onCreated?.(thread);
       return;
@@ -330,7 +342,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
   };
 
   /** A thread of `agentId` here, in the Session's directory, shown in a Block at `target`: New Block's one step. */
-  const startThreadWith = async (agentId: string, target: Target) => {
+  const startThreadWith = async (agentId: string, target: Target = here()) => {
     setError(undefined);
     try {
       const thread = await actions.createThread({ hostId: session.hostId, cwd: session.directory, agentId });
@@ -459,7 +471,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
   };
   // A new tab is made by its first Block (WVE-228): New Block, aimed at one, and nothing if it's
   // put away. From a tab with nothing in it, that tab is the one to fill.
-  const openTab = () => setAdding({ target: tabBlocks(tab).length === 0 ? { tab: tab.id } : { newTab: newTab(), after: tab.id } });
+  const openTab = (anchor = tabButton()) => setAdding({ target: tabBlocks(tab).length === 0 ? { tab: tab.id } : { newTab: newTab(), after: tab.id }, anchor });
   const toggleFloat = (block: SessionBlock) => {
     const found = findBlock(layout, block.id);
     if (!found || isLocked(block)) return;
@@ -495,7 +507,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
     focus,
     close: closeBlock,
     zoom: (id) => changeView((current) => toggleZoom(current, layout, id)),
-    split: (id, side) => setAdding({ target: { beside: id, side } }),
+    split: (id, side, anchor) => setAdding({ target: { beside: id, side }, anchor: anchor ? { element: anchor } : overFocused() }),
     float: toggleFloat,
     minimize,
     move: (block, target) => {
@@ -510,16 +522,20 @@ export function SessionView({ controller, session, members, leading, phone = fal
   const found = focused ? findBlock(layout, focused.id) : undefined;
   const docked = Boolean(found?.path);
   const pinned = Boolean(focused && isLocked(focused));
-  useCommand('thread.new', () => startThread(), !bot);
+  // With the agent this device used last, without asking: New Block asks which (WVE-229).
+  useCommand('thread.new', () => {
+    const agent = lastUsedFirst(model.agents[session.hostId] ?? [], loadLastChoices().agentId)[0];
+    if (agent) void startThreadWith(agent.id);
+  }, !bot && (model.agents[session.hostId]?.length ?? 0) > 0);
   useCommand('terminal.new', () => void startTerminal(), canTerminals);
-  useCommand('block.add', () => setAdding({ target: here() }));
-  useCommand('tab.new', openTab, !bot);
+  useCommand('block.add', () => setAdding({ target: here(), anchor: overFocused() }));
+  useCommand('tab.new', () => openTab(), !bot);
   useCommand('tab.rename', () => setRenaming(tab.id), !bot);
   useCommand('tab.close', () => closeTab(tab), !bot);
   useCommand('tab.next', () => stepTab(1), !bot && layout.tabs.length > 1);
   useCommand('tab.previous', () => stepTab(-1), !bot && layout.tabs.length > 1);
-  useCommand('block.splitRight', () => { if (focused) setAdding({ target: { beside: focused.id, side: 'right' } }); }, docked && !phone);
-  useCommand('block.splitDown', () => { if (focused) setAdding({ target: { beside: focused.id, side: 'down' } }); }, docked && !phone);
+  useCommand('block.splitRight', () => { if (focused) setAdding({ target: { beside: focused.id, side: 'right' }, anchor: overFocused() }); }, docked && !phone);
+  useCommand('block.splitDown', () => { if (focused) setAdding({ target: { beside: focused.id, side: 'down' }, anchor: overFocused() }); }, docked && !phone);
   useCommand('block.zoom', () => { if (focused) blockActions.zoom(focused.id); }, Boolean(focused) && !phone);
   useCommand('block.float', () => { if (focused) toggleFloat(focused); }, Boolean(focused) && !phone && !pinned);
   useCommand('block.minimize', () => { if (focused) minimize(focused, true); }, Boolean(found?.frame) && !phone && !pinned);
@@ -543,7 +559,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
       <p className='max-w-xs text-xs text-muted-foreground'>
         A Block shows a thread or a terminal: a new one, or one of this Session's that isn't shown{notShown > 0 ? `, of which there ${notShown === 1 ? 'is 1' : `are ${notShown}`}` : ''}.
       </p>
-      <Button aria-label='New Block' onClick={() => setAdding({ target: here() })}>
+      <Button aria-label='New Block' onClick={(event) => setAdding({ target: here(), anchor: { element: event.currentTarget } })}>
         <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
         New Block
       </Button>
@@ -609,7 +625,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
           </Button>
         </div>
       </div>
-      <Button size='icon' variant='ghost' aria-label='New tab' title='New tab' className='shrink-0' onClick={openTab}>
+      <Button size='icon' variant='ghost' aria-label='New tab' title='New tab' className='shrink-0' onClick={(event) => openTab({ element: event.currentTarget })}>
         <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
       </Button>
     </>
@@ -660,7 +676,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
           );
         })}
       </div>
-      <Button size='icon' variant='ghost' aria-label='New tab' title='New tab' data-tab-drop='new' className='shrink-0' onClick={openTab}>
+      <Button size='icon' variant='ghost' aria-label='New tab' title='New tab' data-tab-drop='new' className='shrink-0' onClick={(event) => openTab({ element: event.currentTarget })}>
         <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
       </Button>
     </>
@@ -708,8 +724,9 @@ export function SessionView({ controller, session, members, leading, phone = fal
         : <TabBlocks tab={tab} focusedId={focused?.id} zoomedId={zoomed?.id} actions={blockActions} title={title} mark={mark} icon={icon} body={body} menu={menu} rename={rename} inTab={inTab} marksFocus={shown.length > 1} empty={empty}
             locked={locked?.id} allows={locked ? (block, target) => botAllows(layout, locked.id, block, target) : undefined} />}
 
-      <NewBlockDialog
+      <NewBlockMenu
         open={adding !== undefined}
+        anchor={adding?.anchor}
         onOpenChange={(open) => { if (!open) setAdding(undefined); }}
         threads={bot ? [] : hidden.filter(({ state }) => state !== 'closed')}
         closed={bot ? [] : hidden.filter(({ state }) => state === 'closed')}
@@ -736,7 +753,6 @@ export function SessionView({ controller, session, members, leading, phone = fal
           setAdding(undefined);
         }}
       />
-      <NewThreadDialog controller={controller} target={newThread?.dialog} onCreated={created} onClose={() => setNewThread(undefined)} />
       <AlertDialog open={confirm !== undefined} onOpenChange={(open) => { if (!open) setConfirm(undefined); }}>
         <AlertDialogContent>
           <AlertDialogHeader>

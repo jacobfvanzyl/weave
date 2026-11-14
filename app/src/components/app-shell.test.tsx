@@ -22,6 +22,24 @@ afterEach(() => setIdiom());
 
 /** A Session's tile in the list: its name, then where it is. */
 const tile = (name: RegExp) => screen.getByRole('button', { name });
+/** New Block, open: a menu (WVE-229). */
+const newBlock = () => screen.findByRole('menu', { name: 'New Block' });
+/**
+ * New Block's submenu `under`, opened from the keyboard. jsdom has no layout, so the pointer
+ * leaving a submenu's trigger for the submenu closes it: the tests open and pick with the keys.
+ */
+const submenu = async (user: ReturnType<typeof userEvent.setup>, under: string) => {
+  const trigger = within(await newBlock()).getByRole('menuitem', { name: under });
+  act(() => trigger.focus());
+  await user.keyboard('{ArrowRight}');
+  return screen.findByRole('menu', { name: under });
+};
+/** Picks what New Block's submenu `under` names. */
+const pick = async (user: ReturnType<typeof userEvent.setup>, under: string, name: RegExp | string) => {
+  const item = within(await submenu(user, under)).getByRole('menuitem', { name });
+  act(() => item.focus());
+  await user.keyboard('{Enter}');
+};
 
 describe('the list of Sessions', () => {
   it('puts a Project’s Sessions together with their Host and branch, and the rest under their Hosts, a Host with none left out', () => {
@@ -251,20 +269,17 @@ describe('a Session nobody arranged', () => {
     // lists them, from the Block's split, as its rail has no New Block of its own.
     expect(within(session).queryByRole('button', { name: /^New Block/ })).not.toBeInTheDocument();
     await user.click(within(alpha).getByRole('button', { name: 'Split Bring Alpha back right' }));
-    const dialog = await screen.findByRole('dialog', { name: 'New Block' });
-    const hidden = within(dialog).getByRole('group', { name: 'Not shown' });
-    const names = within(hidden).getAllByRole('option').map((option) => option.textContent);
+    // What it has that no Block shows is in this directory, its threads, then its terminals.
+    const names = within(await submenu(user, 'From this directory')).getAllByRole('menuitem').map((option) => option.textContent);
     expect(names).toHaveLength(7);
     expect(names.slice(-3)).toEqual([
       expect.stringContaining('cargo test -p weave-tui'), expect.stringContaining('nvim protocol/src/terminals.rs'), expect.stringContaining('app'),
     ]);
-    // Its closed threads wait behind a row with their count.
-    expect(within(dialog).queryByRole('option', { name: /Pencil hover/ })).not.toBeInTheDocument();
-    await user.click(within(dialog).getByRole('option', { name: /^Closed threads/ }));
-    expect(within(within(dialog).getByRole('group', { name: 'Closed' })).getByRole('option', { name: /Pencil hover/ })).toBeInTheDocument();
+    // Its closed threads open again from a menu of their own.
+    expect(within(await submenu(user, 'Reopen thread')).getByRole('menuitem', { name: /Pencil hover/ })).toBeInTheDocument();
 
     // One picked docks beside the Block with the keyboard, and takes it.
-    await user.click(within(within(dialog).getByRole('group', { name: 'Not shown' })).getByRole('option', { name: /Nightly dependency check/u }));
+    await pick(user, 'From this directory', /Nightly dependency check/u);
     const nightly = await within(session).findByRole('group', { name: 'Block, Nightly dependency check' });
     expect(within(session).getAllByRole('group', { name: /^Block, /u })).toHaveLength(2);
     expect(within(session).getAllByRole('separator', { name: 'Resize Blocks' })).toHaveLength(1);
@@ -425,8 +440,7 @@ describe('a Session someone arranged', () => {
       .getAllByRole('button').map((button) => button.title);
     expect(hints).toEqual(['Split Right', 'Split Down', 'Float', 'Zoom', 'More', 'Close']);
     await user.click(within(session).getByRole('button', { name: 'Split Bring Alpha back right' }));
-    const dialog = await screen.findByRole('dialog', { name: 'New Block' });
-    await user.click(within(dialog).getByRole('option', { name: /Nightly dependency check/ }));
+    await pick(user, 'From this directory', /Nightly dependency check/);
     const nightly = await within(session).findByRole('group', { name: 'Block, Nightly dependency check' });
     expect(within(session).getAllByRole('separator', { name: 'Resize Blocks' })).toHaveLength(3);
     // It has the keyboard, which its edge shows while there are others to tell it from.
@@ -463,10 +477,12 @@ describe('a Session someone arranged', () => {
     await waitFor(() => expect(within(session).queryByRole('group', { name: 'Floating, Steer handling in the TUI' })).not.toBeInTheDocument());
     expect(within(session).queryByRole('group', { name: 'Minimized Blocks' })).not.toBeInTheDocument();
     await user.click(within(session).getByRole('button', { name: 'Split Bring Alpha back right' }));
-    const dialog = await screen.findByRole('dialog', { name: 'New Block' });
-    await user.click(within(dialog).getByRole('option', { name: /^Closed threads/ }));
-    expect(within(within(dialog).getByRole('group', { name: 'Closed' })).getByRole('option', { name: /Steer handling in the TUI/ })).toBeInTheDocument();
+    expect(within(await submenu(user, 'Reopen thread')).getByRole('menuitem', { name: /Steer handling in the TUI/ })).toBeInTheDocument();
+    // Escape closes the submenu, then the menu.
     await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('menu', { name: 'Reopen thread' })).not.toBeInTheDocument());
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
 
     // One whose turn runs asks first.
     await user.click(within(session).getByRole('button', { name: 'Close Bring Alpha back' }));
@@ -481,7 +497,7 @@ describe('a Session someone arranged', () => {
     await user.click(within(ending).getByRole('button', { name: 'End terminal' }));
     await waitFor(() => expect(within(session).queryByRole('group', { name: 'Block, cargo test -p weave-tui' })).not.toBeInTheDocument());
     await user.click(within(session).getByRole('button', { name: 'Split Bring Alpha back right' }));
-    expect(within(await screen.findByRole('dialog', { name: 'New Block' })).queryByRole('option', { name: /^cargo test/ })).not.toBeInTheDocument();
+    expect(within(await submenu(user, 'From this directory')).queryByRole('menuitem', { name: /^cargo test/ })).not.toBeInTheDocument();
   });
 
   it('renames a thread in its Block’s rail, and a terminal nowhere: what’s in it names it', async () => {
@@ -598,12 +614,12 @@ describe('a Session someone arranged', () => {
 
     // A new tab is made by its first Block: + asks for one, and put away it makes nothing.
     await user.click(within(session).getByRole('button', { name: 'New tab' }));
-    const adding = await screen.findByRole('dialog', { name: 'New Block' });
+    const adding = await newBlock();
     await user.keyboard('{Escape}');
     await waitFor(() => expect(adding).not.toBeInTheDocument());
     expect(within(tabs).getAllByRole('tab').map((tab) => tab.getAttribute('aria-label'))).toEqual(['Work', 'Notes']);
     await user.click(within(session).getByRole('button', { name: 'New tab' }));
-    await user.click(within(await screen.findByRole('dialog', { name: 'New Block' })).getByRole('option', { name: /Nightly dependency check/u }));
+    await pick(user, 'From this directory', /Nightly dependency check/u);
     expect(await within(tabs).findByRole('tab', { name: 'Nightly dependency check' })).toHaveAttribute('aria-selected', 'true');
     expect(within(tabs).getAllByRole('tab').map((tab) => tab.getAttribute('aria-label'))).toEqual(['Work', 'Nightly dependency check', 'Notes']);
     expect(within(session).queryByText('Nothing in this tab')).not.toBeInTheDocument();
@@ -660,14 +676,14 @@ describe('commands', () => {
     expect(within(palette).getAllByRole('option').map((option) => option.textContent)).toEqual(['TabNew TabCtrl+T', 'BlockMove to a New Tab']);
     await user.keyboard('{Enter}');
     // New Tab asks for the tab's first Block.
-    await user.click(within(await screen.findByRole('dialog', { name: 'New Block' })).getByRole('option', { name: /Nightly dependency check/u }));
+    await pick(user, 'From this directory', /Nightly dependency check/u);
     expect(await within(tabs).findByRole('tab', { name: 'Nightly dependency check' })).toHaveAttribute('aria-selected', 'true');
 
     fireEvent.keyDown(window, { code: 'BracketLeft', ctrlKey: true, shiftKey: true });
     await waitFor(() => expect(within(tabs).getByRole('tab', { name: 'Update the Host protocol spec' })).toHaveAttribute('aria-selected', 'true'));
     // Typing isn't a command.
     fireEvent.keyDown(window, { code: 'KeyT' });
-    expect(screen.queryByRole('dialog', { name: 'New Block' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menu', { name: 'New Block' })).not.toBeInTheDocument();
     expect(within(tabs).getAllByRole('tab')).toHaveLength(3);
   });
 });
@@ -973,40 +989,47 @@ describe('New Block (WVE-220)', () => {
     return screen.getByRole('region', { name: 'Session weave' });
   };
 
-  it('starts a thread with an agent in one step, the agent used last first', async () => {
+  it('starts a thread with an agent from its submenu, the agent used last first', async () => {
     const user = userEvent.setup();
     const session = openSession();
     await user.click(within(session).getByRole('button', { name: 'Split Bring Alpha back right' }));
-    const dialog = await screen.findByRole('dialog', { name: 'New Block' });
-    const fresh = () => within(within(dialog).getByRole('group', { name: 'New' })).getAllByRole('option').map((option) => option.textContent);
-    expect(fresh()).toEqual(['New thread with Claude', 'New thread with Codex', 'New thread with Gemini', 'New terminal']);
-    await user.click(within(dialog).getByRole('option', { name: 'New thread with Codex' }));
-    // No second dialog: the thread is in a Block, with the keyboard.
+    // No search, nothing said of what's not there: what's new, then what there is.
+    const menu = await newBlock();
+    expect(within(menu).queryByRole('combobox')).not.toBeInTheDocument();
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['New thread', 'New terminal', 'Reopen thread', 'From this directory']);
+    const agents = await submenu(user, 'New thread');
+    expect(within(agents).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Claude', 'Codex', 'Gemini']);
+    await user.click(within(agents).getByRole('menuitem', { name: 'Codex' }));
+    // Nothing more to ask: the thread is in a Block, with the keyboard.
     await waitFor(() => expect(within(session).getByRole('group', { name: 'Block, New thread' })).toHaveAttribute('data-focused', 'true'));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 
     await user.click(within(session).getByRole('button', { name: 'Split Bring Alpha back right' }));
-    const again = await screen.findByRole('dialog', { name: 'New Block' });
-    expect(within(within(again).getByRole('group', { name: 'New' })).getAllByRole('option')[0]).toHaveTextContent('New thread with Codex');
+    expect(within(await submenu(user, 'New thread')).getAllByRole('menuitem')[0]).toHaveTextContent('Codex');
   });
 
-  it('is driven from the keyboard: typing finds what’s folded away too, and Return shows it', async () => {
+  it('is driven from the keyboard: the arrows open a submenu, and Return shows what’s picked', async () => {
+    const user = userEvent.setup();
+    const session = openSession();
+    fireEvent.keyDown(window, { code: 'KeyO', ctrlKey: true });
+    await newBlock();
+    await user.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowRight}');
+    const directory = await screen.findByRole('menu', { name: 'From this directory' });
+    await waitFor(() => expect(within(directory).getAllByRole('menuitem')[0]).toHaveFocus());
+    expect(within(directory).getAllByRole('menuitem')[0]).toHaveTextContent('Nightly dependency check');
+    await user.keyboard('{Enter}');
+    expect(await within(session).findByRole('group', { name: 'Block, Nightly dependency check' })).toHaveAttribute('data-focused', 'true');
+  });
+
+  it('starts a thread with the agent used last from ⌘N, without asking', async () => {
     const user = userEvent.setup();
     const session = openSession();
     await user.click(within(session).getByRole('button', { name: 'Split Bring Alpha back right' }));
-    const dialog = await screen.findByRole('dialog', { name: 'New Block' });
-    const find = within(dialog).getByRole('combobox', { name: 'Find something to show' });
-    expect(find).toHaveFocus();
-    // The closed threads are behind one row until asked for.
-    expect(within(dialog).getByRole('option', { name: /^Closed threads/ })).toHaveTextContent('Closed threads1');
-    expect(within(dialog).queryByRole('group', { name: 'Closed' })).toBeInTheDocument();
-    expect(within(dialog).queryByRole('option', { name: /Pencil hover/ })).not.toBeInTheDocument();
-    await user.type(find, 'pencil');
-    expect(within(dialog).getAllByRole('option').map((option) => option.textContent)).toEqual([expect.stringContaining('Pencil hover')]);
-    await user.clear(find);
-    await user.type(find, 'nightly');
-    expect(within(dialog).getAllByRole('option')).toHaveLength(1);
-    await user.keyboard('{Enter}');
-    expect(await within(session).findByRole('group', { name: 'Block, Nightly dependency check' })).toHaveAttribute('data-focused', 'true');
+    await pick(user, 'New thread', 'Gemini');
+    await waitFor(() => expect(within(session).getByRole('group', { name: 'Block, New thread' })).toBeInTheDocument());
+    fireEvent.keyDown(window, { code: 'KeyN', ctrlKey: true });
+    await waitFor(() => expect(within(session).getAllByRole('group', { name: 'Block, New thread' })).toHaveLength(2));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

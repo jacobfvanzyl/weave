@@ -3,7 +3,7 @@
 // it that show under the pointer or when tapped; those floating over them; and, at the bottom right,
 // the names of the floating ones put away. A docked Block is dragged by its rail to
 // another's edge or middle, or to a tab.
-import { Fragment, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import {
   ArrowExpand01Icon,
@@ -31,7 +31,8 @@ export type BlockActions = {
   close(block: SessionBlock): void;
   zoom(blockId: string): void;
   /** Opens what docks on `side` of the Block. */
-  split(blockId: string, side: Side): void;
+  /** Opens New Block for beside it, at the button that asked. */
+  split(blockId: string, side: Side, anchor?: Element): void;
   /** Floats a docked Block over its tab, or docks a floating one. */
   float(block: SessionBlock): void;
   /** Puts a floating Block away as its name, or brings it back. */
@@ -205,7 +206,7 @@ function RailButton({ label, hint, icon, pressed, className, onClick }: {
   icon: IconSvgElement;
   pressed?: boolean;
   className?: string;
-  onClick(): void;
+  onClick(event: MouseEvent<HTMLButtonElement>): void;
 }) {
   return (
     <Button size='icon-sm' variant='ghost' aria-label={label} title={hint} aria-pressed={pressed} className={className} onClick={onClick}>
@@ -302,8 +303,8 @@ export function BlockRail({ block, among, floating = false, drag, onHandle, ...p
   const icon = among ? undefined : 'rounded-full';
   const buttons = (
     <>
-      {arrange && !floating && <RailButton label={`Split ${name} right`} hint='Split Right' icon={LayoutTwoColumnIcon} className={icon} onClick={() => actions.split(block.id, 'right')} />}
-      {arrange && !floating && <RailButton label={`Split ${name} down`} hint='Split Down' icon={LayoutTwoRowIcon} className={icon} onClick={() => actions.split(block.id, 'down')} />}
+      {arrange && !floating && <RailButton label={`Split ${name} right`} hint='Split Right' icon={LayoutTwoColumnIcon} className={icon} onClick={(event) => actions.split(block.id, 'right', event.currentTarget)} />}
+      {arrange && !floating && <RailButton label={`Split ${name} down`} hint='Split Down' icon={LayoutTwoRowIcon} className={icon} onClick={(event) => actions.split(block.id, 'down', event.currentTarget)} />}
       {arrange && !pinned && (
         <RailButton label={floating ? `Dock ${name}` : `Float ${name}`} hint={floating ? 'Dock' : 'Float'}
           icon={floating ? PictureInPictureExitIcon : PictureInPictureOnIcon} className={icon} onClick={() => actions.float(block)} />

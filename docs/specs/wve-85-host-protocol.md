@@ -1616,7 +1616,7 @@ tab as a stack. A client without a Block's type shows the type and props as text
 text floor). A Block points at what it shows, and the Host knows nothing of that: a client that
 closes one closes its thread (`thread/close`), which can be shown again, or ends its terminal
 (`terminals/close`), which is one to one with its Block (ADR 0031, as WVE-203 settled it). A
-thread or terminal no Block shows runs on, and clients list it as not shown.
+thread or terminal no Block shows runs on, and clients offer it to be shown again.
 
 ## Terminals
 
