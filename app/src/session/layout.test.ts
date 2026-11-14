@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { SessionBlock, SessionLayout, SessionNode, SessionTab } from '@/host/protocol';
 import {
   LAYOUT_VERSION,
-  addTab,
   blockBeside,
   blockRects,
   docked,
@@ -23,6 +22,7 @@ import {
   shares,
   tabBlocks,
   tidy,
+  withoutEmptyTabs,
 } from './layout';
 
 const block = (id: string, type = 'weave.thread'): SessionBlock => ({ id, type, props: { threadId: id } });
@@ -135,7 +135,9 @@ describe('placing a Block', () => {
     const two = layout({ id: 't', root: leaf('a') }, { id: 'u', root: leaf('b') });
     // The tab it leaves empty goes, but not the one it's bound for.
     expect(shapes(placeBlock(two, block('a'), { beside: 'b', side: 'left' }))).toBe('u:(a | b)');
-    expect(shapes(placeBlock(two, block('a'), { newTab: { id: 'v' } }))).toBe('u:b  v:a');
+    // Alone in its tab, a tab of its own is where it is.
+    expect(placeBlock(two, block('a'), { newTab: { id: 'v' } })).toBe(two);
+    expect(shapes(placeBlock(start, block('a'), { newTab: { id: 'v' } }))).toBe('t:b  v:a');
     expect(shapes(placeBlock(two, block('a'), { tab: 'u' }))).toBe('u:(b | a)');
   });
 
@@ -218,12 +220,22 @@ describe('removing', () => {
   });
 });
 
+describe('empty tabs', () => {
+  it('leave a layout read with them, down to the first when nothing has a Block', () => {
+    const mixed = layout({ id: 't' }, { id: 'u', root: leaf('a') }, { id: 'v' }, { id: 'w', floating: [{ block: block('f'), frame: FRAME }] });
+    expect(shapes(withoutEmptyTabs(mixed))).toBe('u:a  w:∅+{f}');
+    expect(shapes(withoutEmptyTabs(layout({ id: 't' }, { id: 'u' })))).toBe('t:∅');
+    const full = layout({ id: 't', root: leaf('a') });
+    expect(withoutEmptyTabs(full)).toBe(full);
+    const one = layout({ id: 't' });
+    expect(withoutEmptyTabs(one)).toBe(one);
+  });
+});
+
 describe('tabs and splits', () => {
   const start = layout({ id: 't', root: row(leaf('a'), column(leaf('b'), leaf('c'))) }, { id: 'u' });
 
-  it('adds, names and orders tabs', () => {
-    expect(shapes(addTab(start, { id: 'v' }, 't'))).toBe('t:(a | (b / c))  v:∅  u:∅');
-    expect(addTab(start, { id: 't' })).toBe(start);
+  it('names and orders tabs', () => {
     expect(renameTab(start, 'u', '  Notes ').tabs[1].title).toBe('Notes');
     expect(renameTab(renameTab(start, 'u', 'Notes'), 'u', ' ').tabs[1].title).toBeUndefined();
     expect(moveTab(start, 'u', 0).tabs.map(({ id }) => id)).toEqual(['u', 't']);

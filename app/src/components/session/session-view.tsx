@@ -41,7 +41,6 @@ import {
   FLOATING_FRAME,
   type Side,
   type Target,
-  addTab,
   blockBeside,
   findBlock,
   frameBlock,
@@ -103,9 +102,11 @@ export type SessionViewProps = {
   bot?: BotSummary;
   /** Shows the Bot's page, from its name atop the Session. */
   onOpenBot?(): void;
+  /** The Session ended, with its last Block (WVE-228). */
+  onEnded?(): void;
 };
 
-export function SessionView({ controller, session, members, leading, phone = false, reveal, onRevealed, onOpenThread, onCreated, onBack, bot, onOpenBot }: SessionViewProps) {
+export function SessionView({ controller, session, members, leading, phone = false, reveal, onRevealed, onOpenThread, onCreated, onBack, bot, onOpenBot, onEnded }: SessionViewProps) {
   const { model, actions } = controller;
   const { layout } = session;
   const [view, changeView] = useSessionView(session.key);
@@ -177,7 +178,12 @@ export function SessionView({ controller, session, members, leading, phone = fal
       const id = terminalOf(block);
       return id !== undefined && !live.has(id);
     };
-    if (layoutBlocks(layout).some(gone)) update((current) => prune(current, (block) => !gone(block)));
+    const went = layoutBlocks(layout).filter(gone);
+    if (went.length === 0) return;
+    // The last of them takes the Session too, as `exit` in a terminal's last pane does.
+    const ends = last(went);
+    update((current) => prune(current, (block) => !gone(block)));
+    if (ends) void endSession();
   }, [liveTerminals, layout]);
 
   // The Session's own are those its Host lists; a Host from before it kept them counts everything
@@ -212,12 +218,39 @@ export function SessionView({ controller, session, members, leading, phone = fal
     if (strangers.threads.length + strangers.terminals.length > 0) actions.addToSession?.(session.key, strangers);
   }, [session.key, strangers.threads.join('\n'), strangers.terminals.join('\n')]);
 
+  // A Session ends with its last Block (WVE-228), where its Host ends Sessions and it holds
+  // nothing a Block doesn't show: what's not shown keeps it, to be shown or ended by hand. Not a
+  // Bot's, and not one with no Block yet, as one being started. Only the device that took the
+  // last Block out ends it.
+  const canEnd = !bot && Boolean(actions.endSession) && host?.status === 'connected' && Boolean(host.canEndSessions)
+    && Boolean(model.known?.some((known) => known.hostId === session.hostId && known.directory === session.directory));
+  /** Whether the layout without `blocks` leaves the Session nothing, so that it ends. */
+  const last = (blocks: SessionBlock[]) => {
+    const all = layoutBlocks(layout);
+    return canEnd && notShown === 0 && all.length > 0 && all.every(({ id }) => blocks.some((block) => block.id === id));
+  };
+  /** Ends the Session, once what its last Blocks showed has closed: its Host refuses while any of it is busy. */
+  const endSession = async (closing: Promise<unknown>[] = []) => {
+    await Promise.allSettled(closing);
+    try {
+      await actions.endSession?.(session.key);
+      onEnded?.();
+    } catch (cause) {
+      setError(describe(cause));
+    }
+  };
+  const remove = (block: SessionBlock) => {
+    const ends = last([block]);
+    update((current) => removeBlock(current, block.id));
+    if (ends) void endSession();
+  };
+
   const context = (block: SessionBlock): BlockContext => ({
     controller,
     session,
     focused: block.id === focused?.id,
     onOpenThread,
-    onRemove: () => update((current) => removeBlock(current, block.id)),
+    onRemove: () => remove(block),
     ...(phone ? { onSwipeBack: onBack } : {}),
   });
   const title = (block: SessionBlock) => blockType(block.type).title(block, { controller, session });
@@ -242,6 +275,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
     return { beside: focused.id, side: roomierSide(tab, focused.id, rect && rect.height > 0 && rect.width > 0 ? rect.width / rect.height : undefined) };
   };
 
+  const sessionName = directoryName(session.directory);
   const [error, setError] = useState<string>();
   const [adding, setAdding] = useState<{ target: Target }>();
   const [newThread, setNewThread] = useState<{ target: Target; dialog: NewThreadTarget }>();
@@ -341,46 +375,55 @@ export function SessionView({ controller, session, members, leading, phone = fal
     };
   };
   /** Closes what the Blocks show: a thread closes and can be opened again, a terminal ends. */
-  const end = (blocks: SessionBlock[]) => {
+  const end = (blocks: SessionBlock[]): Promise<unknown>[] => {
     setError(undefined);
+    const closing: Promise<unknown>[] = [];
     for (const block of blocks) {
       const { thread, terminal } = ending(block);
-      if (thread) void Promise.resolve(actions.closeThread(thread.key)).catch((cause: unknown) => setError(describe(cause)));
-      if (terminal) void actions.closeTerminal(terminal.id).catch((cause: unknown) => setError(describe(cause)));
+      if (thread) closing.push(Promise.resolve(actions.closeThread(thread.key)).catch((cause: unknown) => setError(describe(cause))));
+      if (terminal) closing.push(actions.closeTerminal(terminal.id).catch((cause: unknown) => setError(describe(cause))));
     }
+    return closing;
   };
   const closeBlock = (block: SessionBlock) => {
     if (isLocked(block)) return;
+    const ends = last([block]);
     const run = () => {
-      end([block]);
+      const closing = end([block]);
       update((current) => removeBlock(current, block.id));
+      if (ends) void endSession(closing);
     };
     const { thread, terminal, busy } = ending(block);
+    // The last Block takes the Session with it without asking, unless that cuts something off.
     if (!busy) {
       run();
       return;
     }
+    const too = ends ? ` It's the last Block in ${sessionName}, so the Session ends too.` : '';
     setConfirm(thread
       ? {
           title: `Close ${title(block)}?`,
-          description: thread.activity === 'running'
+          description: `${thread.activity === 'running'
             ? 'Its turn is still running, and closing the thread ends it. The thread stays in the list of closed threads, and opens again from there.'
-            : 'It is waiting on you, and closing the thread ends its turn. The thread stays in the list of closed threads, and opens again from there.',
+            : 'It is waiting on you, and closing the thread ends its turn. The thread stays in the list of closed threads, and opens again from there.'}${too}`,
           action: 'Close thread',
           run,
         }
       : {
           title: `End ${title(block)}?`,
-          description: `${terminal?.command?.command || 'A command'} is still running in it, and ending the terminal stops it. A terminal that ends is gone.`,
+          description: `${terminal?.command?.command || 'A command'} is still running in it, and ending the terminal stops it. A terminal that ends is gone.${too}`,
           action: 'End terminal',
           run,
         });
   };
   const closeTab = (closing: SessionTab) => {
     const blocks = tabBlocks(closing);
+    // The Session's last Blocks, or its only tab with none and nothing else in the Session: it ends too.
+    const ends = blocks.length > 0 ? last(blocks) : canEnd && notShown === 0 && layout.tabs.length === 1;
     const run = () => {
-      end(blocks);
+      const closed = end(blocks);
       update((current) => removeTab(current, closing.id));
+      if (ends) void endSession(closed);
     };
     // An empty tab has nothing to lose.
     if (blocks.length === 0) {
@@ -396,8 +439,8 @@ export function SessionView({ controller, session, members, leading, phone = fal
     setConfirm({
       title: `Close ${tabName(closing)}?`,
       description: parts.length > 0
-        ? `Closing the tab ${parts.join(' and ')}${ended.some(({ busy }) => busy) ? ', and something in it is still running' : ''}. Threads open again from the list of closed threads; terminals that end are gone.`
-        : `Closing the tab takes its ${blocks.length === 1 ? 'Block' : `${blocks.length} Blocks`} out of the layout, on every device.`,
+        ? `Closing the tab ${parts.join(' and ')}${ended.some(({ busy }) => busy) ? ', and something in it is still running' : ''}. Threads open again from the list of closed threads; terminals that end are gone.${ends ? ` It's the last tab in ${sessionName}, so the Session ends too.` : ''}`
+        : `Closing the tab takes its ${blocks.length === 1 ? 'Block' : `${blocks.length} Blocks`} out of the layout, on every device${ends ? `, and ends the Session ${sessionName}` : ''}.`,
       action: 'Close tab',
       run,
     });
@@ -414,11 +457,9 @@ export function SessionView({ controller, session, members, leading, phone = fal
     const next = layout.tabs[(at + by + layout.tabs.length) % layout.tabs.length];
     if (next) changeView((current) => showTab(current, next.id));
   };
-  const openTab = () => {
-    const made = newTab();
-    update((current) => addTab(current, made, tab.id));
-    changeView((current) => showTab(current, made.id));
-  };
+  // A new tab is made by its first Block (WVE-228): New Block, aimed at one, and nothing if it's
+  // put away. From a tab with nothing in it, that tab is the one to fill.
+  const openTab = () => setAdding({ target: tabBlocks(tab).length === 0 ? { tab: tab.id } : { newTab: newTab(), after: tab.id } });
   const toggleFloat = (block: SessionBlock) => {
     const found = findBlock(layout, block.id);
     if (!found || isLocked(block)) return;
@@ -482,7 +523,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
   useCommand('block.zoom', () => { if (focused) blockActions.zoom(focused.id); }, Boolean(focused) && !phone);
   useCommand('block.float', () => { if (focused) toggleFloat(focused); }, Boolean(focused) && !phone && !pinned);
   useCommand('block.minimize', () => { if (focused) minimize(focused, true); }, Boolean(found?.frame) && !phone && !pinned);
-  useCommand('block.toNewTab', () => { if (focused) toNewTab(focused); }, Boolean(focused) && !bot);
+  useCommand('block.toNewTab', () => { if (focused) toNewTab(focused); }, Boolean(focused) && !bot && tabBlocks(tab).length > 1);
   useCommand('block.close', () => { if (focused) closeBlock(focused); }, Boolean(focused) && !pinned);
   useCommand('block.focusLeft', () => focusBeside('left'), docked && !phone);
   useCommand('block.focusRight', () => focusBeside('right'), docked && !phone);
@@ -625,7 +666,6 @@ export function SessionView({ controller, session, members, leading, phone = fal
     </>
   );
   const swipe = useSwipe(stepBlock);
-  const sessionName = directoryName(session.directory);
   const inTab = tabBlocks(tab).length;
 
   return (

@@ -142,9 +142,11 @@ type ShellProps = {
   onNewSession(target?: NewSessionTarget): void;
   onAddProject(target?: AddProjectTarget): void;
   onEndSession(session: SessionSummary): void;
+  /** A Session ended with its last Block (WVE-228): it leaves the screen, unless another has taken it. */
+  onSessionEnded(key: string): void;
 };
 
-function PhoneShell({ controller, sessions, session, selected, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onAddProject, onEndSession }: ShellProps) {
+function PhoneShell({ controller, sessions, session, selected, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onAddProject, onEndSession, onSessionEnded }: ShellProps) {
   const back = () => onOpenSession(undefined);
   const leading = <BackButton count={waiting} onBack={back} />;
   if (!selected) {
@@ -160,11 +162,11 @@ function PhoneShell({ controller, sessions, session, selected, bot, botSession, 
   if (!session) return <NoSession controller={controller} selected={selected} known={sessions.some(({ key }) => key === selected)} leading={leading} />;
   return (
     <SessionView key={session.key} controller={controller} session={session} members={membersOf(sessions, session.key)} phone leading={leading}
-      reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} onBack={back} />
+      reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} onBack={back} onEnded={() => onSessionEnded(session.key)} />
   );
 }
 
-function SplitShell({ controller, sessions, session, selected, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onAddProject, onEndSession }: ShellProps) {
+function SplitShell({ controller, sessions, session, selected, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onAddProject, onEndSession, onSessionEnded }: ShellProps) {
   const { setOpenMobile } = useSidebar();
   // The toggle is in the list's rail while the list shows, and in the Session's while it doesn't.
   const hidden = useSidebarHidden();
@@ -188,7 +190,7 @@ function SplitShell({ controller, sessions, session, selected, bot, botSession, 
               onOpenBot={onOpenBotPage} onOpenThread={onOpenThread} onCreated={onCreated} />
           : session
           ? <SessionView key={session.key} controller={controller} session={session} members={membersOf(sessions, session.key)} leading={leading}
-              reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} />
+              reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} onEnded={() => onSessionEnded(session.key)} />
           : <NoSession controller={controller} selected={selected} known={sessions.some(({ key }) => key === selected)} leading={leading} />}
       </SidebarInset>
     </>
@@ -358,6 +360,7 @@ export function AppShell({ controller, pairingOffer }: {
     onNewSession: (target) => setNewSession(target ?? {}),
     onAddProject: (target) => setAddProject(target ?? {}),
     onEndSession: setEnding,
+    onSessionEnded: (key) => setSelected((current) => current === key ? undefined : current),
   };
   return (
     <ResizableSidebarProvider className='h-(--app-height) min-h-0' cookieName={false} data-layout={phone ? 'phone' : 'split'}>

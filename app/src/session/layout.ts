@@ -158,6 +158,16 @@ export function tidy(layout: SessionLayout | null | undefined): SessionLayout {
   return { version: LAYOUT_VERSION, tabs: tabs.length > 0 ? tabs : [newTab()] };
 }
 
+/**
+ * The layout without its empty tabs (WVE-228): nothing here leaves one but the last, so one
+ * among others is from before that, and shows nowhere. With no Block at all, its first tab alone.
+ */
+export function withoutEmptyTabs(layout: SessionLayout): SessionLayout {
+  const full = layout.tabs.filter((tab) => tab.root || tab.floating?.length);
+  if (full.length === layout.tabs.length || layout.tabs.length <= 1) return layout;
+  return { ...layout, tabs: full.length > 0 ? full : layout.tabs.slice(0, 1) };
+}
+
 /** A tab's docked Blocks, in the order they read: left to right, top to bottom. */
 export function docked(tab: SessionTab): { path: Path; block: SessionBlock }[] {
   const found: { path: Path; block: SessionBlock }[] = [];
@@ -337,6 +347,8 @@ export function placeBlock(layout: SessionLayout, block: SessionBlock, target: T
   const tabId = 'tab' in target ? target.tab : 'edge' in target ? target.edge : 'floating' in target ? target.floating : undefined;
   if (tabId !== undefined && !findTab(layout, tabId)) return layout;
   if ('newTab' in target && findTab(layout, target.newTab.id)) return layout;
+  // Alone in its tab already: a tab of its own is where it is.
+  if ('newTab' in target && from && tabBlocks(from.tab).length === 1) return layout;
   // Alone among the Blocks of the tab it's bound for: where it already is, unless it's to float there.
   if (from?.path && tabId === from.tab.id && tabBlocks(from.tab).length === 1 && !('floating' in target)) return layout;
   // Docked in a tab it's docked in already: where it is.
@@ -394,15 +406,6 @@ export function resizeSplit(layout: SessionLayout, tabId: string, path: Path, si
   const total = sizes.reduce((sum, size) => sum + size, 0);
   const root = replaceAt(tab.root as SessionNode, path, (split) => ({ ...split, sizes: sizes.map((size) => round(size / total)) }));
   return withTab(layout, tabId, (current) => withRoot(current, root));
-}
-
-/** The layout with `tab`, empty, after the tab `after`, or last. */
-export function addTab(layout: SessionLayout, tab: SessionTab, after?: string): SessionLayout {
-  if (findTab(layout, tab.id)) return layout;
-  const at = after ? layout.tabs.findIndex(({ id }) => id === after) : -1;
-  const tabs = [...layout.tabs];
-  tabs.splice(at >= 0 ? at + 1 : tabs.length, 0, { id: tab.id, ...(tab.title ? { title: tab.title } : {}) });
-  return { ...layout, tabs };
 }
 
 /** The layout without the tab `id` and the Blocks in it; the only tab is emptied instead. */

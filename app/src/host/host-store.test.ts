@@ -949,12 +949,12 @@ describe('HostStore Sessions', () => {
    * A Host that keeps Sessions and what's in them: it saves what's set under the next revision,
    * unless told to conflict, and counts what's added as the Session's.
    */
-  const sessionsHost = (kept: { revision: number; layout?: unknown; threads?: string[] } = { revision: 0 }) => {
+  const sessionsHost = (kept: { revision: number; layout?: unknown; threads?: string[]; ended?: boolean } = { revision: 0 }) => {
     const conflicts = { next: 0 };
     const host = scriptedHost(() => [], {
       'host/hello': hello([HOST_PROTOCOL.features.sessions, HOST_PROTOCOL.features.sessionsAdd]),
       'sessions/watch': () => ({ result: { sessions: kept.revision > 0 || kept.layout ? [{ directory: '/work', revision: kept.revision, layout: kept.layout ?? null, createdAt: 1, threads: kept.threads ?? [], terminals: [] }] : [] } }),
-      'sessions/get': () => ({ result: { session: { directory: '/work', revision: kept.revision, layout: kept.layout ?? null, createdAt: 1, threads: kept.threads ?? [] } } }),
+      'sessions/get': () => kept.ended ? { error: { code: HOST_PROTOCOL.errors.noSession, message: 'no Session', data: 'there is no Session at /work' } } : ({ result: { session: { directory: '/work', revision: kept.revision, layout: kept.layout ?? null, createdAt: 1, threads: kept.threads ?? [] } } }),
       'sessions/add': (params) => {
         const { threads = [] } = params as { threads?: string[] };
         if (threads.includes('gone')) return { error: { code: -32602, message: 'Invalid params', data: "the thread gone isn't in /work" } };
@@ -1043,6 +1043,29 @@ describe('HostStore Sessions', () => {
     // The Session ends, as with its worktree: nothing of it is left.
     host.notify('sessions/ended', { directory: '/work' });
     await settle();
+    expect(store.snapshot().known).toEqual([]);
+    expect(blocks(store)).toEqual([]);
+    store.stop();
+  });
+
+  it("drops a change to a Session another device ended first, and shows no empty tab among others", async () => {
+    const layout = { version: 2, tabs: [{ id: 'e' }, { id: 't', root: { kind: 'block', ...threadBlock(THREAD, 'b-1') } }] };
+    const { host, kept } = sessionsHost({ revision: 3, layout, threads: [THREAD] });
+    const store = storeFor(host.socket);
+    await store.start();
+    store.actions.selectSession?.(KEY);
+    await settle();
+    // A tab left empty before tabs were made by their first Block (WVE-228).
+    expect(store.snapshot().session?.layout.tabs.map(({ id }) => id)).toEqual(['t']);
+
+    // Its last Block went on another device, which ended it; this one hasn't heard when it saves.
+    kept.ended = true;
+    kept.revision = 0;
+    kept.layout = undefined;
+    store.actions.updateLayout?.(KEY, (current) => placeBlock(current, threadBlock('s-2', 'b-2'), { tab: 't' }));
+    await settle();
+    // Not made again from this device's change.
+    expect(host.params['sessions/set']).toHaveLength(1);
     expect(store.snapshot().known).toEqual([]);
     expect(blocks(store)).toEqual([]);
     store.stop();

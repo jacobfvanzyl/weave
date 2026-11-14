@@ -7,7 +7,7 @@
 // (`sessions/add`): the threads and terminals Blocks were given, not all its directory holds.
 import type { KnownSession, LayoutChange } from '@/app/app-controller';
 import { sessionKey } from '@/app/app-controller';
-import { emptyLayout, tidy } from '@/session/layout';
+import { emptyLayout, tidy, withoutEmptyTabs } from '@/session/layout';
 import { CONNECTION_CLOSED, type HostConnection, HostError } from './connection';
 import { HOST_PROTOCOL, type HostSession, type SessionLayout } from './protocol';
 
@@ -192,7 +192,7 @@ export class HostSessions {
     const moved = !kept.session || session.revision !== kept.session.revision;
     kept.session = session;
     if (!moved) return;
-    kept.saved = session.layout ? tidy(session.layout) : undefined;
+    kept.saved = session.layout ? withoutEmptyTabs(tidy(session.layout)) : undefined;
     if (kept.saved) kept.draft = undefined;
     kept.shown = undefined;
   }
@@ -249,7 +249,13 @@ export class HostSessions {
               this.#took(kept.hostId, session);
             } catch (inner) {
               if (inner instanceof HostError && inner.code === CONNECTION_CLOSED) return;
-              // Ended meanwhile: there's no revision to build on but the first.
+              if (kept.session && inner instanceof HostError && inner.code === HOST_PROTOCOL.errors.noSession) {
+                // Ended meanwhile, as when its last Block went on another device (WVE-228): the
+                // changes go with it, since saving them would make it again.
+                this.#end(sessionKey(kept.hostId, kept.directory), kept);
+                return;
+              }
+              // No revision to build on but the first.
               kept.session = undefined;
               kept.saved = undefined;
               kept.shown = undefined;
