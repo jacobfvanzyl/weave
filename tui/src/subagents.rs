@@ -21,8 +21,8 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use unicode_segmentation::UnicodeSegmentation;
 use weave_acp_core::MaybeUndefined;
+use weave_acp_core::schema::IdleStopReason;
 use weave_acp_core::schema::StateUpdate;
-use weave_acp_core::schema::StopReason;
 use weave_acp_core::schema::SubagentUpdate;
 
 use crate::chat::ChatWidget;
@@ -165,16 +165,19 @@ impl Event {
             StateUpdate::Running(_) if was_idle => Some(Self::Resumed),
             StateUpdate::Idle(_) if was_idle => None,
             StateUpdate::Idle(idle) => Some(match &idle.stop_reason {
-                Some(StopReason::EndTurn) => Self::Completed { reply },
-                Some(StopReason::Cancelled) => Self::Interrupted,
-                Some(StopReason::MaxTokens) => Self::Stopped {
+                Some(IdleStopReason::EndTurn) => Self::Completed { reply },
+                Some(IdleStopReason::Cancelled) => Self::Interrupted,
+                Some(IdleStopReason::MaxTokens) => Self::Stopped {
                     reason: "it reached its token limit".to_owned(),
                 },
-                Some(StopReason::MaxTurnRequests) => Self::Stopped {
+                Some(IdleStopReason::MaxTurnRequests) => Self::Stopped {
                     reason: "it reached its request limit".to_owned(),
                 },
-                Some(StopReason::Refusal) => Self::Stopped {
+                Some(IdleStopReason::Refusal) => Self::Stopped {
                     reason: "it refused to continue".to_owned(),
+                },
+                Some(IdleStopReason::Error(_)) => Self::Stopped {
+                    reason: "it failed".to_owned(),
                 },
                 Some(_) => Self::Stopped {
                     reason: "it stopped".to_owned(),
@@ -465,9 +468,9 @@ mod tests {
     #[test]
     fn work_state_changes_pick_their_row() {
         let running = StateUpdate::Running(RunningStateUpdate::new());
-        let done = StateUpdate::Idle(IdleStateUpdate::new().stop_reason(StopReason::EndTurn));
+        let done = StateUpdate::Idle(IdleStateUpdate::new().stop_reason(IdleStopReason::EndTurn));
         let cancelled =
-            StateUpdate::Idle(IdleStateUpdate::new().stop_reason(StopReason::Cancelled));
+            StateUpdate::Idle(IdleStateUpdate::new().stop_reason(IdleStopReason::Cancelled));
         assert_eq!(
             Event::for_state(Some(&running), &done, Some("ok".into())),
             Some(Event::Completed {

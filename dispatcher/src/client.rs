@@ -2,11 +2,11 @@
 //! WebSocket as a paired device ([`DispatcherConnection::connect_with`]), say hello, and ask;
 //! and after `bots/watch`, hear of each change to the Bots ([`DispatcherConnection::bot_change`]).
 
+use agent_client_protocol::Builder;
 use agent_client_protocol::ConnectTo;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::JsonRpcRequest;
-use agent_client_protocol::Role as _;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -72,8 +72,7 @@ impl DispatcherConnection {
         let (bots_tx, bots) = mpsc::unbounded_channel();
         let removed_tx = bots_tx.clone();
         let driver = tokio::spawn(async move {
-            let result = DispatcherClient
-                .builder()
+            let result = Builder::new(DispatcherClient)
                 .name("weave-dispatcher-client")
                 .on_receive_notification(
                     async move |notification: DevicePairedNotification, _cx| {

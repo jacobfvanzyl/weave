@@ -10,10 +10,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use agent_client_protocol::Builder;
 use agent_client_protocol::Channel;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
-use agent_client_protocol::Role as _;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc::UnboundedReceiver;
 use weave_acp_core::AgentConnection;
@@ -2230,8 +2230,7 @@ async fn raw(daemon: &Daemon) -> (ConnectionTo<Host>, tokio::task::JoinHandle<()
     let transport = daemon.connect_in_process();
     let (cx_tx, cx_rx) = tokio::sync::oneshot::channel();
     let driver = tokio::spawn(async move {
-        let _ = HostClient
-            .builder()
+        let _ = Builder::new(HostClient)
             .connect_with(transport, async move |cx: ConnectionTo<Host>| {
                 let _ = cx_tx.send(cx.clone());
                 cx.incoming_closed().await;

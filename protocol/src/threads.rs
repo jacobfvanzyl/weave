@@ -10,17 +10,17 @@ use agent_client_protocol::Error;
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
-use agent_client_protocol::schema::v1::ContentBlock;
-use agent_client_protocol::schema::v1::InitializeResponse;
-use agent_client_protocol::schema::v1::PromptResponse;
-use agent_client_protocol::schema::v1::SessionConfigId;
-use agent_client_protocol::schema::v1::SessionConfigOption;
-use agent_client_protocol::schema::v1::SessionConfigOptionValue;
-use agent_client_protocol::schema::v1::SessionId;
-use agent_client_protocol::schema::v1::SessionInfo;
-use agent_client_protocol::schema::v1::SessionModeId;
-use agent_client_protocol::schema::v1::SessionModeState;
-use agent_client_protocol::schema::v1::SetSessionConfigOptionResponse;
+use agent_client_protocol::v1::schema::ContentBlock;
+use agent_client_protocol::v1::schema::InitializeResponse;
+use agent_client_protocol::v1::schema::PromptResponse;
+use agent_client_protocol::v1::schema::SessionConfigId;
+use agent_client_protocol::v1::schema::SessionConfigOption;
+use agent_client_protocol::v1::schema::SessionConfigOptionValue;
+use agent_client_protocol::v1::schema::SessionId;
+use agent_client_protocol::v1::schema::SessionInfo;
+use agent_client_protocol::v1::schema::SessionModeId;
+use agent_client_protocol::v1::schema::SessionModeState;
+use agent_client_protocol::v1::schema::SetSessionConfigOptionResponse;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -456,6 +456,11 @@ pub struct LatestTurn {
     pub response: Option<PromptResponse>,
     /// Why it failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    // The same on the wire as ACP's own error, which the schema names once.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<agent_client_protocol::v1::schema::Error>")
+    )]
     pub error: Option<Error>,
     /// The agent's last message in it, as text: its message chunks since the last tool call,
     /// thought or other message.

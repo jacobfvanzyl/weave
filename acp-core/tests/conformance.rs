@@ -51,7 +51,7 @@ use weave_acp_core::schema::TextResourceContents;
 use weave_fake_agent::FakeAgentConfig;
 
 /// Every `session/update` kind in ACP v1 (`SessionUpdate` in the schema crate).
-const UPDATE_KINDS: [&str; 11] = [
+const UPDATE_KINDS: [&str; 14] = [
     "user_message_chunk",
     "agent_message_chunk",
     "agent_thought_chunk",
@@ -63,6 +63,9 @@ const UPDATE_KINDS: [&str; 11] = [
     "config_option_update",
     "session_info_update",
     "usage_update",
+    "compaction_update",
+    "compaction_summary_chunk",
+    "notice",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -310,6 +313,8 @@ async fn every_v1_method_and_update_kind_crosses_the_wire() {
     let mut turns = vec![
         ("hello", "allow", None),
         ("/think", "allow", None),
+        ("/compact", "allow", None),
+        ("/notice", "allow", None),
         ("/plan", "allow", None),
         ("/switch-mode", "allow", None),
         ("/run echo hi", "allow", None),

@@ -29,6 +29,7 @@ export const ACP_SESSION_UPDATE_KINDS = [
   'subagent_update',
   'session_message',
   'session_message_chunk',
+  'notice',
 ] as const satisfies readonly SessionUpdate['sessionUpdate'][];
 
 export const ACP_CONTENT_BLOCK_KINDS = [
@@ -221,6 +222,15 @@ const events: AcpTranscriptEvent[] = [
       sessionUpdate: 'compaction_update',
       compactionId: 'compaction-showcase',
       status: 'in_progress',
+    },
+  },
+  {
+    type: 'session/update',
+    update: {
+      sessionUpdate: 'notice',
+      severity: 'warning',
+      title: "You're near this week's limit",
+      description: 'It resets on Monday.',
     },
   },
   {

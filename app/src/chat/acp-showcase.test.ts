@@ -15,6 +15,7 @@ describe('ACP renderer coverage catalog', () => {
       'available_commands_update', 'current_mode_update', 'config_option_update',
       'session_info_update', 'usage_update', 'compaction_update',
       'compaction_summary_chunk', 'subagent_update', 'session_message', 'session_message_chunk',
+      'notice',
     ];
     const contentKinds: ContentBlock['type'][] = [
       'text', 'image', 'audio', 'resource_link', 'resource',

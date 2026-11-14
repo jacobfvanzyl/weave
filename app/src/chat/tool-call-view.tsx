@@ -85,6 +85,8 @@ function AcpToolContent({ tool }: { tool: TranscriptToolCall }) {
             </div>
           );
         }
+        // A link to the subagent's thread, which has a row of its own.
+        if (item.type === 'session') return null;
         return (
           <TerminalOutput
             key={`terminal-${index}`}

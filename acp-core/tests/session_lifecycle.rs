@@ -263,7 +263,7 @@ async fn subagents_reach_clients_that_ask_in_either_draft() {
     );
     assert!(log.updates.iter().any(|update| matches!(
         update,
-        SessionUpdate::SessionMessage(message) if message.recipient_session_id.is_some()
+        SessionUpdate::SessionMessage(message) if matches!(message.recipient_session_id, MaybeUndefined::Value(_))
     )));
 
     // The earlier draft some adapters still send is read as the current one.

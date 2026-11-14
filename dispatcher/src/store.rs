@@ -36,7 +36,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
-use agent_client_protocol::schema::v1::ContentBlock;
+use agent_client_protocol::v1::schema::ContentBlock;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension as _;
 use rusqlite::params;

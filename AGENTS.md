@@ -40,11 +40,12 @@ implementation. Each crate's own guide is the `AGENTS.md` in its directory.
 
 ### Boundaries
 
-- weave speaks ACP v1 stable and implements it completely. Two unstable RFDs are in scope
-  too, each advertised by default and withheld per agent: session compaction (Preview;
-  `unstable_session_compaction`, `compaction = false`) and subagent sessions (draft;
-  `unstable_subagents`, `subagents = false`). A third, MCP-over-ACP (draft;
-  `unstable_mcp_over_acp`), carries the Host MCP server to agents that advertise
+- weave speaks ACP v1 stable, as schema 1.17 has it, and implements it completely but for
+  client system prompts (WVE-226). Session compaction and notices, stable since schema 1.11,
+  are advertised by default and withheld per agent (`compaction = false`, `notices = false`).
+  Two unstable RFDs are in scope too: subagent sessions (draft; `unstable_subagents`,
+  advertised by default, `subagents = false`), and MCP-over-ACP (draft;
+  `unstable_mcp_over_acp`), which carries the Host MCP server to agents that advertise
   `mcpCapabilities.acp`. The v2 draft and other unstable RFDs stay out of scope unless the
   issue changes.
 - weave launches agents locally.
@@ -67,7 +68,9 @@ Follow `openai/codex` `codex-rs/tui` for technology and structure: Rust 2024,
 tokio, ratatui + crossterm, pulldown-cmark, syntect, insta/vt100 snapshot tests.
 Codex is Apache-2.0; when adapting one of its modules, keep a header comment
 naming the upstream path. The ACP layer is the official `agent-client-protocol`
-crate, pinned exactly because 3.x is new.
+crate, pinned exactly: a minor release may move the schema it pins and change what is
+behind an `unstable_*` feature. The app's shell pins the same version
+(`app/src-tauri/Cargo.toml`); move both together, following the SDK's `md/migration-v*.md`.
 
 ### SDK rules
 
@@ -76,6 +79,14 @@ inside it. Never await a peer response (`block_task`) inside a handler, because
 that deadlocks. Forward work to the event channel or `cx.spawn` it. Requests
 whose completion must stay ordered with session updates use
 `on_receiving_result`, as `AgentConnection::prompt` does.
+
+A `Responder` dropped unanswered answers for itself, with an internal error, or
+request-cancelled if the peer withdrew the request. Answer on every path instead: what waits
+on the person (`acp-core/src/requests.rs`) answers `cancelled` when dropped.
+
+ACP connections start from `Client.v1()` and `Agent.v1()`, with handles from
+`agent_client_protocol::v1` and messages from `v1::schema`. The Host protocol's and the
+Dispatcher's own roles start from `Builder::new(role)`, with the crate root's handles.
 
 ### Commands
 
@@ -150,7 +161,7 @@ The service itself needs systemd as PID 1 and a login over SSH: an Ubuntu or Deb
 
 - `acp-core/tests/conformance.rs` taps the wire between the client and the fake
   agent and must see every method in the schema crate's `AGENT_METHOD_NAMES`,
-  `CLIENT_METHOD_NAMES` and `PROTOCOL_LEVEL_METHOD_NAMES`, all 11 `session/update` kinds
+  `CLIENT_METHOD_NAMES` and `PROTOCOL_LEVEL_METHOD_NAMES`, all 14 `session/update` kinds
   and all 5 content block types; a second test checks gated methods never reach an agent
   that didn't advertise them. When the pinned schema adds a stable method, extend the fake
   agent until this passes again.

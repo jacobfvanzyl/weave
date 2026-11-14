@@ -11,17 +11,17 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v1::ClientCapabilities;
-use agent_client_protocol::schema::v1::McpServer;
-use agent_client_protocol::schema::v1::SessionConfigOption;
-use agent_client_protocol::schema::v1::SessionConfigOptionCategory;
-use agent_client_protocol::schema::v1::SessionConfigOptionValue;
-use agent_client_protocol::schema::v1::SessionConfigSelectGroup;
-use agent_client_protocol::schema::v1::SessionConfigSelectOption;
-use agent_client_protocol::schema::v1::SessionId;
-use agent_client_protocol::schema::v1::SessionMode;
-use agent_client_protocol::schema::v1::SessionModeState;
-use agent_client_protocol::schema::v1::SessionUpdate;
+use agent_client_protocol::v1::schema::ClientCapabilities;
+use agent_client_protocol::v1::schema::McpServer;
+use agent_client_protocol::v1::schema::SessionConfigOption;
+use agent_client_protocol::v1::schema::SessionConfigOptionCategory;
+use agent_client_protocol::v1::schema::SessionConfigOptionValue;
+use agent_client_protocol::v1::schema::SessionConfigSelectGroup;
+use agent_client_protocol::v1::schema::SessionConfigSelectOption;
+use agent_client_protocol::v1::schema::SessionId;
+use agent_client_protocol::v1::schema::SessionMode;
+use agent_client_protocol::v1::schema::SessionModeState;
+use agent_client_protocol::v1::schema::SessionUpdate;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Notify;
@@ -129,7 +129,7 @@ impl State {
         }
     }
 
-    /// Whether the client asked for compaction updates (an ACP Preview feature).
+    /// Whether the client asked for compaction updates.
     pub fn client_supports_compaction(&self) -> bool {
         supports_compaction(&self.client)
     }
@@ -350,6 +350,13 @@ pub fn interactive_login(state_path: Option<&Path>) -> std::io::Result<bool> {
 /// Whether `client` advertised `subagents`; agents send subagent updates only then.
 pub fn supports_subagents(client: &ClientCapabilities) -> bool {
     client.subagents.is_some()
+}
+
+pub fn supports_notices(client: &ClientCapabilities) -> bool {
+    client
+        .session
+        .as_ref()
+        .is_some_and(|session| session.notices.is_some())
 }
 
 pub fn supports_compaction(client: &ClientCapabilities) -> bool {

@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
-use agent_client_protocol::schema::v1::AuthMethodId;
-use agent_client_protocol::schema::v1::InitializeResponse;
+use agent_client_protocol::v1::schema::AuthMethodId;
+use agent_client_protocol::v1::schema::InitializeResponse;
 use serde::Deserialize;
 use serde::Serialize;
 

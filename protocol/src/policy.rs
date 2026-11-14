@@ -3,14 +3,14 @@
 
 use std::collections::HashMap;
 
-use agent_client_protocol::schema::v1::PermissionOptionKind;
-use agent_client_protocol::schema::v1::RequestPermissionOutcome;
-use agent_client_protocol::schema::v1::RequestPermissionRequest;
-use agent_client_protocol::schema::v1::RequestPermissionResponse;
-use agent_client_protocol::schema::v1::SelectedPermissionOutcome;
-use agent_client_protocol::schema::v1::SessionUpdate;
-use agent_client_protocol::schema::v1::ToolCallId;
-use agent_client_protocol::schema::v1::ToolKind;
+use agent_client_protocol::v1::schema::PermissionOptionKind;
+use agent_client_protocol::v1::schema::RequestPermissionOutcome;
+use agent_client_protocol::v1::schema::RequestPermissionRequest;
+use agent_client_protocol::v1::schema::RequestPermissionResponse;
+use agent_client_protocol::v1::schema::SelectedPermissionOutcome;
+use agent_client_protocol::v1::schema::SessionUpdate;
+use agent_client_protocol::v1::schema::ToolCallId;
+use agent_client_protocol::v1::schema::ToolKind;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -171,10 +171,10 @@ impl ToolKinds {
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::v1::PermissionOption;
-    use agent_client_protocol::schema::v1::ToolCall;
-    use agent_client_protocol::schema::v1::ToolCallUpdate;
-    use agent_client_protocol::schema::v1::ToolCallUpdateFields;
+    use agent_client_protocol::v1::schema::PermissionOption;
+    use agent_client_protocol::v1::schema::ToolCall;
+    use agent_client_protocol::v1::schema::ToolCallUpdate;
+    use agent_client_protocol::v1::schema::ToolCallUpdateFields;
     use pretty_assertions::assert_eq;
 
     use super::*;

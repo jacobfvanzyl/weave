@@ -207,7 +207,8 @@ enabled = false        # run agents inside each weave rather than the shared dae
 
 [agents.claude]
 terminal = false          # don't let it run commands through weave
-compaction = false        # no compaction updates (an ACP Preview feature; on by default)
+compaction = false        # no compaction updates (on by default)
+notices = false           # no notices from the agent (on by default)
 subagents = false         # no subagent threads (an ACP draft feature; on by default)
 mode = "acceptEdits"      # the mode new threads start in, by the agent's id or name for it
 

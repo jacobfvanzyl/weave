@@ -3,10 +3,10 @@
 
 use std::time::Duration;
 
+use weave_acp_core::Error;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::CreateElicitationRequest;
 use weave_acp_core::schema::ElicitationId;
-use weave_acp_core::schema::Error;
 use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::RequestPermissionRequest;
 use weave_acp_core::schema::SessionConfigOption;

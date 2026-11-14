@@ -17,12 +17,12 @@ mod key_file;
 pub mod paired;
 pub mod remote;
 
+use agent_client_protocol::Builder;
 use agent_client_protocol::ConnectTo;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::ErrorCode;
 use agent_client_protocol::JsonRpcRequest;
-use agent_client_protocol::Role as _;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -192,8 +192,7 @@ impl HostConnection {
         let on_host_call = events.clone();
         // Handlers run inside the dispatch loop, in the order messages arrived; each only
         // passes its message on.
-        let builder = HostClient
-            .builder()
+        let builder = Builder::new(HostClient)
             .name("weave-host-client")
             .on_receive_notification(
                 async move |notification: ThreadEventNotification, _cx| {
@@ -423,7 +422,7 @@ fn hello_failed(error: Error) -> ConnectError {
         ));
     }
     // A Host from before this protocol answers nothing but ACP.
-    if error.code == ErrorCode::MethodNotFound {
+    if error.code == ErrorCode::METHOD_NOT_FOUND {
         return ConnectError::Incompatible(
             "the running weave Host is older than this weave; restart it with `weave daemon \
              restart`"

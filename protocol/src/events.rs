@@ -4,14 +4,14 @@
 
 use agent_client_protocol::Error;
 use agent_client_protocol::JsonRpcNotification;
-use agent_client_protocol::schema::v1::CompleteElicitationNotification;
-use agent_client_protocol::schema::v1::ContentBlock;
-use agent_client_protocol::schema::v1::PromptResponse;
-use agent_client_protocol::schema::v1::SessionConfigOption;
-use agent_client_protocol::schema::v1::SessionModeState;
-use agent_client_protocol::schema::v1::SessionNotification;
-use agent_client_protocol::schema::v1::TerminalExitStatus;
-use agent_client_protocol::schema::v1::TerminalId;
+use agent_client_protocol::v1::schema::CompleteElicitationNotification;
+use agent_client_protocol::v1::schema::ContentBlock;
+use agent_client_protocol::v1::schema::PromptResponse;
+use agent_client_protocol::v1::schema::SessionConfigOption;
+use agent_client_protocol::v1::schema::SessionModeState;
+use agent_client_protocol::v1::schema::SessionNotification;
+use agent_client_protocol::v1::schema::TerminalExitStatus;
+use agent_client_protocol::v1::schema::TerminalId;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -82,6 +82,11 @@ pub enum ThreadEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         response: Option<PromptResponse>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        // The same on the wire as ACP's own error, which the schema names once.
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "Option<agent_client_protocol::v1::schema::Error>")
+        )]
         error: Option<Error>,
     },
     /// Output from a command the Host runs for the agent.

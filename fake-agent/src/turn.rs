@@ -8,72 +8,75 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use agent_client_protocol::Client;
-use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::UntypedMessage;
 use agent_client_protocol::schema::MaybeUndefined;
-use agent_client_protocol::schema::v1::BooleanPropertySchema;
-use agent_client_protocol::schema::v1::ClientCapabilities;
-use agent_client_protocol::schema::v1::CompactionStatus;
-use agent_client_protocol::schema::v1::CompactionSummaryChunk;
-use agent_client_protocol::schema::v1::CompactionUpdate;
-use agent_client_protocol::schema::v1::CompleteElicitationNotification;
-use agent_client_protocol::schema::v1::ConfigOptionUpdate;
-use agent_client_protocol::schema::v1::ContentBlock;
-use agent_client_protocol::schema::v1::ContentChunk;
-use agent_client_protocol::schema::v1::CreateElicitationRequest;
-use agent_client_protocol::schema::v1::CreateTerminalRequest;
-use agent_client_protocol::schema::v1::CurrentModeUpdate;
-use agent_client_protocol::schema::v1::Diff;
-use agent_client_protocol::schema::v1::ElicitationAction;
-use agent_client_protocol::schema::v1::ElicitationContentValue;
-use agent_client_protocol::schema::v1::ElicitationFormMode;
-use agent_client_protocol::schema::v1::ElicitationSchema;
-use agent_client_protocol::schema::v1::ElicitationSessionScope;
-use agent_client_protocol::schema::v1::ElicitationUrlMode;
-use agent_client_protocol::schema::v1::EnumOption;
-use agent_client_protocol::schema::v1::ErrorCode;
-use agent_client_protocol::schema::v1::IdleStateUpdate;
-use agent_client_protocol::schema::v1::IntegerPropertySchema;
-use agent_client_protocol::schema::v1::KillTerminalRequest;
-use agent_client_protocol::schema::v1::McpServer;
-use agent_client_protocol::schema::v1::MultiSelectPropertySchema;
-use agent_client_protocol::schema::v1::PermissionOption;
-use agent_client_protocol::schema::v1::PermissionOptionKind;
-use agent_client_protocol::schema::v1::Plan;
-use agent_client_protocol::schema::v1::PlanEntry;
-use agent_client_protocol::schema::v1::PlanEntryPriority;
-use agent_client_protocol::schema::v1::PlanEntryStatus;
-use agent_client_protocol::schema::v1::PromptRequest;
-use agent_client_protocol::schema::v1::PromptResponse;
-use agent_client_protocol::schema::v1::ReadTextFileRequest;
-use agent_client_protocol::schema::v1::ReleaseTerminalRequest;
-use agent_client_protocol::schema::v1::RequestPermissionOutcome;
-use agent_client_protocol::schema::v1::RequestPermissionRequest;
-use agent_client_protocol::schema::v1::RunningStateUpdate;
-use agent_client_protocol::schema::v1::SessionCancelCapabilities;
-use agent_client_protocol::schema::v1::SessionId;
-use agent_client_protocol::schema::v1::SessionInfoUpdate;
-use agent_client_protocol::schema::v1::SessionMessage;
-use agent_client_protocol::schema::v1::SessionNotification;
-use agent_client_protocol::schema::v1::SessionUpdate;
-use agent_client_protocol::schema::v1::StateUpdate;
-use agent_client_protocol::schema::v1::StopReason;
-use agent_client_protocol::schema::v1::StringPropertySchema;
-use agent_client_protocol::schema::v1::SubagentSessionCapabilities;
-use agent_client_protocol::schema::v1::SubagentUpdate;
-use agent_client_protocol::schema::v1::Terminal;
-use agent_client_protocol::schema::v1::TerminalOutputRequest;
-use agent_client_protocol::schema::v1::ToolCall;
-use agent_client_protocol::schema::v1::ToolCallContent;
-use agent_client_protocol::schema::v1::ToolCallLocation;
-use agent_client_protocol::schema::v1::ToolCallStatus;
-use agent_client_protocol::schema::v1::ToolCallUpdate;
-use agent_client_protocol::schema::v1::ToolCallUpdateFields;
-use agent_client_protocol::schema::v1::ToolKind;
-use agent_client_protocol::schema::v1::UsageUpdate;
-use agent_client_protocol::schema::v1::WaitForTerminalExitRequest;
-use agent_client_protocol::schema::v1::WriteTextFileRequest;
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::BooleanPropertySchema;
+use agent_client_protocol::v1::schema::ClientCapabilities;
+use agent_client_protocol::v1::schema::CompactionStatus;
+use agent_client_protocol::v1::schema::CompactionSummaryChunk;
+use agent_client_protocol::v1::schema::CompactionUpdate;
+use agent_client_protocol::v1::schema::CompleteElicitationNotification;
+use agent_client_protocol::v1::schema::ConfigOptionUpdate;
+use agent_client_protocol::v1::schema::ContentBlock;
+use agent_client_protocol::v1::schema::ContentChunk;
+use agent_client_protocol::v1::schema::CreateElicitationRequest;
+use agent_client_protocol::v1::schema::CreateTerminalRequest;
+use agent_client_protocol::v1::schema::CurrentModeUpdate;
+use agent_client_protocol::v1::schema::Diff;
+use agent_client_protocol::v1::schema::ElicitationAction;
+use agent_client_protocol::v1::schema::ElicitationContentValue;
+use agent_client_protocol::v1::schema::ElicitationFormMode;
+use agent_client_protocol::v1::schema::ElicitationSchema;
+use agent_client_protocol::v1::schema::ElicitationSessionScope;
+use agent_client_protocol::v1::schema::ElicitationUrlMode;
+use agent_client_protocol::v1::schema::EnumOption;
+use agent_client_protocol::v1::schema::ErrorCode;
+use agent_client_protocol::v1::schema::IdleStateUpdate;
+use agent_client_protocol::v1::schema::IdleStopReason;
+use agent_client_protocol::v1::schema::IntegerPropertySchema;
+use agent_client_protocol::v1::schema::KillTerminalRequest;
+use agent_client_protocol::v1::schema::McpServer;
+use agent_client_protocol::v1::schema::MultiSelectPropertySchema;
+use agent_client_protocol::v1::schema::Notice;
+use agent_client_protocol::v1::schema::NoticeSeverity;
+use agent_client_protocol::v1::schema::PermissionOption;
+use agent_client_protocol::v1::schema::PermissionOptionKind;
+use agent_client_protocol::v1::schema::Plan;
+use agent_client_protocol::v1::schema::PlanEntry;
+use agent_client_protocol::v1::schema::PlanEntryPriority;
+use agent_client_protocol::v1::schema::PlanEntryStatus;
+use agent_client_protocol::v1::schema::PromptRequest;
+use agent_client_protocol::v1::schema::PromptResponse;
+use agent_client_protocol::v1::schema::ReadTextFileRequest;
+use agent_client_protocol::v1::schema::ReleaseTerminalRequest;
+use agent_client_protocol::v1::schema::RequestPermissionOutcome;
+use agent_client_protocol::v1::schema::RequestPermissionRequest;
+use agent_client_protocol::v1::schema::RunningStateUpdate;
+use agent_client_protocol::v1::schema::SessionCancelCapabilities;
+use agent_client_protocol::v1::schema::SessionId;
+use agent_client_protocol::v1::schema::SessionInfoUpdate;
+use agent_client_protocol::v1::schema::SessionMessage;
+use agent_client_protocol::v1::schema::SessionNotification;
+use agent_client_protocol::v1::schema::SessionUpdate;
+use agent_client_protocol::v1::schema::StateUpdate;
+use agent_client_protocol::v1::schema::StopReason;
+use agent_client_protocol::v1::schema::StringPropertySchema;
+use agent_client_protocol::v1::schema::SubagentSessionCapabilities;
+use agent_client_protocol::v1::schema::SubagentUpdate;
+use agent_client_protocol::v1::schema::Terminal;
+use agent_client_protocol::v1::schema::TerminalOutputRequest;
+use agent_client_protocol::v1::schema::ToolCall;
+use agent_client_protocol::v1::schema::ToolCallContent;
+use agent_client_protocol::v1::schema::ToolCallLocation;
+use agent_client_protocol::v1::schema::ToolCallStatus;
+use agent_client_protocol::v1::schema::ToolCallUpdate;
+use agent_client_protocol::v1::schema::ToolCallUpdateFields;
+use agent_client_protocol::v1::schema::ToolKind;
+use agent_client_protocol::v1::schema::UsageUpdate;
+use agent_client_protocol::v1::schema::WaitForTerminalExitRequest;
+use agent_client_protocol::v1::schema::WriteTextFileRequest;
 
 use crate::lock;
 use crate::questions::question_forms;
@@ -81,6 +84,7 @@ use crate::state::Cancellation;
 use crate::state::State;
 use crate::state::now;
 use crate::state::supports_compaction;
+use crate::state::supports_notices;
 use crate::state::supports_subagents;
 use crate::steering::Steering;
 
@@ -158,6 +162,7 @@ impl Turn {
             "work" => self.work(cx, rest == "fail").await?,
             "narrate" => self.narrate(cx, rest == "fail").await?,
             "compact" => self.compact(cx).await?,
+            "notice" => self.notice(cx).await?,
             "delegate" => self.delegate(cx).await?,
             "delegate-legacy" => self.delegate_legacy(cx).await?,
             "switch-mode" => self.switch_mode(cx).await?,
@@ -925,6 +930,19 @@ impl Turn {
         self.say(cx, "Compacted.").await
     }
 
+    /// Tell the person something outside the conversation: a notice, for a client that asked
+    /// for them, which history doesn't keep; others get a message saying it, as agents fall
+    /// back.
+    async fn notice(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
+        if !supports_notices(&self.client) {
+            return self.say(cx, "You're near this week's limit.").await;
+        }
+        let notice = Notice::new(NoticeSeverity::Warning, "You're near this week's limit")
+            .description("It resets on Monday.".to_owned());
+        notify(cx, &self.session_id, SessionUpdate::Notice(notice))?;
+        self.say(cx, "I told you about the limit.").await
+    }
+
     /// Delegate to two subagents, as ACP's draft Subagent Sessions RFD reports them: each is
     /// announced on this session, sent its task as a session message, works in its own
     /// session, and goes idle. Clients that didn't ask for subagents get the result only.
@@ -938,7 +956,7 @@ impl Turn {
         let child = |name: &str| SessionId::new(format!("{parent}:{name}"));
         let (robie, ada) = (child("robie"), child("ada"));
         let running = || StateUpdate::Running(RunningStateUpdate::new());
-        let idle = |reason: Option<StopReason>| {
+        let idle = |reason: Option<IdleStopReason>| {
             StateUpdate::Idle(IdleStateUpdate::new().stop_reason(reason))
         };
         for (id, title, description) in [
@@ -1018,7 +1036,7 @@ impl Turn {
         self.update(
             cx,
             SessionUpdate::SubagentUpdate(
-                SubagentUpdate::new(robie.clone()).state(idle(Some(StopReason::EndTurn))),
+                SubagentUpdate::new(robie.clone()).state(idle(Some(IdleStopReason::EndTurn))),
             ),
         )?;
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -1027,7 +1045,7 @@ impl Turn {
         self.update(
             cx,
             SessionUpdate::SubagentUpdate(
-                SubagentUpdate::new(ada).state(idle(Some(StopReason::EndTurn))),
+                SubagentUpdate::new(ada).state(idle(Some(IdleStopReason::EndTurn))),
             ),
         )?;
         self.say(cx, "Robie counted 12 files; Ada found nothing to fix.")

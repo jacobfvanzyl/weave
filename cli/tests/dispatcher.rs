@@ -270,6 +270,21 @@ impl World {
         self.command(args).output().expect("run weave")
     }
 
+    /// Wait until the Dispatcher is connected to every Host that joined it. A Host that has
+    /// just joined is connected a moment later, once it has answered the Dispatcher's hello.
+    fn hosts_connected(&self) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let hosts = json(&self.weave(&["hosts", "list", "--json"]));
+            let hosts = hosts.as_array().expect("the Hosts");
+            if !hosts.is_empty() && hosts.iter().all(|host| host["connected"] == true) {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "{hosts:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     /// `weave args…` on the Dispatcher's own computer.
     fn weave_there(&self, args: &[&str]) -> Output {
         self.command(args)
@@ -1606,6 +1621,7 @@ fn a_bots_home_keeps_what_was_there() {
     let (url, code) = world.offer();
     let paired = world.weave(&["dispatcher", "connect", &url, &code, "--host"]);
     assert!(paired.status.success(), "{}", said(&paired));
+    world.hosts_connected();
     let weave = |identity: bool, args: &[&str]| {
         as_person(world.command(args), &world.home(), identity)
             .output()

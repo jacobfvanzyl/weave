@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use agent_client_protocol::AcpAgentConfig;
-use agent_client_protocol::schema::v1::AuthMethodTerminal;
+use agent_client_protocol::v1::schema::AuthMethodTerminal;
 
 /// An agent weave knows how to launch: an npm package run through `npx`, at a version pinned
 /// so a session is reproducible until the preset is deliberately bumped. `weave agents update`

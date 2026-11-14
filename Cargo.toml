@@ -19,9 +19,9 @@ weave-host-protocol = { path = "protocol" }
 weave-remote = { path = "remote" }
 weave-tui = { path = "tui" }
 
-# Session compaction (Preview) and subagent sessions (draft) are the only unstable ACP
-# features weave uses; see AGENTS.md.
-agent-client-protocol = { version = "=3.0.0", features = ["process", "unstable_mcp_over_acp", "unstable_session_compaction", "unstable_subagents"] }
+# Subagent sessions and MCP-over-ACP (both drafts) are the only unstable ACP features weave
+# uses; see AGENTS.md. app/src-tauri/Cargo.toml pins the same version.
+agent-client-protocol = { version = "=5.2.0", features = ["process", "unstable_mcp_over_acp", "unstable_subagents"] }
 anyhow = "1"
 base64 = "0.22"
 # weave-holder's libghostty-vt bindings, regenerated with its `bindgen` feature.

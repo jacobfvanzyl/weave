@@ -454,6 +454,20 @@ describe('ACP transcript structured updates', () => {
     });
   });
 
+  it("puts an agent's notice in the transcript, with a severity it knows", () => {
+    const notice = (severity: string, description?: string) => reduceAcpEvent(createTranscript('thread-1'), {
+      type: 'session/update',
+      update: { sessionUpdate: 'notice', severity, title: 'Near the limit', ...(description ? { description } : {}) },
+    }).entries.at(-1);
+
+    expect(notice('warning', 'It resets on Monday.')).toMatchObject({
+      kind: 'diagnostic', severity: 'warning', title: 'Near the limit', detail: 'It resets on Monday.',
+    });
+    expect(notice('error')).toMatchObject({ kind: 'diagnostic', severity: 'error' });
+    expect(notice('_vendor')).toMatchObject({ kind: 'diagnostic', severity: 'info' });
+    expect(notice('info')).not.toHaveProperty('detail');
+  });
+
   it('patches compactions in place and appends streamed summary content', () => {
     const updates = [
       {

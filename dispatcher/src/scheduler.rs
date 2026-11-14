@@ -24,7 +24,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_client_protocol::schema::v1::ContentBlock;
+use agent_client_protocol::v1::schema::ContentBlock;
 use croner::Cron;
 use croner::parser::CronParser;
 use croner::parser::Seconds;

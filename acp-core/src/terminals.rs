@@ -19,19 +19,19 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v1::CreateTerminalRequest;
-use agent_client_protocol::schema::v1::CreateTerminalResponse;
-use agent_client_protocol::schema::v1::KillTerminalRequest;
-use agent_client_protocol::schema::v1::KillTerminalResponse;
-use agent_client_protocol::schema::v1::ReleaseTerminalRequest;
-use agent_client_protocol::schema::v1::ReleaseTerminalResponse;
-use agent_client_protocol::schema::v1::SessionId;
-use agent_client_protocol::schema::v1::TerminalExitStatus;
-use agent_client_protocol::schema::v1::TerminalId;
-use agent_client_protocol::schema::v1::TerminalOutputRequest;
-use agent_client_protocol::schema::v1::TerminalOutputResponse;
-use agent_client_protocol::schema::v1::WaitForTerminalExitRequest;
-use agent_client_protocol::schema::v1::WaitForTerminalExitResponse;
+use agent_client_protocol::v1::schema::CreateTerminalRequest;
+use agent_client_protocol::v1::schema::CreateTerminalResponse;
+use agent_client_protocol::v1::schema::KillTerminalRequest;
+use agent_client_protocol::v1::schema::KillTerminalResponse;
+use agent_client_protocol::v1::schema::ReleaseTerminalRequest;
+use agent_client_protocol::v1::schema::ReleaseTerminalResponse;
+use agent_client_protocol::v1::schema::SessionId;
+use agent_client_protocol::v1::schema::TerminalExitStatus;
+use agent_client_protocol::v1::schema::TerminalId;
+use agent_client_protocol::v1::schema::TerminalOutputRequest;
+use agent_client_protocol::v1::schema::TerminalOutputResponse;
+use agent_client_protocol::v1::schema::WaitForTerminalExitRequest;
+use agent_client_protocol::v1::schema::WaitForTerminalExitResponse;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::UnboundedSender;
@@ -421,7 +421,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::v1::EnvVariable;
+    use agent_client_protocol::v1::schema::EnvVariable;
 
     use super::*;
 

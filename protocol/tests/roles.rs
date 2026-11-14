@@ -3,12 +3,12 @@
 
 #![allow(clippy::expect_used)]
 
+use agent_client_protocol::Builder;
 use agent_client_protocol::Channel;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::ErrorCode;
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
-use agent_client_protocol::Role;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde::Serialize;
@@ -36,7 +36,7 @@ struct Later {}
 async fn a_client_reaches_a_hosts_handlers() {
     let (client_end, host_end) = Channel::duplex();
     tokio::spawn(
-        Host.builder()
+        Builder::new(Host)
             .on_receive_request(
                 async move |request: HelloRequest, responder, _cx| {
                     responder.respond(HelloResponse {
@@ -63,8 +63,7 @@ async fn a_client_reaches_a_hosts_handlers() {
             )
             .connect_to(host_end),
     );
-    HostClient
-        .builder()
+    Builder::new(HostClient)
         .connect_with(client_end, async |cx: ConnectionTo<Host>| {
             let hello = cx
                 .send_request(HelloRequest {
@@ -87,7 +86,7 @@ async fn a_client_reaches_a_hosts_handlers() {
                 .block_task()
                 .await
                 .expect_err("no handler");
-            assert_eq!(unknown.code, ErrorCode::MethodNotFound);
+            assert_eq!(unknown.code, ErrorCode::METHOD_NOT_FOUND);
             Ok(())
         })
         .await

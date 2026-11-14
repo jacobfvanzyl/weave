@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
-use agent_client_protocol::schema::v1::ContentBlock;
+use agent_client_protocol::v1::schema::ContentBlock;
 use serde::Deserialize;
 use serde::Serialize;
 

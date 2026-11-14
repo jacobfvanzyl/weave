@@ -11,7 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::v1::McpError;
+use agent_client_protocol::v1::schema::McpError;
 use serde_json::Map;
 use serde_json::Value;
 

@@ -1,7 +1,7 @@
 //! The questions agents ask through forms, in the shapes their ACP adapters give them, each
 //! with its free-text companion, for the `questions` script and clients' tests.
 
-use agent_client_protocol::schema::v1::ElicitationSchema;
+use agent_client_protocol::v1::schema::ElicitationSchema;
 
 /// One form an adapter asks with.
 pub struct QuestionForm {
@@ -115,7 +115,7 @@ pub fn question_forms() -> Vec<QuestionForm> {
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::v1::ElicitationPropertySchema;
+    use agent_client_protocol::v1::schema::ElicitationPropertySchema;
 
     use super::*;
 

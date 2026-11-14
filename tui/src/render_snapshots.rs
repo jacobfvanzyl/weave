@@ -29,6 +29,8 @@ use weave_acp_core::schema::EnumOption;
 use weave_acp_core::schema::IntegerPropertySchema;
 use weave_acp_core::schema::MessageId;
 use weave_acp_core::schema::MultiSelectPropertySchema;
+use weave_acp_core::schema::Notice;
+use weave_acp_core::schema::NoticeSeverity;
 use weave_acp_core::schema::PermissionOption;
 use weave_acp_core::schema::PermissionOptionKind;
 use weave_acp_core::schema::Plan;
@@ -405,6 +407,19 @@ fn update_usage_update() {
     send(
         &mut chat,
         SessionUpdate::UsageUpdate(UsageUpdate::new(48_000, 200_000)),
+    );
+    insta::assert_snapshot!(screen(&mut chat));
+}
+
+#[test]
+fn update_notice() {
+    let mut chat = chat();
+    send(
+        &mut chat,
+        SessionUpdate::Notice(
+            Notice::new(NoticeSeverity::Warning, "You're near this week's limit")
+                .description("It resets on Monday.".to_owned()),
+        ),
     );
     insta::assert_snapshot!(screen(&mut chat));
 }

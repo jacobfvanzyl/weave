@@ -184,7 +184,7 @@ pub fn inside(dir: &Path, cwd: Option<&Path>) -> Result<PathBuf, String> {
 mod tests {
     use std::path::PathBuf;
 
-    use agent_client_protocol::schema::v1::SessionInfo;
+    use agent_client_protocol::v1::schema::SessionInfo;
     use pretty_assertions::assert_eq;
 
     use super::*;

@@ -10,12 +10,12 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use agent_client_protocol::Client;
-use agent_client_protocol::ConnectionTo;
-use agent_client_protocol::schema::v1::McpRequestId;
-use agent_client_protocol::schema::v1::McpServer;
-use agent_client_protocol::schema::v1::McpServerStdio;
-use agent_client_protocol::schema::v1::MessageMcpRequest;
-use agent_client_protocol::schema::v1::MessageMcpResponse;
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::McpRequestId;
+use agent_client_protocol::v1::schema::McpServer;
+use agent_client_protocol::v1::schema::McpServerStdio;
+use agent_client_protocol::v1::schema::MessageMcpRequest;
+use agent_client_protocol::v1::schema::MessageMcpResponse;
 use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;

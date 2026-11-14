@@ -5,7 +5,7 @@
 //! those it opens there for the person's devices; and one per item in-process.
 //! Clients send requests; the Host answers them and sends notifications, never requests.
 //! Whatever an agent produced or consumes travels as ACP's own JSON, from
-//! [`agent_client_protocol::schema::v1`]; the messages around it are this crate's. The
+//! [`agent_client_protocol::v1::schema`]; the messages around it are this crate's. The
 //! specification is `docs/specs/wve-85-host-protocol.md`.
 //!
 //! - [`hello`]: the first request on every connection: version, authentication, client.

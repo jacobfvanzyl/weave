@@ -20,7 +20,7 @@ mod wakeups;
 
 use std::sync::Arc;
 
-use agent_client_protocol::schema::v1::ContentBlock;
+use agent_client_protocol::v1::schema::ContentBlock;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Map;

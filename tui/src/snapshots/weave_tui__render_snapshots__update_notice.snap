@@ -1,0 +1,12 @@
+---
+source: tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+■ You're near this week's limit: It resets on Monday.
+── viewport ──
+
+
+›
+
+  Agent

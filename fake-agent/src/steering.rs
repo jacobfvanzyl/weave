@@ -9,9 +9,9 @@ use std::sync::Mutex;
 
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
-use agent_client_protocol::schema::v1::ContentBlock;
-use agent_client_protocol::schema::v1::Meta;
-use agent_client_protocol::schema::v1::SessionId;
+use agent_client_protocol::v1::schema::ContentBlock;
+use agent_client_protocol::v1::schema::Meta;
+use agent_client_protocol::v1::schema::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;

@@ -38,7 +38,9 @@ pub use trace::ProtocolTrace;
 pub use trace::Traces;
 pub use trace::trace_events;
 
+/// The error a request fails with, the same whatever the protocol version.
+pub use agent_client_protocol::Error;
 pub use agent_client_protocol::schema::MaybeUndefined;
 pub use agent_client_protocol::schema::ProtocolVersion;
 /// The ACP v1 schema types this crate speaks, re-exported so callers share one version.
-pub use agent_client_protocol::schema::v1 as schema;
+pub use agent_client_protocol::v1::schema;

@@ -31,6 +31,7 @@ function outline(transcript: AcpTranscript, root = transcript, depth = 0): strin
         const content = entry.content.map((item) => {
           if (item.type === 'diff') return `  diff ${item.path}: ${item.oldText ?? '(new)'} → ${item.newText}`;
           if (item.type === 'content') return `  ${blocksText([item.content])}`;
+          if (item.type === 'session') return `  session ${item.sessionId}`;
           const terminal = root.terminals[item.terminalId];
           return `  terminal ${JSON.stringify(terminalText(terminal?.output ?? ''))} ${JSON.stringify(terminal?.exit ?? null)}`;
         });

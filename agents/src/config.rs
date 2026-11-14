@@ -25,7 +25,8 @@
 //!
 //! [agents.claude]            # adjust a preset…
 //! terminal = false           # don't offer it client terminals
-//! compaction = false         # no compaction updates (ACP Preview; on by default)
+//! compaction = false         # no compaction updates (on by default)
+//! notices = false            # no notices from the agent (on by default)
 //! subagents = false          # no subagent threads (ACP draft; on by default)
 //! mode = "bypassPermissions" # the mode new threads start in, by the agent's id or name
 //!
@@ -152,8 +153,10 @@ pub struct AgentConfig {
     pub fs: Option<bool>,
     /// Offer client terminals (default true).
     pub terminal: Option<bool>,
-    /// Ask for context compaction updates, an ACP Preview feature (default true).
+    /// Ask for context compaction updates (default true).
     pub compaction: Option<bool>,
+    /// Ask for the agent's notices (default true).
+    pub notices: Option<bool>,
     /// Ask for subagent sessions, from ACP's draft Subagent Sessions RFD (default true).
     pub subagents: Option<bool>,
     /// The mode new threads start in, by the agent's id or name for it, such as Codex's
@@ -289,6 +292,7 @@ impl Config {
             options.write_files = agent.fs.unwrap_or(true);
             options.terminals = agent.terminal.unwrap_or(true);
             options.compaction = agent.compaction.unwrap_or(true);
+            options.notices = agent.notices.unwrap_or(true);
             options.subagents = agent.subagents.unwrap_or(true);
         }
         (spec, options)

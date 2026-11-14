@@ -10,7 +10,7 @@
 //!   scheduler forgets it.
 //! - A wake-up less than a minute away, or one past the most a Bot may have to come, is refused.
 
-use agent_client_protocol::schema::v1::ContentBlock;
+use agent_client_protocol::v1::schema::ContentBlock;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Number;

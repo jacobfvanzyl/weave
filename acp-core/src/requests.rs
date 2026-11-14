@@ -3,28 +3,30 @@
 use std::collections::BTreeMap;
 
 use agent_client_protocol::Error;
-use agent_client_protocol::Responder;
-use agent_client_protocol::schema::v1::CreateElicitationRequest;
-use agent_client_protocol::schema::v1::CreateElicitationResponse;
-use agent_client_protocol::schema::v1::ElicitationAcceptAction;
-use agent_client_protocol::schema::v1::ElicitationAction;
-use agent_client_protocol::schema::v1::ElicitationContentValue;
-use agent_client_protocol::schema::v1::PermissionOptionId;
-use agent_client_protocol::schema::v1::RequestPermissionOutcome;
-use agent_client_protocol::schema::v1::RequestPermissionRequest;
-use agent_client_protocol::schema::v1::RequestPermissionResponse;
-use agent_client_protocol::schema::v1::SelectedPermissionOutcome;
+use agent_client_protocol::v1::Responder;
+use agent_client_protocol::v1::schema::CreateElicitationRequest;
+use agent_client_protocol::v1::schema::CreateElicitationResponse;
+use agent_client_protocol::v1::schema::ElicitationAcceptAction;
+use agent_client_protocol::v1::schema::ElicitationAction;
+use agent_client_protocol::v1::schema::ElicitationContentValue;
+use agent_client_protocol::v1::schema::PermissionOptionId;
+use agent_client_protocol::v1::schema::RequestPermissionOutcome;
+use agent_client_protocol::v1::schema::RequestPermissionRequest;
+use agent_client_protocol::v1::schema::RequestPermissionResponse;
+use agent_client_protocol::v1::schema::SelectedPermissionOutcome;
 use tokio::sync::oneshot;
 
 /// Identifies a request awaiting the user, so the agent's withdrawal of it can be matched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RequestKey(pub(crate) u64);
 
-/// A `session/request_permission` request. Dropping it unanswered leaves the agent waiting.
+/// A `session/request_permission` request. Dropped unanswered, it answers `cancelled`, as
+/// the protocol asks of a request nobody will answer any more; the SDK would otherwise
+/// answer for it with an internal error.
 pub struct PermissionRequest {
     pub key: RequestKey,
     pub request: RequestPermissionRequest,
-    pub(crate) responder: Responder<RequestPermissionResponse>,
+    pub(crate) responder: Option<Responder<RequestPermissionResponse>>,
     /// Dropped once answered, which stops the withdrawal watcher.
     pub(crate) _answered: oneshot::Sender<()>,
 }
@@ -44,27 +46,42 @@ impl PermissionRequest {
 
     /// Answer a request the agent withdrew with `$/cancel_request`: the standard
     /// request-cancelled error, since the protocol still requires a response.
-    pub fn withdrawn(self) -> Result<(), Error> {
-        self.responder
-            .respond_with_error(Error::request_cancelled())
+    pub fn withdrawn(mut self) -> Result<(), Error> {
+        match self.responder.take() {
+            Some(responder) => responder.respond_with_error(Error::request_cancelled()),
+            None => Ok(()),
+        }
     }
 
     /// Answer with a response another client gave, as the weave Host passes one on.
-    pub fn respond_with(self, response: RequestPermissionResponse) -> Result<(), Error> {
-        self.responder.respond(response)
+    pub fn respond_with(mut self, response: RequestPermissionResponse) -> Result<(), Error> {
+        match self.responder.take() {
+            Some(responder) => responder.respond(response),
+            None => Ok(()),
+        }
     }
 
     fn respond(self, outcome: RequestPermissionOutcome) -> Result<(), Error> {
-        self.responder
-            .respond(RequestPermissionResponse::new(outcome))
+        self.respond_with(RequestPermissionResponse::new(outcome))
+    }
+}
+
+impl Drop for PermissionRequest {
+    fn drop(&mut self) {
+        if let Some(responder) = self.responder.take() {
+            let _ = responder.respond(RequestPermissionResponse::new(
+                RequestPermissionOutcome::Cancelled,
+            ));
+        }
     }
 }
 
 /// An `elicitation/create` request: the agent asks the user for information or consent.
+/// Dropped unanswered, it answers `cancel`.
 pub struct ElicitationRequest {
     pub key: RequestKey,
     pub request: CreateElicitationRequest,
-    pub(crate) responder: Responder<CreateElicitationResponse>,
+    pub(crate) responder: Option<Responder<CreateElicitationResponse>>,
     pub(crate) _answered: oneshot::Sender<()>,
 }
 
@@ -90,18 +107,30 @@ impl ElicitationRequest {
     }
 
     /// Answer a request the agent withdrew with `$/cancel_request`.
-    pub fn withdrawn(self) -> Result<(), Error> {
-        self.responder
-            .respond_with_error(Error::request_cancelled())
+    pub fn withdrawn(mut self) -> Result<(), Error> {
+        match self.responder.take() {
+            Some(responder) => responder.respond_with_error(Error::request_cancelled()),
+            None => Ok(()),
+        }
     }
 
     /// Answer with a response another client gave, as the weave Host passes one on.
-    pub fn respond_with(self, response: CreateElicitationResponse) -> Result<(), Error> {
-        self.responder.respond(response)
+    pub fn respond_with(mut self, response: CreateElicitationResponse) -> Result<(), Error> {
+        match self.responder.take() {
+            Some(responder) => responder.respond(response),
+            None => Ok(()),
+        }
     }
 
     fn respond(self, action: ElicitationAction) -> Result<(), Error> {
-        self.responder
-            .respond(CreateElicitationResponse::new(action))
+        self.respond_with(CreateElicitationResponse::new(action))
+    }
+}
+
+impl Drop for ElicitationRequest {
+    fn drop(&mut self) {
+        if let Some(responder) = self.responder.take() {
+            let _ = responder.respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
+        }
     }
 }

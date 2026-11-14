@@ -10,45 +10,46 @@ use agent_client_protocol::AcpAgent;
 use agent_client_protocol::Agent;
 use agent_client_protocol::Client;
 use agent_client_protocol::ConnectTo;
-use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::Handled;
 use agent_client_protocol::LineDirection;
 use agent_client_protocol::RequestCancellation;
 use agent_client_protocol::UntypedMessage;
-use agent_client_protocol::schema::v1::AuthCapabilities;
-use agent_client_protocol::schema::v1::BooleanConfigOptionCapabilities;
-use agent_client_protocol::schema::v1::ClientCapabilities;
-use agent_client_protocol::schema::v1::ClientSessionCapabilities;
-use agent_client_protocol::schema::v1::CompactionCapabilities;
-use agent_client_protocol::schema::v1::CompleteElicitationNotification;
-use agent_client_protocol::schema::v1::CreateElicitationRequest;
-use agent_client_protocol::schema::v1::CreateTerminalRequest;
-use agent_client_protocol::schema::v1::ElicitationCapabilities;
-use agent_client_protocol::schema::v1::ElicitationFormCapabilities;
-use agent_client_protocol::schema::v1::ElicitationId;
-use agent_client_protocol::schema::v1::ElicitationMode;
-use agent_client_protocol::schema::v1::ElicitationUrlCapabilities;
-use agent_client_protocol::schema::v1::FileSystemCapabilities;
-use agent_client_protocol::schema::v1::KillTerminalRequest;
-use agent_client_protocol::schema::v1::McpError;
-use agent_client_protocol::schema::v1::MessageMcpNotification;
-use agent_client_protocol::schema::v1::MessageMcpRequest;
-use agent_client_protocol::schema::v1::MessageMcpResponse;
-use agent_client_protocol::schema::v1::Meta;
-use agent_client_protocol::schema::v1::PromptResponse;
-use agent_client_protocol::schema::v1::ReadTextFileRequest;
-use agent_client_protocol::schema::v1::ReleaseTerminalRequest;
-use agent_client_protocol::schema::v1::RequestPermissionRequest;
-use agent_client_protocol::schema::v1::SessionConfigOptionsCapabilities;
-use agent_client_protocol::schema::v1::SessionId;
-use agent_client_protocol::schema::v1::SessionNotification;
-use agent_client_protocol::schema::v1::SubagentCapabilities;
-use agent_client_protocol::schema::v1::TerminalExitStatus;
-use agent_client_protocol::schema::v1::TerminalId;
-use agent_client_protocol::schema::v1::TerminalOutputRequest;
-use agent_client_protocol::schema::v1::WaitForTerminalExitRequest;
-use agent_client_protocol::schema::v1::WriteTextFileRequest;
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::AuthCapabilities;
+use agent_client_protocol::v1::schema::BooleanConfigOptionCapabilities;
+use agent_client_protocol::v1::schema::ClientCapabilities;
+use agent_client_protocol::v1::schema::ClientSessionCapabilities;
+use agent_client_protocol::v1::schema::CompactionCapabilities;
+use agent_client_protocol::v1::schema::CompleteElicitationNotification;
+use agent_client_protocol::v1::schema::CreateElicitationRequest;
+use agent_client_protocol::v1::schema::CreateTerminalRequest;
+use agent_client_protocol::v1::schema::ElicitationCapabilities;
+use agent_client_protocol::v1::schema::ElicitationFormCapabilities;
+use agent_client_protocol::v1::schema::ElicitationId;
+use agent_client_protocol::v1::schema::ElicitationMode;
+use agent_client_protocol::v1::schema::ElicitationUrlCapabilities;
+use agent_client_protocol::v1::schema::FileSystemCapabilities;
+use agent_client_protocol::v1::schema::KillTerminalRequest;
+use agent_client_protocol::v1::schema::McpError;
+use agent_client_protocol::v1::schema::MessageMcpNotification;
+use agent_client_protocol::v1::schema::MessageMcpRequest;
+use agent_client_protocol::v1::schema::MessageMcpResponse;
+use agent_client_protocol::v1::schema::Meta;
+use agent_client_protocol::v1::schema::NoticeCapabilities;
+use agent_client_protocol::v1::schema::PromptResponse;
+use agent_client_protocol::v1::schema::ReadTextFileRequest;
+use agent_client_protocol::v1::schema::ReleaseTerminalRequest;
+use agent_client_protocol::v1::schema::RequestPermissionRequest;
+use agent_client_protocol::v1::schema::SessionConfigOptionsCapabilities;
+use agent_client_protocol::v1::schema::SessionId;
+use agent_client_protocol::v1::schema::SessionNotification;
+use agent_client_protocol::v1::schema::SubagentCapabilities;
+use agent_client_protocol::v1::schema::TerminalExitStatus;
+use agent_client_protocol::v1::schema::TerminalId;
+use agent_client_protocol::v1::schema::TerminalOutputRequest;
+use agent_client_protocol::v1::schema::WaitForTerminalExitRequest;
+use agent_client_protocol::v1::schema::WriteTextFileRequest;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -124,9 +125,12 @@ pub struct ClientOptions {
     pub elicitation: bool,
     /// Whether the client can rerun the agent's command interactively for `terminal` sign-in.
     pub terminal_auth: bool,
-    /// Context compaction updates (`compaction_update`, `compaction_summary_chunk`), an ACP
-    /// Preview feature; without them agents describe compaction in ordinary output.
+    /// Context compaction updates (`compaction_update`, `compaction_summary_chunk`); without
+    /// them agents describe compaction in ordinary output.
     pub compaction: bool,
+    /// Notices (`notice`): what an agent tells the person outside its own messages, such as
+    /// a limit it is near; without them agents may say it in a message.
+    pub notices: bool,
     /// Subagent sessions (`subagent_update`, session-directed messages, and the children's
     /// own updates), from ACP's draft Subagent Sessions RFD; without them agents report
     /// subagent work through the parent session.
@@ -142,6 +146,7 @@ impl Default for ClientOptions {
             elicitation: true,
             terminal_auth: false,
             compaction: true,
+            notices: true,
             subagents: true,
         }
     }
@@ -167,7 +172,8 @@ impl ClientOptions {
                         SessionConfigOptionsCapabilities::new()
                             .boolean(BooleanConfigOptionCapabilities::new()),
                     )
-                    .compaction(self.compaction.then(CompactionCapabilities::new)),
+                    .compaction(self.compaction.then(CompactionCapabilities::new))
+                    .notices(self.notices.then(NoticeCapabilities::new)),
             )
             .subagents(self.subagents.then(SubagentCapabilities::new))
             .meta(terminal_output_meta())
@@ -296,7 +302,7 @@ impl AgentConnection {
         let providers: Arc<OnceLock<Arc<dyn McpProvider>>> = Arc::new(OnceLock::new());
         let mcp = Arc::clone(&providers);
         let builder = Client
-            .builder()
+            .v1()
             .name("weave")
             // Before the typed handler, which rejects them: subagent updates in the earlier
             // draft that today's adapters still send, read as the current draft's.
@@ -337,7 +343,7 @@ impl AgentConnection {
                     let pending = PermissionRequest {
                         key,
                         request,
-                        responder,
+                        responder: Some(responder),
                         _answered: answered,
                     };
                     if let Err(mpsc::error::SendError(AgentEvent::PermissionRequested(pending))) =
@@ -375,7 +381,7 @@ impl AgentConnection {
                     let pending = ElicitationRequest {
                         key,
                         request,
-                        responder,
+                        responder: Some(responder),
                         _answered: answered,
                     };
                     if let Err(mpsc::error::SendError(AgentEvent::ElicitationRequested(pending))) =

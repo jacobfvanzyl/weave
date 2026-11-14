@@ -14,19 +14,19 @@
 //! #1257).
 
 use agent_client_protocol::schema::MaybeUndefined;
-use agent_client_protocol::schema::v1::ContentBlock;
-use agent_client_protocol::schema::v1::IdleStateUpdate;
-use agent_client_protocol::schema::v1::RunningStateUpdate;
-use agent_client_protocol::schema::v1::SessionCancelCapabilities;
-use agent_client_protocol::schema::v1::SessionId;
-use agent_client_protocol::schema::v1::SessionMessage;
-use agent_client_protocol::schema::v1::SessionNotification;
-use agent_client_protocol::schema::v1::SessionUpdate;
-use agent_client_protocol::schema::v1::StateUpdate;
-use agent_client_protocol::schema::v1::StopReason;
-use agent_client_protocol::schema::v1::SubagentSessionCapabilities;
-use agent_client_protocol::schema::v1::SubagentUpdate;
-use agent_client_protocol::schema::v1::UnknownStateUpdate;
+use agent_client_protocol::v1::schema::ContentBlock;
+use agent_client_protocol::v1::schema::IdleStateUpdate;
+use agent_client_protocol::v1::schema::IdleStopReason;
+use agent_client_protocol::v1::schema::RunningStateUpdate;
+use agent_client_protocol::v1::schema::SessionCancelCapabilities;
+use agent_client_protocol::v1::schema::SessionId;
+use agent_client_protocol::v1::schema::SessionMessage;
+use agent_client_protocol::v1::schema::SessionNotification;
+use agent_client_protocol::v1::schema::SessionUpdate;
+use agent_client_protocol::v1::schema::StateUpdate;
+use agent_client_protocol::v1::schema::SubagentSessionCapabilities;
+use agent_client_protocol::v1::schema::SubagentUpdate;
+use agent_client_protocol::v1::schema::UnknownStateUpdate;
 use serde_json::Value;
 
 /// The current draft's updates for a `session/update` in the earlier draft's form, or `None`
@@ -72,10 +72,10 @@ pub fn translate(method: &str, params: &Value) -> Option<Vec<SessionNotification
         "subagent_state_update" => {
             let state = match update.get("state").and_then(Value::as_str) {
                 Some("completed") => {
-                    StateUpdate::Idle(IdleStateUpdate::new().stop_reason(StopReason::EndTurn))
+                    StateUpdate::Idle(IdleStateUpdate::new().stop_reason(IdleStopReason::EndTurn))
                 }
                 Some("cancelled") => {
-                    StateUpdate::Idle(IdleStateUpdate::new().stop_reason(StopReason::Cancelled))
+                    StateUpdate::Idle(IdleStateUpdate::new().stop_reason(IdleStopReason::Cancelled))
                 }
                 Some("failed") => StateUpdate::Idle(IdleStateUpdate::new()),
                 Some("running") => StateUpdate::Running(RunningStateUpdate::new()),
@@ -152,11 +152,8 @@ mod tests {
             MaybeUndefined::Value(StateUpdate::Running(_))
         ));
         assert_eq!(
-            message
-                .recipient_session_id
-                .as_ref()
-                .map(ToString::to_string),
-            Some("child".to_owned())
+            message.recipient_session_id,
+            MaybeUndefined::Value(SessionId::new("child"))
         );
     }
 
@@ -203,13 +200,13 @@ mod tests {
                 other => panic!("unexpected updates: {other:?}"),
             }
         };
-        let idle = |reason: Option<StopReason>| {
+        let idle = |reason: Option<IdleStopReason>| {
             MaybeUndefined::Value(StateUpdate::Idle(
                 IdleStateUpdate::new().stop_reason(reason),
             ))
         };
-        assert_eq!(state("completed"), idle(Some(StopReason::EndTurn)));
-        assert_eq!(state("cancelled"), idle(Some(StopReason::Cancelled)));
+        assert_eq!(state("completed"), idle(Some(IdleStopReason::EndTurn)));
+        assert_eq!(state("cancelled"), idle(Some(IdleStopReason::Cancelled)));
         assert_eq!(state("failed"), idle(None));
     }
 

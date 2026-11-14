@@ -118,7 +118,7 @@ export type TranscriptClientTool = {
 export type TranscriptDiagnostic = {
   id: string;
   kind: 'diagnostic';
-  severity: 'info' | 'error';
+  severity: 'info' | 'warning' | 'error';
   title: string;
   detail?: string;
   raw?: unknown;
@@ -302,7 +302,7 @@ export type AcpTranscriptEvent =
   | { type: 'turn/failed'; error: string }
   | { type: 'history/reset'; threadId?: string }
   /** Something the Host tells the thread's clients, such as why the agent can't use client tools. */
-  | { type: 'notice'; severity: 'info' | 'error'; title: string; detail?: string };
+  | { type: 'notice'; severity: 'info' | 'warning' | 'error'; title: string; detail?: string };
 
 /** A form elicitation. A mode this schema doesn't know is a plain string, so `mode` alone can't tell. */
 export type FormElicitation = CreateElicitationRequest & ElicitationFormMode & { mode: 'form' };
@@ -633,6 +633,15 @@ const reduceSessionUpdate = (
           cost: update.cost === undefined ? model.usage?.cost : update.cost,
         },
       };
+    // What the agent tells the person outside its own messages: a line in the transcript,
+    // as the Host's own notices are. A severity this client doesn't know reads as information.
+    case 'notice':
+      return appendEntry(model, {
+        kind: 'diagnostic',
+        severity: update.severity === 'warning' || update.severity === 'error' ? update.severity : 'info',
+        title: update.title,
+        ...(update.description ? { detail: update.description } : {}),
+      });
     case 'compaction_update':
       return upsertCompaction(model, update.compactionId, {
         status: update.status,
@@ -675,10 +684,11 @@ const lastReply = (model: AcpTranscript): string | undefined => {
   return undefined;
 };
 
-const stopDetail: Partial<Record<StopReason, string>> = {
+const stopDetail: Partial<Record<StopReason | 'error', string>> = {
   max_tokens: 'It reached its token limit',
   max_turn_requests: 'It reached its request limit',
   refusal: 'It refused to continue',
+  error: 'It failed',
 };
 
 /** The row for a subagent's change of work state, if it's one worth a row, as the TUI decides. */
@@ -693,7 +703,7 @@ const stateRow = (
       return wasIdle ? { event: 'resumed' } : undefined;
     case 'idle': {
       if (wasIdle) return undefined;
-      const stopReason = 'stopReason' in state ? state.stopReason as StopReason | null | undefined : undefined;
+      const stopReason = 'stopReason' in state ? state.stopReason as StopReason | 'error' | null | undefined : undefined;
       if (stopReason === 'end_turn') return { event: 'completed', ...(reply ? { detail: reply } : {}) };
       if (stopReason === 'cancelled') return { event: 'interrupted' };
       if (stopReason) return { event: 'stopped', detail: stopDetail[stopReason] ?? 'It stopped' };
@@ -758,11 +768,11 @@ const upsertSessionMessage = (
     });
   }
   const current = model.entries[index] as TranscriptSessionMessage;
-  // Who sent it and who it's for, once known, stay known.
+  // Who sent it and who it's for, once known, stay known until the agent clears them with null.
   return replaceEntry(model, index, {
     ...current,
-    senderSessionId: update.senderSessionId ?? current.senderSessionId,
-    recipientSessionId: update.recipientSessionId ?? current.recipientSessionId,
+    senderSessionId: update.senderSessionId === undefined ? current.senderSessionId : update.senderSessionId,
+    recipientSessionId: update.recipientSessionId === undefined ? current.recipientSessionId : update.recipientSessionId,
     content: content(current.content),
   });
 };

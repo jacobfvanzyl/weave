@@ -53,56 +53,57 @@ use std::sync::Mutex;
 use agent_client_protocol::Agent;
 use agent_client_protocol::Client;
 use agent_client_protocol::ConnectTo;
-use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v1::AgentAuthCapabilities;
-use agent_client_protocol::schema::v1::AgentCapabilities;
-use agent_client_protocol::schema::v1::AuthMethod;
-use agent_client_protocol::schema::v1::AuthMethodAgent;
-use agent_client_protocol::schema::v1::AuthMethodTerminal;
-use agent_client_protocol::schema::v1::AuthenticateRequest;
-use agent_client_protocol::schema::v1::AuthenticateResponse;
-use agent_client_protocol::schema::v1::AvailableCommand;
-use agent_client_protocol::schema::v1::AvailableCommandInput;
-use agent_client_protocol::schema::v1::AvailableCommandsUpdate;
-use agent_client_protocol::schema::v1::CancelNotification;
-use agent_client_protocol::schema::v1::CloseSessionRequest;
-use agent_client_protocol::schema::v1::CloseSessionResponse;
-use agent_client_protocol::schema::v1::ContentBlock;
-use agent_client_protocol::schema::v1::ContentChunk;
-use agent_client_protocol::schema::v1::DeleteSessionRequest;
-use agent_client_protocol::schema::v1::DeleteSessionResponse;
-use agent_client_protocol::schema::v1::Implementation;
-use agent_client_protocol::schema::v1::InitializeRequest;
-use agent_client_protocol::schema::v1::InitializeResponse;
-use agent_client_protocol::schema::v1::ListSessionsRequest;
-use agent_client_protocol::schema::v1::ListSessionsResponse;
-use agent_client_protocol::schema::v1::LoadSessionRequest;
-use agent_client_protocol::schema::v1::LoadSessionResponse;
-use agent_client_protocol::schema::v1::LogoutCapabilities;
-use agent_client_protocol::schema::v1::LogoutRequest;
-use agent_client_protocol::schema::v1::LogoutResponse;
-use agent_client_protocol::schema::v1::McpCapabilities;
-use agent_client_protocol::schema::v1::NewSessionRequest;
-use agent_client_protocol::schema::v1::NewSessionResponse;
-use agent_client_protocol::schema::v1::PromptCapabilities;
-use agent_client_protocol::schema::v1::PromptRequest;
-use agent_client_protocol::schema::v1::ResumeSessionRequest;
-use agent_client_protocol::schema::v1::ResumeSessionResponse;
-use agent_client_protocol::schema::v1::SessionAdditionalDirectoriesCapabilities;
-use agent_client_protocol::schema::v1::SessionCapabilities;
-use agent_client_protocol::schema::v1::SessionCloseCapabilities;
-use agent_client_protocol::schema::v1::SessionDeleteCapabilities;
-use agent_client_protocol::schema::v1::SessionId;
-use agent_client_protocol::schema::v1::SessionInfo;
-use agent_client_protocol::schema::v1::SessionListCapabilities;
-use agent_client_protocol::schema::v1::SessionResumeCapabilities;
-use agent_client_protocol::schema::v1::SessionUpdate;
-use agent_client_protocol::schema::v1::SetSessionConfigOptionRequest;
-use agent_client_protocol::schema::v1::SetSessionConfigOptionResponse;
-use agent_client_protocol::schema::v1::SetSessionModeRequest;
-use agent_client_protocol::schema::v1::SetSessionModeResponse;
-use agent_client_protocol::schema::v1::UnstructuredCommandInput;
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::AgentAuthCapabilities;
+use agent_client_protocol::v1::schema::AgentCapabilities;
+use agent_client_protocol::v1::schema::AuthMethod;
+use agent_client_protocol::v1::schema::AuthMethodAgent;
+use agent_client_protocol::v1::schema::AuthMethodTerminal;
+use agent_client_protocol::v1::schema::AuthenticateRequest;
+use agent_client_protocol::v1::schema::AuthenticateResponse;
+use agent_client_protocol::v1::schema::AvailableCommand;
+use agent_client_protocol::v1::schema::AvailableCommandInput;
+use agent_client_protocol::v1::schema::AvailableCommandsUpdate;
+use agent_client_protocol::v1::schema::CancelNotification;
+use agent_client_protocol::v1::schema::CloseSessionRequest;
+use agent_client_protocol::v1::schema::CloseSessionResponse;
+use agent_client_protocol::v1::schema::ContentBlock;
+use agent_client_protocol::v1::schema::ContentChunk;
+use agent_client_protocol::v1::schema::DeleteSessionRequest;
+use agent_client_protocol::v1::schema::DeleteSessionResponse;
+use agent_client_protocol::v1::schema::Error as SchemaError;
+use agent_client_protocol::v1::schema::Implementation;
+use agent_client_protocol::v1::schema::InitializeRequest;
+use agent_client_protocol::v1::schema::InitializeResponse;
+use agent_client_protocol::v1::schema::ListSessionsRequest;
+use agent_client_protocol::v1::schema::ListSessionsResponse;
+use agent_client_protocol::v1::schema::LoadSessionRequest;
+use agent_client_protocol::v1::schema::LoadSessionResponse;
+use agent_client_protocol::v1::schema::LogoutCapabilities;
+use agent_client_protocol::v1::schema::LogoutRequest;
+use agent_client_protocol::v1::schema::LogoutResponse;
+use agent_client_protocol::v1::schema::McpCapabilities;
+use agent_client_protocol::v1::schema::NewSessionRequest;
+use agent_client_protocol::v1::schema::NewSessionResponse;
+use agent_client_protocol::v1::schema::PromptCapabilities;
+use agent_client_protocol::v1::schema::PromptRequest;
+use agent_client_protocol::v1::schema::ResumeSessionRequest;
+use agent_client_protocol::v1::schema::ResumeSessionResponse;
+use agent_client_protocol::v1::schema::SessionAdditionalDirectoriesCapabilities;
+use agent_client_protocol::v1::schema::SessionCapabilities;
+use agent_client_protocol::v1::schema::SessionCloseCapabilities;
+use agent_client_protocol::v1::schema::SessionDeleteCapabilities;
+use agent_client_protocol::v1::schema::SessionId;
+use agent_client_protocol::v1::schema::SessionInfo;
+use agent_client_protocol::v1::schema::SessionListCapabilities;
+use agent_client_protocol::v1::schema::SessionResumeCapabilities;
+use agent_client_protocol::v1::schema::SessionUpdate;
+use agent_client_protocol::v1::schema::SetSessionConfigOptionRequest;
+use agent_client_protocol::v1::schema::SetSessionConfigOptionResponse;
+use agent_client_protocol::v1::schema::SetSessionModeRequest;
+use agent_client_protocol::v1::schema::SetSessionModeResponse;
+use agent_client_protocol::v1::schema::UnstructuredCommandInput;
 
 pub use crate::mcp::StdioMcp;
 pub use crate::mcp::StdioPipes;
@@ -211,7 +212,7 @@ pub async fn serve_with(
     let on_steer = Arc::clone(&state);
     let on_cancel = state;
     Agent
-        .builder()
+        .v1()
         .name("weave-fake-agent")
         .on_receive_request(
             async move |request: InitializeRequest, responder, _cx| {
@@ -353,9 +354,10 @@ pub async fn serve_with(
                     .stored(&request.session_id)
                     .map(|session| session.history.clone())
                 else {
-                    return responder.respond_with_error(Error::resource_not_found(Some(
-                        request.session_id.to_string(),
-                    )));
+                    return responder.respond_with_error(
+                        SchemaError::resource_not_found(Some(request.session_id.to_string()))
+                            .into(),
+                    );
                 };
                 // Replay everything before responding, as the protocol requires. Compactions
                 // go only to a client that asked for them.
@@ -389,9 +391,10 @@ pub async fn serve_with(
                     return responder.respond_with_error(error);
                 }
                 if state.stored(&request.session_id).is_none() {
-                    return responder.respond_with_error(Error::resource_not_found(Some(
-                        request.session_id.to_string(),
-                    )));
+                    return responder.respond_with_error(
+                        SchemaError::resource_not_found(Some(request.session_id.to_string()))
+                            .into(),
+                    );
                 }
                 let (modes, options) = state.open(&request.session_id, request.mcp_servers);
                 responder.respond(
@@ -628,6 +631,11 @@ fn advertise_commands(cx: &ConnectionTo<Client>, session_id: &SessionId) -> Resu
             Some("fail, to fail one"),
         ),
         command("compact", "Compact the context, keeping a summary", None),
+        command(
+            "notice",
+            "Tell the person something outside the conversation",
+            None,
+        ),
         command("delegate", "Delegate to two subagents", None),
         command(
             "delegate-legacy",

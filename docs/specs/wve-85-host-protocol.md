@@ -121,7 +121,7 @@ request with `unauthenticated`.
   "clientId": "c7",
   "host": {"version": "0.1.0", "pid": 4242, "startedAt": 1760180000000},
   "features": ["turn/steer"],
-  "acp": {"protocolVersion": 1, "unstable": ["session_compaction", "subagents"]}
+  "acp": {"protocolVersion": 1, "unstable": ["subagents"]}
 }}
 ```
 
@@ -237,7 +237,8 @@ The Host resolves an agent id exactly as the CLI does today. In order:
 3. an ACP registry agent, installed into the registry cache on first use, with the
    config's settings for it applied.
 
-Config settings for an agent (`env`, `fs`, `terminal`, `compaction`, `subagents`, `mode`)
+Config settings for an agent (`env`, `fs`, `terminal`, `compaction`, `notices`, `subagents`,
+`mode`)
 apply however it was found, as `Config::configure` does now. The Host advertises client
 services to the agent from these settings alone. What the attached clients can do doesn't
 affect it.
@@ -672,7 +673,7 @@ the thread, as when a closed thread is opened again. A client that remembers
 
 | `event.kind` | Fields | Written when |
 | --- | --- | --- |
-| `update` | `notification`: ACP `SessionNotification` | the agent sends `session/update` (for this thread or a subagent thread; `notification.sessionId` says which), or a client changes a mode or config option |
+| `update` | `notification`: ACP `SessionNotification` | the agent sends `session/update` (for this thread or a subagent thread; `notification.sessionId` says which), or a client changes a mode or config option. An agent's `notice` is journaled like the rest, so a client that attaches later still reads it, though the agent itself keeps none in its history |
 | `turnStarted` | `threadId`, `prompt`: ACP `ContentBlock[]`, `origin`, `queuedId?`, `turnId?`, `continues?` | a turn starts; `queuedId` names the queued prompt it started from, `turnId` the turn, `continues` the interrupted turn it continues |
 | `turnSteered` | `threadId`, `prompt`: ACP `ContentBlock[]`, `origin` | a steer joins the running turn (`turn/steer`) |
 | `turnEnded` | `threadId`, `response?`: ACP `PromptResponse`, `error?`: JSON-RPC error | a turn ends |

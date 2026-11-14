@@ -4,10 +4,10 @@
 
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::JsonRpcRequest;
-use agent_client_protocol::schema::v1::CreateElicitationRequest;
-use agent_client_protocol::schema::v1::CreateElicitationResponse;
-use agent_client_protocol::schema::v1::RequestPermissionRequest;
-use agent_client_protocol::schema::v1::RequestPermissionResponse;
+use agent_client_protocol::v1::schema::CreateElicitationRequest;
+use agent_client_protocol::v1::schema::CreateElicitationResponse;
+use agent_client_protocol::v1::schema::RequestPermissionRequest;
+use agent_client_protocol::v1::schema::RequestPermissionResponse;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;

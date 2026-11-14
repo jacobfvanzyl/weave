@@ -24,6 +24,7 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use weave_acp_core::Error;
 use weave_acp_core::MaybeUndefined;
 use weave_acp_core::schema::AvailableCommand;
 use weave_acp_core::schema::CompactionId;
@@ -36,9 +37,10 @@ use weave_acp_core::schema::ElicitationAction;
 use weave_acp_core::schema::ElicitationId;
 use weave_acp_core::schema::ElicitationMode;
 use weave_acp_core::schema::ElicitationScope;
-use weave_acp_core::schema::Error;
+use weave_acp_core::schema::IdleStopReason;
 use weave_acp_core::schema::ImageContent;
 use weave_acp_core::schema::MessageId;
+use weave_acp_core::schema::NoticeSeverity;
 use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::RequestPermissionOutcome;
 use weave_acp_core::schema::RequestPermissionResponse;
@@ -2047,7 +2049,7 @@ impl ChatWidget {
             self.push_subagent_event(&label, event);
         }
         if let StateUpdate::Idle(idle) = state
-            && idle.stop_reason == Some(StopReason::Cancelled)
+            && idle.stop_reason == Some(IdleStopReason::Cancelled)
         {
             let id = update.session_id.clone();
             self.cancel_requests_from(&id);
@@ -2083,8 +2085,8 @@ impl ChatWidget {
     fn message_entry(
         &mut self,
         id: &MessageId,
-        sender: Option<ThreadId>,
-        recipient: Option<ThreadId>,
+        sender: MaybeUndefined<ThreadId>,
+        recipient: MaybeUndefined<ThreadId>,
     ) -> &mut SessionMessageEntry {
         let index = match self.messages.iter().position(|entry| &entry.id == id) {
             Some(index) => index,
@@ -2100,12 +2102,16 @@ impl ChatWidget {
             }
         };
         let entry = &mut self.messages[index];
-        // Participants, once known, stay known.
-        if sender.is_some() {
-            entry.sender = sender;
+        // Participants, once known, stay known until the agent clears them with null.
+        match sender {
+            MaybeUndefined::Undefined => {}
+            MaybeUndefined::Null => entry.sender = None,
+            MaybeUndefined::Value(sender) => entry.sender = Some(sender),
         }
-        if recipient.is_some() {
-            entry.recipient = recipient;
+        match recipient {
+            MaybeUndefined::Undefined => {}
+            MaybeUndefined::Null => entry.recipient = None,
+            MaybeUndefined::Value(recipient) => entry.recipient = Some(recipient),
         }
         entry
     }
@@ -2129,8 +2135,8 @@ impl ChatWidget {
     fn append_session_message(&mut self, chunk: SessionMessageChunk) {
         let entry = self.message_entry(
             &chunk.message_id,
-            chunk.sender_session_id,
-            chunk.recipient_session_id,
+            MaybeUndefined::Undefined,
+            MaybeUndefined::Undefined,
         );
         entry.text.push_str(&content_text(&chunk.content));
         self.note_activity();
@@ -2365,6 +2371,16 @@ impl ChatWidget {
                 {
                     live.append(chunk.content);
                 }
+            }
+            SessionUpdate::Notice(notice) => {
+                let text = match &notice.description {
+                    Some(description) => format!("{}: {description}", notice.title),
+                    None => notice.title.clone(),
+                };
+                self.push_cell(match notice.severity {
+                    NoticeSeverity::Info => TranscriptCell::info(&text),
+                    _ => TranscriptCell::error(&text),
+                });
             }
             _ => {}
         }
@@ -6723,7 +6739,7 @@ mod tests {
 
         chat.handle_agent_event(update(SessionUpdate::SubagentUpdate(
             SubagentUpdate::new(robie).state(StateUpdate::Idle(
-                IdleStateUpdate::new().stop_reason(StopReason::EndTurn),
+                IdleStateUpdate::new().stop_reason(IdleStopReason::EndTurn),
             )),
         )));
         let rows = screen_rows(&chat, 60, 20);

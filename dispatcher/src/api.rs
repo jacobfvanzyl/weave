@@ -16,12 +16,12 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use agent_client_protocol::Builder;
 use agent_client_protocol::ByteStreams;
 use agent_client_protocol::ConnectTo;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::Responder;
-use agent_client_protocol::Role as _;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use serde_json::json;
@@ -595,8 +595,7 @@ async fn handlers(
     let on_offer_host = Arc::clone(connection);
     let on_watch_bots = Arc::clone(connection);
     let on_unwatch_bots = Arc::clone(connection);
-    let builder = Dispatcher
-        .builder()
+    let builder = Builder::new(Dispatcher)
         .name("weave-dispatcher")
         .on_receive_request(
             async move |request: DispatcherHelloRequest, responder: Responder<_>, _cx| {

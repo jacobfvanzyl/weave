@@ -11,8 +11,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use agent_client_protocol::Builder;
 use agent_client_protocol::ConnectionTo;
-use agent_client_protocol::Role as _;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use weave_dispatcher::Dispatcher;
@@ -185,8 +185,7 @@ async fn raw(url: &str) -> (ConnectionTo<DispatcherRole>, tokio::task::JoinHandl
         .expect("the WebSocket");
     let (cx_tx, cx_rx) = tokio::sync::oneshot::channel();
     let driver = tokio::spawn(async move {
-        let _ = DispatcherClient
-            .builder()
+        let _ = Builder::new(DispatcherClient)
             .connect_with(transport, async move |cx: ConnectionTo<DispatcherRole>| {
                 let _ = cx_tx.send(cx.clone());
                 cx.incoming_closed().await;
@@ -616,8 +615,7 @@ async fn a_client_that_proves_no_device_in_time_is_closed() {
         .expect("the WebSocket");
     let (cx_tx, cx_rx) = tokio::sync::oneshot::channel();
     let silent = tokio::spawn(async move {
-        let _ = DispatcherClient
-            .builder()
+        let _ = Builder::new(DispatcherClient)
             .connect_with(transport, async move |cx: ConnectionTo<DispatcherRole>| {
                 let _ = cx_tx.send(cx.clone());
                 cx.incoming_closed().await;

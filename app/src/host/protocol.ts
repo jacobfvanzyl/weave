@@ -63,10 +63,10 @@ export type Activity = ("idle" | "running") | "waiting";
 /**
  * A unique identifier for a conversation session between a client and agent.
  *
- * Sessions maintain their own context, conversation history, and state,
- * allowing multiple independent interactions with the same agent.
+ * Each session has its own context, conversation history, and state, so one
+ * agent can run several independent sessions.
  *
- * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+ * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SessionId".
@@ -191,18 +191,15 @@ export type FileKind = ("directory" | "file") | "other";
 /**
  * Content blocks represent displayable information in the Agent Client Protocol.
  *
- * They provide a structured way to handle various types of user-facing content—whether
- * it's text from language models, images for analysis, or embedded resources for context.
- *
  * Content blocks appear in:
  * - User prompts sent via `session/prompt`
  * - Language model output streamed through `session/update` notifications
  * - Progress updates and results from tool calls
  *
- * This structure is compatible with the Model Context Protocol (MCP), enabling
- * agents to seamlessly forward content from MCP tool outputs without transformation.
+ * This structure is compatible with the Model Context Protocol (MCP), so agents can
+ * forward content from MCP tool outputs without transformation.
  *
- * See protocol docs: [Content](https://agentclientprotocol.com/protocol/content)
+ * See protocol docs: [Content](https://agentclientprotocol.com/protocol/v1/content)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ContentBlock".
@@ -249,7 +246,6 @@ export type MethodNotFound = -32601;
 export type InvalidParams = -32602;
 /**
  * **Internal error**: Internal JSON-RPC error.
- * Reserved for implementation-defined server errors.
  */
 export type InternalError = -32603;
 /**
@@ -262,7 +258,7 @@ export type RequestCancelled = -32800;
  */
 export type AuthenticationRequired = -32000;
 /**
- * **Resource not found**: A given resource, such as a file, was not found.
+ * **Resource not found**: A given resource, such as a session or file, was not found.
  */
 export type ResourceNotFound = -32002;
 /**
@@ -284,7 +280,7 @@ export type EmbeddedResourceResource = TextResourceContents | BlobResourceConten
 /**
  * Reasons why an agent stops processing a prompt turn.
  *
- * See protocol docs: [Stop Reasons](https://agentclientprotocol.com/protocol/prompt-turn#stop-reasons)
+ * See protocol docs: [Stop Reasons](https://agentclientprotocol.com/protocol/v1/prompt-turn#stop-reasons)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "StopReason".
@@ -293,8 +289,9 @@ export type StopReason = "end_turn" | "max_tokens" | "max_turn_requests" | "refu
 /**
  * Predefined error codes for common JSON-RPC and ACP-specific errors.
  *
- * These codes follow the JSON-RPC 2.0 specification for standard errors
- * and use the reserved range (-32000 to -32099) for protocol-specific errors.
+ * Standard errors use the JSON-RPC 2.0 codes. ACP-specific errors use the JSON-RPC
+ * server-error range (-32000 to -32099), and request cancellation uses -32800 from the
+ * range LSP reserves (-32899 to -32800).
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ErrorCode".
@@ -315,7 +312,7 @@ export type ErrorCode =
  * Tool kinds help clients choose appropriate icons and optimize how they
  * display tool execution progress.
  *
- * See protocol docs: [Creating](https://agentclientprotocol.com/protocol/tool-calls#creating)
+ * See protocol docs: [Creating](https://agentclientprotocol.com/protocol/v1/tool-calls#creating)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ToolKind".
@@ -357,7 +354,7 @@ export type SessionConfigOption = {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -426,7 +423,7 @@ export type PendingRequest1 =
  *
  * Tool calls progress through different statuses during their lifecycle.
  *
- * See protocol docs: [Status](https://agentclientprotocol.com/protocol/tool-calls#status)
+ * See protocol docs: [Status](https://agentclientprotocol.com/protocol/v1/tool-calls#status)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ToolCallStatus".
@@ -438,7 +435,7 @@ export type ToolCallStatus = "pending" | "in_progress" | "completed" | "failed";
  * Tool calls can produce different types of content including
  * standard content blocks (text, images) or file diffs.
  *
- * See protocol docs: [Content](https://agentclientprotocol.com/protocol/tool-calls#content)
+ * See protocol docs: [Content](https://agentclientprotocol.com/protocol/v1/tool-calls#content)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ToolCallContent".
@@ -452,6 +449,9 @@ export type ToolCallContent =
     })
   | (Terminal & {
       type: "terminal";
+    })
+  | (SessionReference & {
+      type: "session";
     });
 /**
  * Request from the agent to elicit structured user input.
@@ -475,7 +475,7 @@ export type CreateElicitationRequest = {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -518,8 +518,8 @@ export type ElicitationSchemaType = "object";
  * Property schema for elicitation form fields.
  *
  * Each variant corresponds to a JSON Schema `"type"` value.
- * Single-select enums use the `String` variant with `enum` or `oneOf` set.
- * Multi-select enums use the `Array` variant.
+ * Single-select enums use `type: "string"` with `enum` or `oneOf` set.
+ * Multi-select enums use `type: "array"`.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ElicitationPropertySchema".
@@ -754,7 +754,7 @@ export type CreateElicitationResponse = {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -782,7 +782,7 @@ export type CreateElicitationResponse = {
     }
 );
 /**
- * Allowed wire representations for [`ElicitationContentValue`].
+ * Allowed wire representations for `ElicitationContentValue`.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ElicitationContentValue".
@@ -994,8 +994,8 @@ export type AvailableCommandInput = UnstructuredCommandInput;
  *
  * Current foreground-work state of a reusable child session.
  *
- * Each update is a whole-object snapshot. Idle does not terminate the child;
- * the parent can message it again, transitioning it back to running.
+ * Each update is a whole-object snapshot. Idle does not terminate the child.
+ * The parent can message it again, transitioning it back to running.
  * Background activity may still emit other session updates while idle.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -1022,11 +1022,64 @@ export type StateUpdate =
       [k: string]: unknown;
     };
 /**
+ * The child is ready to process another prompt.
+ *
+ * An omitted, `null`, or malformed `stopReason` means not reported.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "IdleStateUpdate".
+ */
+export type IdleStateUpdate = {
+  /**
+   * The _meta property is reserved by ACP for additional metadata.
+   * Implementations MUST NOT make assumptions about values at these keys.
+   * Optional. Omitted and `null` mean no metadata for this state snapshot.
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+  /**
+   * Why foreground work stopped. The value selects one of this type's variants, which may add fields of their own.
+   *
+   * Optional. Omitted or `null` both mean the agent is not reporting a stop reason; a malformed value is treated the same way.
+   *
+   * See protocol docs: [Current work state](https://agentclientprotocol.com/rfds/subagents#current-work-state)
+   */
+  stopReason?: string | null;
+} & (
+  | {
+      stopReason: "end_turn";
+    }
+  | {
+      stopReason: "max_tokens";
+    }
+  | {
+      stopReason: "max_turn_requests";
+    }
+  | {
+      stopReason: "refusal";
+    }
+  | {
+      stopReason: "cancelled";
+    }
+  | (ErrorStopReason & {
+      stopReason: "error";
+    })
+  | {
+      /**
+       * Unrecognized stop reason.
+       */
+      stopReason: string;
+      [k: string]: unknown;
+    }
+  | None
+);
+/**
  * Different types of updates that can be sent during session processing.
  *
  * These updates provide real-time feedback about the agent's progress.
  *
- * See protocol docs: [Agent Reports Output](https://agentclientprotocol.com/protocol/prompt-turn#3-agent-reports-output)
+ * See protocol docs: [Agent Reports Output](https://agentclientprotocol.com/protocol/v1/prompt-turn#3-agent-reports-output)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SessionUpdate".
@@ -1065,6 +1118,9 @@ export type SessionUpdate =
   | (UsageUpdate & {
       sessionUpdate: "usage_update";
     })
+  | (Notice & {
+      sessionUpdate: "notice";
+    })
   | (CompactionUpdate & {
       sessionUpdate: "compaction_update";
     })
@@ -1085,7 +1141,7 @@ export type SessionUpdate =
  *
  * Used to indicate the relative importance or urgency of different
  * tasks in the execution plan.
- * See protocol docs: [Plan Entries](https://agentclientprotocol.com/protocol/agent-plan#plan-entries)
+ * See protocol docs: [Plan Entries](https://agentclientprotocol.com/protocol/v1/agent-plan#plan-entries)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "PlanEntryPriority".
@@ -1095,17 +1151,20 @@ export type PlanEntryPriority = "high" | "medium" | "low";
  * Status of a plan entry in the execution flow.
  *
  * Tracks the lifecycle of each task from planning through completion.
- * See protocol docs: [Plan Entries](https://agentclientprotocol.com/protocol/agent-plan#plan-entries)
+ * See protocol docs: [Plan Entries](https://agentclientprotocol.com/protocol/v1/agent-plan#plan-entries)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "PlanEntryStatus".
  */
 export type PlanEntryStatus = "pending" | "in_progress" | "completed";
 /**
- * **UNSTABLE**
+ * Severity hint for a session notice.
  *
- * This capability is not part of the spec yet, and may be removed or changed at any point.
- *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "NoticeSeverity".
+ */
+export type NoticeSeverity = "info" | "warning" | "error" | string;
+/**
  * Unique identifier for a context compaction within a session.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -1113,10 +1172,6 @@ export type PlanEntryStatus = "pending" | "in_progress" | "completed";
  */
 export type CompactionId = string;
 /**
- * **UNSTABLE**
- *
- * This capability is not part of the spec yet, and may be removed or changed at any point.
- *
  * Lifecycle state of a context compaction.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -1614,7 +1669,7 @@ export interface SessionInfo {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -1757,7 +1812,7 @@ export interface SessionInfo1 {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -1872,7 +1927,7 @@ export interface GetAgentResponse {
  *
  * Contains the negotiated protocol version and agent capabilities.
  *
- * See protocol docs: [Initialization](https://agentclientprotocol.com/protocol/initialization)
+ * See protocol docs: [Initialization](https://agentclientprotocol.com/protocol/v1/initialization)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "InitializeResponse".
@@ -1904,7 +1959,7 @@ export interface InitializeResponse {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -1916,7 +1971,7 @@ export interface InitializeResponse {
  * Advertised during initialization to inform the client about
  * available features and content types.
  *
- * See protocol docs: [Agent Capabilities](https://agentclientprotocol.com/protocol/initialization#agent-capabilities)
+ * See protocol docs: [Agent Capabilities](https://agentclientprotocol.com/protocol/v1/initialization#agent-capabilities)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "AgentCapabilities".
@@ -1947,7 +2002,7 @@ export interface AgentCapabilities {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -1956,8 +2011,8 @@ export interface AgentCapabilities {
 /**
  * Prompt capabilities supported by the agent in `session/prompt` requests.
  *
- * Baseline agent functionality requires support for [`ContentBlock::Text`]
- * and [`ContentBlock::ResourceLink`] in prompt requests.
+ * Baseline agent functionality requires support for `text`
+ * and `resource_link` content blocks in prompt requests.
  *
  * Other variants must be explicitly opted in to.
  * Capabilities for different types of content in prompt requests.
@@ -1965,24 +2020,24 @@ export interface AgentCapabilities {
  * Indicates which content types beyond the baseline (text and resource links)
  * the agent can process.
  *
- * See protocol docs: [Prompt Capabilities](https://agentclientprotocol.com/protocol/initialization#prompt-capabilities)
+ * See protocol docs: [Prompt Capabilities](https://agentclientprotocol.com/protocol/v1/initialization#prompt-capabilities)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "PromptCapabilities".
  */
 export interface PromptCapabilities {
   /**
-   * Agent supports [`ContentBlock::Image`].
+   * Agent supports `image` content blocks.
    */
   image?: boolean;
   /**
-   * Agent supports [`ContentBlock::Audio`].
+   * Agent supports `audio` content blocks.
    */
   audio?: boolean;
   /**
    * Agent supports embedded context in `session/prompt` requests.
    *
-   * When enabled, the Client is allowed to include [`ContentBlock::Resource`]
+   * When enabled, the Client is allowed to include `resource` content blocks
    * in prompt requests for pieces of context that are referenced in the message.
    */
   embeddedContext?: boolean;
@@ -1991,7 +2046,7 @@ export interface PromptCapabilities {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2005,11 +2060,11 @@ export interface PromptCapabilities {
  */
 export interface McpCapabilities {
   /**
-   * Agent supports [`McpServer::Http`].
+   * Agent supports `http` MCP servers.
    */
   http?: boolean;
   /**
-   * Agent supports [`McpServer::Sse`].
+   * Agent supports `sse` MCP servers.
    */
   sse?: boolean;
   /**
@@ -2017,7 +2072,7 @@ export interface McpCapabilities {
    *
    * This capability is not part of the spec yet, and may be removed or changed at any point.
    *
-   * Agent supports [`McpServer::Acp`].
+   * Agent supports `acp` MCP servers.
    */
   acp?: boolean;
   /**
@@ -2025,7 +2080,7 @@ export interface McpCapabilities {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2038,9 +2093,9 @@ export interface McpCapabilities {
  *
  * Optionally, they **MAY** support other session methods and notifications by specifying additional capabilities.
  *
- * Note: `session/load` is still handled by the top-level `load_session` capability. This will be unified in future versions of the protocol.
+ * Note: `session/load` is still handled by the top-level `loadSession` capability. This will be unified in future versions of the protocol.
  *
- * See protocol docs: [Session Capabilities](https://agentclientprotocol.com/protocol/initialization#session-capabilities)
+ * See protocol docs: [Session Capabilities](https://agentclientprotocol.com/protocol/v1/initialization#session-capabilities)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SessionCapabilities".
@@ -2073,6 +2128,13 @@ export interface SessionCapabilities {
    */
   additionalDirectories?: SessionAdditionalDirectoriesCapabilities | null;
   /**
+   * Whether the agent supports `systemPrompt` on session lifecycle requests.
+   *
+   * Optional. Omitted or `null` both mean the agent does not advertise support.
+   * Supplying `{}` means the agent supports `systemPrompt` in `append` mode.
+   */
+  systemPrompt?: SessionSystemPromptCapabilities | null;
+  /**
    * Whether the agent supports `session/resume`.
    *
    * Optional. Omitted or `null` both mean the agent does not advertise support.
@@ -2091,7 +2153,7 @@ export interface SessionCapabilities {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2111,7 +2173,7 @@ export interface SessionListCapabilities {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2131,7 +2193,7 @@ export interface SessionDeleteCapabilities {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2154,7 +2216,84 @@ export interface SessionAdditionalDirectoriesCapabilities {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * Capabilities for client-provided system prompts.
+ *
+ * Supplying `{}` means the agent supports `systemPrompt` on session lifecycle
+ * requests in `append` mode.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SessionSystemPromptCapabilities".
+ */
+export interface SessionSystemPromptCapabilities {
+  /**
+   * Delivery modes the agent supports in addition to `append`.
+   *
+   * Optional. Omitted or `null` both mean the agent supports only `append`.
+   */
+  mode?: SessionSystemPromptModeCapabilities | null;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * System prompt delivery modes the agent supports in addition to `append`.
+ *
+ * `append` has no entry because every agent advertising
+ * `sessionCapabilities.systemPrompt` supports it.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SessionSystemPromptModeCapabilities".
+ */
+export interface SessionSystemPromptModeCapabilities {
+  /**
+   * Whether the agent supports `override` mode.
+   *
+   * Optional. Omitted or `null` both mean the agent does not advertise support.
+   * Supplying `{}` means the agent supports replacing its built-in default
+   * instructions with the client-provided system prompt.
+   */
+  override?: SessionSystemPromptOverrideCapabilities | null;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * Capabilities for the `override` system prompt mode.
+ *
+ * Supplying `{}` means the agent supports replacing its built-in default
+ * instructions with the client-provided system prompt.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SessionSystemPromptOverrideCapabilities".
+ */
+export interface SessionSystemPromptOverrideCapabilities {
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2174,7 +2313,7 @@ export interface SessionResumeCapabilities {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2194,7 +2333,7 @@ export interface SessionCloseCapabilities {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2219,7 +2358,7 @@ export interface AgentAuthCapabilities {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2239,7 +2378,7 @@ export interface LogoutCapabilities {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2251,7 +2390,7 @@ export interface LogoutCapabilities {
  * The client runs the configured agent program as a separate interactive
  * process for the user to authenticate via a TUI. Agents MUST advertise this
  * method only when the client enabled its terminal authentication capability.
- * A zero exit status signals success; any other termination signals failure.
+ * A zero exit status signals success. Any other termination signals failure.
  * The client MUST NOT pass this method to `authenticate`.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -2267,7 +2406,7 @@ export interface AuthMethodTerminal {
    */
   name: string;
   /**
-   * Optional description providing more details about this authentication method.
+   * Optional human-readable description of this authentication method.
    */
   description?: string | null;
   /**
@@ -2286,7 +2425,7 @@ export interface AuthMethodTerminal {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2307,7 +2446,7 @@ export interface AuthMethodAgent {
    */
   name: string;
   /**
-   * Optional description providing more details about this authentication method.
+   * Optional human-readable description of this authentication method.
    */
   description?: string | null;
   /**
@@ -2315,7 +2454,7 @@ export interface AuthMethodAgent {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2332,11 +2471,11 @@ export interface AuthMethodAgent {
 export interface Implementation {
   /**
    * Intended for programmatic or logical use, but can be used as a display
-   * name fallback if title isn’t present.
+   * name fallback if title isn't present.
    */
   name: string;
   /**
-   * Intended for UI and end-user contexts — optimized to be human-readable
+   * Intended for UI and end-user contexts and optimized to be human-readable
    * and easily understood.
    *
    * If not provided, the name should be used for display.
@@ -2352,7 +2491,7 @@ export interface Implementation {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2376,7 +2515,7 @@ export interface AuthMethodAgent1 {
    */
   name: string;
   /**
-   * Optional description providing more details about this authentication method.
+   * Optional human-readable description of this authentication method.
    */
   description?: string | null;
   /**
@@ -2384,7 +2523,7 @@ export interface AuthMethodAgent1 {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2689,7 +2828,7 @@ export interface TextContent {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2719,7 +2858,7 @@ export interface Annotations {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2753,7 +2892,7 @@ export interface ImageContent {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2783,7 +2922,7 @@ export interface AudioContent {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2829,7 +2968,7 @@ export interface ResourceLink {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2855,7 +2994,7 @@ export interface EmbeddedResource {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2882,7 +3021,7 @@ export interface TextResourceContents {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2909,7 +3048,7 @@ export interface BlobResourceContents {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -2918,7 +3057,7 @@ export interface BlobResourceContents {
 /**
  * Response from processing a user prompt.
  *
- * See protocol docs: [Check for Completion](https://agentclientprotocol.com/protocol/prompt-turn#4-check-for-completion)
+ * See protocol docs: [Check for Completion](https://agentclientprotocol.com/protocol/v1/prompt-turn#4-check-for-completion)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "PromptResponse".
@@ -2933,7 +3072,7 @@ export interface PromptResponse {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3002,7 +3141,7 @@ export interface TextResourceContents1 {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3032,7 +3171,7 @@ export interface BlobResourceContents1 {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3205,7 +3344,7 @@ export interface ThreadAgent {
  *
  * Contains the negotiated protocol version and agent capabilities.
  *
- * See protocol docs: [Initialization](https://agentclientprotocol.com/protocol/initialization)
+ * See protocol docs: [Initialization](https://agentclientprotocol.com/protocol/v1/initialization)
  */
 export interface InitializeResponse1 {
   /**
@@ -3234,7 +3373,7 @@ export interface InitializeResponse1 {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3274,7 +3413,7 @@ export interface SessionModeState {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3283,7 +3422,7 @@ export interface SessionModeState {
 /**
  * A mode the agent can operate in.
  *
- * See protocol docs: [Session Modes](https://agentclientprotocol.com/protocol/session-modes)
+ * See protocol docs: [Session Modes](https://agentclientprotocol.com/protocol/v1/session-modes)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SessionMode".
@@ -3306,7 +3445,7 @@ export interface SessionMode {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3352,7 +3491,7 @@ export interface SessionConfigSelectOption {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3382,7 +3521,7 @@ export interface SessionConfigSelectGroup {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3410,10 +3549,10 @@ export interface RunningTurn {
   /**
    * A unique identifier for a conversation session between a client and agent.
    *
-   * Sessions maintain their own context, conversation history, and state,
-   * allowing multiple independent interactions with the same agent.
+   * Each session has its own context, conversation history, and state, so one
+   * agent can run several independent sessions.
    *
-   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
    */
   threadId: string;
   startedAt: number;
@@ -3488,7 +3627,7 @@ export interface QueuedPrompt {
  *
  * Sent when the agent needs authorization before performing a sensitive operation.
  *
- * See protocol docs: [Requesting Permission](https://agentclientprotocol.com/protocol/tool-calls#requesting-permission)
+ * See protocol docs: [Requesting Permission](https://agentclientprotocol.com/protocol/v1/tool-calls#requesting-permission)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "RequestPermissionRequest".
@@ -3497,10 +3636,10 @@ export interface RequestPermissionRequest {
   /**
    * A unique identifier for a conversation session between a client and agent.
    *
-   * Sessions maintain their own context, conversation history, and state,
-   * allowing multiple independent interactions with the same agent.
+   * Each session has its own context, conversation history, and state, so one
+   * agent can run several independent sessions.
    *
-   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
    */
   sessionId: string;
   toolCall: ToolCallUpdate;
@@ -3513,7 +3652,7 @@ export interface RequestPermissionRequest {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3571,7 +3710,7 @@ export interface ToolCallUpdate {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3587,18 +3726,15 @@ export interface Content {
   /**
    * Content blocks represent displayable information in the Agent Client Protocol.
    *
-   * They provide a structured way to handle various types of user-facing content—whether
-   * it's text from language models, images for analysis, or embedded resources for context.
-   *
    * Content blocks appear in:
    * - User prompts sent via `session/prompt`
    * - Language model output streamed through `session/update` notifications
    * - Progress updates and results from tool calls
    *
-   * This structure is compatible with the Model Context Protocol (MCP), enabling
-   * agents to seamlessly forward content from MCP tool outputs without transformation.
+   * This structure is compatible with the Model Context Protocol (MCP), so agents can
+   * forward content from MCP tool outputs without transformation.
    *
-   * See protocol docs: [Content](https://agentclientprotocol.com/protocol/content)
+   * See protocol docs: [Content](https://agentclientprotocol.com/protocol/v1/content)
    */
   content:
     | (TextContent & {
@@ -3621,7 +3757,7 @@ export interface Content {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3632,7 +3768,7 @@ export interface Content {
  *
  * Shows changes to files in a format suitable for display in the client UI.
  *
- * See protocol docs: [Content](https://agentclientprotocol.com/protocol/tool-calls#content)
+ * See protocol docs: [Content](https://agentclientprotocol.com/protocol/v1/tool-calls#content)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "Diff".
@@ -3643,7 +3779,7 @@ export interface Diff {
    */
   path: string;
   /**
-   * The original content (None for new files).
+   * The original content (omitted or `null` for new files).
    */
   oldText?: string | null;
   /**
@@ -3655,7 +3791,7 @@ export interface Diff {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3666,7 +3802,7 @@ export interface Diff {
  *
  * The terminal must be added before calling `terminal/release`.
  *
- * See protocol docs: [Terminal](https://agentclientprotocol.com/protocol/terminals)
+ * See protocol docs: [Terminal](https://agentclientprotocol.com/protocol/v1/terminals)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "Terminal".
@@ -3681,7 +3817,44 @@ export interface Terminal {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * **UNSTABLE**
+ *
+ * This capability is not part of the spec yet, and may be removed or changed at any point.
+ *
+ * A display-only reference to another session that this tool call operates on,
+ * such as a subagent it created, delegated to, or is waiting on.
+ *
+ * The referenced session must already be known to the Client through ordinary
+ * session setup or a `subagent_update` announcement. The reference does not
+ * establish ownership, grant any Client-initiated controls, or report that the
+ * referenced session received or finished any work.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SessionReference".
+ */
+export interface SessionReference {
+  /**
+   * A unique identifier for a conversation session between a client and agent.
+   *
+   * Each session has its own context, conversation history, and state, so one
+   * agent can run several independent sessions.
+   *
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
+   */
+  sessionId: string;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3693,7 +3866,7 @@ export interface Terminal {
  * Enables clients to implement "follow-along" features that track
  * which files the agent is working with in real-time.
  *
- * See protocol docs: [Following the Agent](https://agentclientprotocol.com/protocol/tool-calls#following-the-agent)
+ * See protocol docs: [Following the Agent](https://agentclientprotocol.com/protocol/v1/tool-calls#following-the-agent)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ToolCallLocation".
@@ -3704,7 +3877,7 @@ export interface ToolCallLocation {
    */
   path: string;
   /**
-   * Optional line number within the file.
+   * Optional 1-based line number within the file.
    */
   line?: number | null;
   /**
@@ -3712,7 +3885,7 @@ export interface ToolCallLocation {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3742,7 +3915,7 @@ export interface PermissionOption {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3787,7 +3960,7 @@ export interface ElicitationSchema {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3864,7 +4037,7 @@ export interface StringPropertySchema {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3898,7 +4071,7 @@ export interface EnumOption {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3948,7 +4121,7 @@ export interface NumberPropertySchema {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -3998,7 +4171,7 @@ export interface IntegerPropertySchema {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -4036,7 +4209,7 @@ export interface BooleanPropertySchema {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -4105,7 +4278,7 @@ export interface MultiSelectPropertySchema {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -4129,7 +4302,7 @@ export interface StringMultiSelectItems {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -4137,6 +4310,8 @@ export interface StringMultiSelectItems {
 }
 /**
  * Titled multi-select items with human-readable labels.
+ *
+ * As in MCP, titled items omit `type` and are identified by `anyOf`.
  */
 export interface TitledMultiSelectItems {
   /**
@@ -4150,7 +4325,7 @@ export interface TitledMultiSelectItems {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -4163,10 +4338,10 @@ export interface ElicitationSessionScope {
   /**
    * A unique identifier for a conversation session between a client and agent.
    *
-   * Sessions maintain their own context, conversation history, and state,
-   * allowing multiple independent interactions with the same agent.
+   * Each session has its own context, conversation history, and state, so one
+   * agent can run several independent sessions.
    *
-   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
    */
   sessionId: string;
   /**
@@ -4194,10 +4369,10 @@ export interface ElicitationSessionScope1 {
   /**
    * A unique identifier for a conversation session between a client and agent.
    *
-   * Sessions maintain their own context, conversation history, and state,
-   * allowing multiple independent interactions with the same agent.
+   * Each session has its own context, conversation history, and state, so one
+   * agent can run several independent sessions.
    *
-   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
    */
   sessionId: string;
   /**
@@ -4225,10 +4400,10 @@ export interface ElicitationSessionScope2 {
   /**
    * A unique identifier for a conversation session between a client and agent.
    *
-   * Sessions maintain their own context, conversation history, and state,
-   * allowing multiple independent interactions with the same agent.
+   * Each session has its own context, conversation history, and state, so one
+   * agent can run several independent sessions.
    *
-   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
    */
   sessionId: string;
   /**
@@ -4308,7 +4483,7 @@ export interface AgentUpdate {
  * Used to report progress and results as tools execute. All fields except
  * the tool call ID are optional - only changed fields need to be included.
  *
- * See protocol docs: [Updating](https://agentclientprotocol.com/protocol/tool-calls#updating)
+ * See protocol docs: [Updating](https://agentclientprotocol.com/protocol/v1/tool-calls#updating)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ToolCallUpdate".
@@ -4362,7 +4537,7 @@ export interface ToolCallUpdate1 {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -4371,7 +4546,7 @@ export interface ToolCallUpdate1 {
 /**
  * Session-scoped elicitation, optionally tied to a specific tool call.
  *
- * When `tool_call_id` is set, the elicitation is tied to a specific tool call.
+ * When `toolCallId` is set, the elicitation is tied to a specific tool call.
  * This is useful when an agent receives an elicitation from an MCP server
  * during a tool call and needs to redirect it to the user.
  *
@@ -4382,10 +4557,10 @@ export interface ElicitationSessionScope3 {
   /**
    * A unique identifier for a conversation session between a client and agent.
    *
-   * Sessions maintain their own context, conversation history, and state,
-   * allowing multiple independent interactions with the same agent.
+   * Each session has its own context, conversation history, and state, so one
+   * agent can run several independent sessions.
    *
-   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
    */
   sessionId: string;
   /**
@@ -4454,7 +4629,7 @@ export interface ElicitationSchema1 {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -4478,7 +4653,7 @@ export interface TitledMultiSelectItems1 {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -4678,7 +4853,7 @@ export interface SetSessionConfigOptionResponse {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -4962,10 +5137,10 @@ export interface AddQueuedRequest {
   /**
    * A unique identifier for a conversation session between a client and agent.
    *
-   * Sessions maintain their own context, conversation history, and state,
-   * allowing multiple independent interactions with the same agent.
+   * Each session has its own context, conversation history, and state, so one
+   * agent can run several independent sessions.
    *
-   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
    */
   threadId: string;
   prompt: ContentBlock[];
@@ -5071,7 +5246,7 @@ export interface RequestPermissionResponse {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -5093,7 +5268,7 @@ export interface SelectedPermissionOutcome {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6004,10 +6179,10 @@ export interface ThreadEventNotification {
   /**
    * A unique identifier for a conversation session between a client and agent.
    *
-   * Sessions maintain their own context, conversation history, and state,
-   * allowing multiple independent interactions with the same agent.
+   * Each session has its own context, conversation history, and state, so one
+   * agent can run several independent sessions.
    *
-   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
    */
   threadId: string;
   /**
@@ -6022,7 +6197,7 @@ export interface ThreadEventNotification {
  *
  * Used to stream real-time progress and results during prompt processing.
  *
- * See protocol docs: [Agent Reports Output](https://agentclientprotocol.com/protocol/prompt-turn#3-agent-reports-output)
+ * See protocol docs: [Agent Reports Output](https://agentclientprotocol.com/protocol/v1/prompt-turn#3-agent-reports-output)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SessionNotification".
@@ -6031,10 +6206,10 @@ export interface SessionNotification {
   /**
    * A unique identifier for a conversation session between a client and agent.
    *
-   * Sessions maintain their own context, conversation history, and state,
-   * allowing multiple independent interactions with the same agent.
+   * Each session has its own context, conversation history, and state, so one
+   * agent can run several independent sessions.
    *
-   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
    */
   sessionId: string;
   /**
@@ -6074,6 +6249,9 @@ export interface SessionNotification {
     | (UsageUpdate & {
         sessionUpdate: "usage_update";
       })
+    | (Notice & {
+        sessionUpdate: "notice";
+      })
     | (CompactionUpdate & {
         sessionUpdate: "compaction_update";
       })
@@ -6094,7 +6272,7 @@ export interface SessionNotification {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6110,18 +6288,15 @@ export interface ContentChunk {
   /**
    * Content blocks represent displayable information in the Agent Client Protocol.
    *
-   * They provide a structured way to handle various types of user-facing content—whether
-   * it's text from language models, images for analysis, or embedded resources for context.
-   *
    * Content blocks appear in:
    * - User prompts sent via `session/prompt`
    * - Language model output streamed through `session/update` notifications
    * - Progress updates and results from tool calls
    *
-   * This structure is compatible with the Model Context Protocol (MCP), enabling
-   * agents to seamlessly forward content from MCP tool outputs without transformation.
+   * This structure is compatible with the Model Context Protocol (MCP), so agents can
+   * forward content from MCP tool outputs without transformation.
    *
-   * See protocol docs: [Content](https://agentclientprotocol.com/protocol/content)
+   * See protocol docs: [Content](https://agentclientprotocol.com/protocol/v1/content)
    */
   content:
     | (TextContent & {
@@ -6151,7 +6326,7 @@ export interface ContentChunk {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6163,7 +6338,7 @@ export interface ContentChunk {
  * Tool calls are actions that the agent executes on behalf of the language model,
  * such as reading files, executing code, or fetching data from external sources.
  *
- * See protocol docs: [Tool Calls](https://agentclientprotocol.com/protocol/tool-calls)
+ * See protocol docs: [Tool Calls](https://agentclientprotocol.com/protocol/v1/tool-calls)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ToolCall".
@@ -6219,7 +6394,7 @@ export interface ToolCall {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6232,7 +6407,7 @@ export interface ToolCall {
  * Agents report plans to clients to provide visibility into their execution strategy.
  * Plans can evolve during execution as the agent discovers new requirements or completes tasks.
  *
- * See protocol docs: [Agent Plan](https://agentclientprotocol.com/protocol/agent-plan)
+ * See protocol docs: [Agent Plan](https://agentclientprotocol.com/protocol/v1/agent-plan)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "Plan".
@@ -6250,7 +6425,7 @@ export interface Plan {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6261,7 +6436,7 @@ export interface Plan {
  *
  * Represents a task or goal that the assistant intends to accomplish
  * as part of fulfilling the user's request.
- * See protocol docs: [Plan Entries](https://agentclientprotocol.com/protocol/agent-plan#plan-entries)
+ * See protocol docs: [Plan Entries](https://agentclientprotocol.com/protocol/v1/agent-plan#plan-entries)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "PlanEntry".
@@ -6285,7 +6460,7 @@ export interface PlanEntry {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6307,7 +6482,7 @@ export interface AvailableCommandsUpdate {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6337,7 +6512,7 @@ export interface AvailableCommand {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6356,7 +6531,7 @@ export interface UnstructuredCommandInput {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6365,7 +6540,7 @@ export interface UnstructuredCommandInput {
 /**
  * The current mode of the session has changed
  *
- * See protocol docs: [Session Modes](https://agentclientprotocol.com/protocol/session-modes)
+ * See protocol docs: [Session Modes](https://agentclientprotocol.com/protocol/v1/session-modes)
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "CurrentModeUpdate".
@@ -6380,7 +6555,7 @@ export interface CurrentModeUpdate {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6402,7 +6577,7 @@ export interface ConfigOptionUpdate {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6412,7 +6587,7 @@ export interface ConfigOptionUpdate {
  * Update to session metadata. All fields are optional to support partial updates.
  *
  * Agents send this notification to update session information like title or custom metadata.
- * This allows clients to display dynamic session names and track session state changes.
+ * Clients can use it to keep session titles and state current.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SessionInfoUpdate".
@@ -6431,7 +6606,7 @@ export interface SessionInfoUpdate {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6461,7 +6636,7 @@ export interface UsageUpdate {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6479,7 +6654,8 @@ export interface Cost {
    */
   amount: number;
   /**
-   * ISO 4217 currency code (e.g., "USD", "EUR").
+   * Unit of `amount`: an ISO 4217 currency code (e.g., "USD", "EUR") for money, or another
+   * unit such as "credits".
    */
   currency: string;
   /**
@@ -6487,26 +6663,59 @@ export interface Cost {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
   } | null;
 }
 /**
- * **UNSTABLE**
+ * Fire-and-forget information for the user.
  *
- * This capability is not part of the spec yet, and may be removed or changed at any point.
+ * Notices are live events rather than session history. Agents must not rely on
+ * a notice being received, displayed, or seen by the user.
+ * Agents MUST only send notices when the Client advertised
+ * the `session.notices` Client capability. Otherwise, Agents may use an agent
+ * message when the information should still be surfaced to the user.
  *
- * A context compaction upsert. The first update fixes the compaction's
+ * See RFD: [Session Notices](https://agentclientprotocol.com/rfds/session-notices)
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Notice".
+ */
+export interface Notice {
+  /**
+   * Presentation severity hint.
+   */
+  severity: "info" | "warning" | "error" | string;
+  /**
+   * Required non-empty plain-text title that can stand alone.
+   */
+  title: string;
+  /**
+   * Optional plain-text detail or guidance.
+   *
+   * Omitted and `null` are equivalent and mean no description was supplied.
+   */
+  description?: string | null;
+  /**
+   * Metadata scoped to this notice.
+   *
+   * Omitted and `null` are equivalent and mean no metadata was supplied.
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * A context compaction upsert. The first notification fixes the compaction's
  * timeline position. Later updates with the same ID patch that entity in place.
  * Agents MUST only send this update when the Client advertised
- * [`ClientSessionCapabilities::compaction`].
+ * the `session.compaction` Client capability.
  *
  * `summary`, `error`, and `_meta` have patch semantics: omission leaves the
  * stored value unchanged, `null` clears it, and a concrete value replaces it.
- * `summary: []` also clears the retained summary. A non-empty summary is only
- * valid with `completed`; `error` is only valid with `failed`.
+ * `summary: []` also clears the summary.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "CompactionUpdate".
@@ -6521,11 +6730,11 @@ export interface CompactionUpdate {
    */
   status: "in_progress" | "completed" | "failed" | "cancelled" | string;
   /**
-   * Complete replacement user-displayable summary retained by the compaction.
+   * Complete replacement user-displayable summary content for the compaction.
    */
   summary?: ContentBlock[] | null;
   /**
-   * Human-readable description of why the compaction failed.
+   * Human-readable error details for the compaction.
    */
   error?: string | null;
   /**
@@ -6536,14 +6745,10 @@ export interface CompactionUpdate {
   } | null;
 }
 /**
- * **UNSTABLE**
- *
- * This capability is not part of the spec yet, and may be removed or changed at any point.
- *
- * A content block appended to the retained summary of an in-progress
- * compaction. Agents send chunks only after an `in_progress` update and before
- * the terminal update for the same ID. Agents MUST only send this update when
- * the Client advertised [`ClientSessionCapabilities::compaction`].
+ * A content block appended to a compaction's summary. A first-seen ID creates
+ * an in-progress compaction. Chunks append in receive order.
+ * Agents MUST only send this update when the Client advertised
+ * the `session.compaction` Client capability.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "CompactionSummaryChunk".
@@ -6556,18 +6761,15 @@ export interface CompactionSummaryChunk {
   /**
    * Content blocks represent displayable information in the Agent Client Protocol.
    *
-   * They provide a structured way to handle various types of user-facing content—whether
-   * it's text from language models, images for analysis, or embedded resources for context.
-   *
    * Content blocks appear in:
    * - User prompts sent via `session/prompt`
    * - Language model output streamed through `session/update` notifications
    * - Progress updates and results from tool calls
    *
-   * This structure is compatible with the Model Context Protocol (MCP), enabling
-   * agents to seamlessly forward content from MCP tool outputs without transformation.
+   * This structure is compatible with the Model Context Protocol (MCP), so agents can
+   * forward content from MCP tool outputs without transformation.
    *
-   * See protocol docs: [Content](https://agentclientprotocol.com/protocol/content)
+   * See protocol docs: [Content](https://agentclientprotocol.com/protocol/v1/content)
    */
   content:
     | (TextContent & {
@@ -6602,20 +6804,22 @@ export interface CompactionSummaryChunk {
  * Later updates modify the existing association's metadata, not its ownership.
  *
  * Sent on the immediate parent session. The first update for an unknown
- * [`SubagentUpdate::session_id`] announces the child and MUST be sent
+ * `sessionId` announces the child and MUST be sent
  * before any live child traffic or live message naming the child as sender
  * or recipient. Parents may message and reuse an announced child across
  * multiple operations.
- * Child events are delivered automatically on the same connection; no child
+ * Child events are delivered automatically on the same connection. No child
  * load, resume, or subscription is needed.
  *
  * Only the subagent session ID is required. Omitted patch fields keep their
- * previous values; `null` clears them. Clearing capabilities disables child
+ * previous values. `null` clears them. Clearing capabilities disables child
  * mutations. Clearing state leaves current activity unset/unconfirmed: it does
  * not imply idle, stop work, or create an `unknown` state snapshot. A concrete
  * state replaces the entire previous state object, not the session.
  * The title and description provide the parent's display metadata for the
  * child. They do not replace the content of individual messages or operations.
+ * `cwd` and `additionalDirectories` report where the Agent placed the child.
+ * While unset, each inherits the immediate parent's effective value.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SubagentUpdate".
@@ -6624,23 +6828,23 @@ export interface SubagentUpdate {
   /**
    * A unique identifier for a conversation session between a client and agent.
    *
-   * Sessions maintain their own context, conversation history, and state,
-   * allowing multiple independent interactions with the same agent.
+   * Each session has its own context, conversation history, and state, so one
+   * agent can run several independent sessions.
    *
-   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
    */
   sessionId: string;
   /**
    * The parent's human-readable display title for this child. It need not be unique.
    *
-   * Omitted means unchanged; `null` clears it. If unset, the Client chooses
+   * Omitted means unchanged. `null` clears it. If unset, the Client chooses
    * a fallback presentation.
    */
   title?: string | null;
   /**
    * The parent's human-readable description of the child's role or purpose.
    *
-   * Omitted means unchanged; `null` clears it. If unset, the Client chooses
+   * Omitted means unchanged. `null` clears it. If unset, the Client chooses
    * a fallback presentation. This is current display metadata, not the
    * history of instructions sent to the child.
    */
@@ -6648,7 +6852,7 @@ export interface SubagentUpdate {
   /**
    * Client-initiated session mutations permitted for this subagent session.
    *
-   * Omitted means unchanged; `null` clears the capability set and disables
+   * Omitted means unchanged. `null` clears the capability set and disables
    * child mutations. If never supplied, no session mutations are permitted.
    * Read-only operations retain their normal protocol semantics and capability
    * requirements. A concrete object replaces the whole capability set.
@@ -6657,19 +6861,38 @@ export interface SubagentUpdate {
   /**
    * Current state snapshot for the child session.
    *
-   * Omitted means unchanged; `null` clears the current activity without
+   * Omitted means unchanged. `null` clears the current activity without
    * asserting idle or sending an `unknown` snapshot. A concrete state
    * replaces the previous state object wholesale. If never supplied, the
    * current activity is unset/unconfirmed.
    */
   state?: StateUpdate | null;
   /**
+   * The child's working directory. Must be an absolute path.
+   *
+   * Optional and nullable. Omitted means unchanged. `null` clears the
+   * reported value. While unset, the child inherits its immediate parent's
+   * effective working directory. Clients use this value for the child's
+   * root set and as the default terminal working directory.
+   */
+  cwd?: string | null;
+  /**
+   * Additional workspace roots for the child. Each path must be absolute.
+   *
+   * Optional and nullable. Omitted means unchanged. `null` clears the
+   * reported value. While unset, the child inherits its immediate parent's
+   * effective additional directories, independently of `cwd`. A concrete
+   * array replaces the whole list. `[]` reports no additional directories.
+   * Clients use these values for the child's root set.
+   */
+  additionalDirectories?: string[] | null;
+  /**
    * The _meta property is reserved by ACP to allow clients and agents to attach additional
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   * Omitted means unchanged; `null` removes the metadata.
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
+   * Omitted means unchanged. `null` removes the metadata.
    */
   _meta?: {
     [k: string]: unknown;
@@ -6682,7 +6905,7 @@ export interface SubagentUpdate {
  *
  * Client-initiated session mutations permitted for a specific subagent session.
  *
- * A mutation requires an explicit per-child capability; support for the method
+ * A mutation requires an explicit per-child capability. Support for the method
  * on ordinary sessions does not grant support on a child.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -6691,7 +6914,7 @@ export interface SubagentUpdate {
 export interface SubagentSessionCapabilities {
   /**
    * Permits the client to cancel this child's current work without ending
-   * the session. Omitted or `null` means unsupported; an object (including
+   * the session. Omitted or `null` means unsupported. An object (including
    * `{}`) means supported.
    */
   cancel?: SessionCancelCapabilities | null;
@@ -6711,7 +6934,7 @@ export interface SubagentSessionCapabilities {
  *
  * Capability to cancel work in a subagent session without ending that session.
  *
- * Supplying `{}` advertises support; an omitted or `null` `cancel` does not.
+ * Supplying `{}` advertises support. An omitted or `null` `cancel` does not.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SessionCancelCapabilities".
@@ -6722,7 +6945,7 @@ export interface SessionCancelCapabilities {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6738,31 +6961,36 @@ export interface RunningStateUpdate {
   /**
    * The _meta property is reserved by ACP for additional metadata.
    * Implementations MUST NOT make assumptions about values at these keys.
-   * Optional; omitted and `null` mean no metadata for this state snapshot.
+   * Optional. Omitted and `null` mean no metadata for this state snapshot.
    */
   _meta?: {
     [k: string]: unknown;
   } | null;
 }
 /**
- * The child is ready to process another prompt.
+ * **UNSTABLE**
+ *
+ * This capability is not part of the spec yet, and may be removed or changed at any point.
+ *
+ * Details of a failure that ended a child's foreground work.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "IdleStateUpdate".
+ * via the `definition` "ErrorStopReason".
  */
-export interface IdleStateUpdate {
+export interface ErrorStopReason {
   /**
-   * Reason foreground work stopped. Optional; omitted or `null` means not reported.
+   * The failure, as a JSON-RPC error object.
+   *
+   * Optional. Omitted or `null` both mean the agent is not reporting failure details.
+   * Agents SHOULD include it.
    */
-  stopReason?: StopReason | null;
-  /**
-   * The _meta property is reserved by ACP for additional metadata.
-   * Implementations MUST NOT make assumptions about values at these keys.
-   * Optional; omitted and `null` mean no metadata for this state snapshot.
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
+  error?: Error | null;
+}
+/**
+ * No stop reason: `stopReason` is omitted or `null`.
+ */
+export interface None {
+  stopReason?: null;
 }
 /**
  * Foreground work is blocked on user action.
@@ -6774,7 +7002,7 @@ export interface RequiresActionStateUpdate {
   /**
    * The _meta property is reserved by ACP for additional metadata.
    * Implementations MUST NOT make assumptions about values at these keys.
-   * Optional; omitted and `null` mean no metadata for this state snapshot.
+   * Optional. Omitted and `null` mean no metadata for this state snapshot.
    */
   _meta?: {
     [k: string]: unknown;
@@ -6793,7 +7021,7 @@ export interface RequiresActionStateUpdate {
  * snapshot normally.
  *
  * This is not a task outcome or session closure. It does not cancel work, resolve
- * pending requests, or revoke capabilities; capabilities are updated separately.
+ * pending requests, or revoke capabilities. Capabilities are updated separately.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "UnknownStateUpdate".
@@ -6802,7 +7030,7 @@ export interface UnknownStateUpdate {
   /**
    * The _meta property is reserved by ACP for additional metadata.
    * Implementations MUST NOT make assumptions about values at these keys.
-   * Optional; omitted and `null` mean no metadata for this state snapshot.
+   * Optional. Omitted and `null` mean no metadata for this state snapshot.
    */
   _meta?: {
     [k: string]: unknown;
@@ -6824,20 +7052,40 @@ export interface SessionMessage {
    */
   messageId: string;
   /**
-   * Optional sending session identity; omission or `null` retains a known value.
+   * The sending session.
+   *
+   * Omitted leaves the stored value unchanged. `null` clears it. A value replaces it.
    */
   senderSessionId?: SessionId | null;
   /**
-   * Optional receiving session identity; omission or `null` retains a known value.
+   * The receiving session.
+   *
+   * Omitted leaves the stored value unchanged. `null` clears it. A value replaces it.
    */
   recipientSessionId?: SessionId | null;
   /**
-   * Omitted leaves content unchanged; `null` or `[]` clears it.
+   * On an incoming view, the `messageId` of the same message's outgoing view in the
+   * sender's transcript.
+   *
+   * Omitted leaves the stored value unchanged. `null` clears it. A value replaces it. It can arrive
+   * after the message starts streaming.
+   */
+  senderMessageId?: MessageId | null;
+  /**
+   * On an outgoing view, the `messageId` of the same message's incoming view in the
+   * recipient's transcript.
+   *
+   * Omitted leaves the stored value unchanged. `null` clears it. A value replaces it. It can arrive
+   * after the message starts streaming.
+   */
+  recipientMessageId?: MessageId | null;
+  /**
+   * Omitted leaves content unchanged. `null` or `[]` clears it.
    * A non-empty array replaces all content.
    */
   content?: ContentBlock[] | null;
   /**
-   * Omitted leaves metadata unchanged; `null` removes it.
+   * Omitted leaves metadata unchanged. `null` removes it.
    *
    * Implementations MUST NOT make assumptions about values in `_meta`.
    */
@@ -6852,6 +7100,9 @@ export interface SessionMessage {
  *
  * A streamed content block of an inter-session message.
  *
+ * A chunk carries only content. The message's participants and references come from
+ * `session_message` upserts, which can arrive before, between, or after its chunks.
+ *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SessionMessageChunk".
  */
@@ -6861,28 +7112,17 @@ export interface SessionMessageChunk {
    */
   messageId: string;
   /**
-   * Optional sending session identity; omission or `null` retains a known value.
-   */
-  senderSessionId?: SessionId | null;
-  /**
-   * Optional receiving session identity; omission or `null` retains a known value.
-   */
-  recipientSessionId?: SessionId | null;
-  /**
    * Content blocks represent displayable information in the Agent Client Protocol.
-   *
-   * They provide a structured way to handle various types of user-facing content—whether
-   * it's text from language models, images for analysis, or embedded resources for context.
    *
    * Content blocks appear in:
    * - User prompts sent via `session/prompt`
    * - Language model output streamed through `session/update` notifications
    * - Progress updates and results from tool calls
    *
-   * This structure is compatible with the Model Context Protocol (MCP), enabling
-   * agents to seamlessly forward content from MCP tool outputs without transformation.
+   * This structure is compatible with the Model Context Protocol (MCP), so agents can
+   * forward content from MCP tool outputs without transformation.
    *
-   * See protocol docs: [Content](https://agentclientprotocol.com/protocol/content)
+   * See protocol docs: [Content](https://agentclientprotocol.com/protocol/v1/content)
    */
   content:
     | (TextContent & {
@@ -6901,7 +7141,7 @@ export interface SessionMessageChunk {
         type: "resource";
       });
   /**
-   * Optional and nullable chunk-scoped metadata; omitted or `null` means none.
+   * Optional and nullable chunk-scoped metadata. Omitted or `null` means none.
    *
    * Implementations MUST NOT make assumptions about values in `_meta`.
    */
@@ -6929,7 +7169,7 @@ export interface TerminalExitStatus {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -6951,7 +7191,7 @@ export interface UnstructuredCommandInput1 {
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
    * these keys.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;
@@ -7028,7 +7268,7 @@ export interface CompleteElicitationNotification {
    *
    * Optional. Omitted and `null` are equivalent and mean no metadata.
    *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
    */
   _meta?: {
     [k: string]: unknown;

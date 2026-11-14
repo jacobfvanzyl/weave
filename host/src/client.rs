@@ -13,12 +13,12 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 
+use agent_client_protocol::Builder;
 use agent_client_protocol::ConnectTo;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::Handled;
 use agent_client_protocol::Responder;
-use agent_client_protocol::Role as _;
 use agent_client_protocol::UntypedMessage;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -381,7 +381,7 @@ async fn handlers(
     let on_watch_terminals = Arc::clone(connection);
     let on_watch_sessions = Arc::clone(connection);
     let on_any = Arc::clone(connection);
-    Host.builder()
+    Builder::new(Host)
         .name("weave-host")
         // A service asks only what starting and following threads needs (ADR 0027), refused
         // here before any handler sees the rest.
@@ -1125,7 +1125,7 @@ impl Connection {
             .collect(),
             acp: AcpInfo {
                 protocol_version: 1,
-                unstable: vec!["session_compaction".to_owned(), "subagents".to_owned()],
+                unstable: vec!["subagents".to_owned()],
             },
             device,
         })

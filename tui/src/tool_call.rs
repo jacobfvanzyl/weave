@@ -425,6 +425,8 @@ impl ToolCallCell {
                     None => {}
                 },
                 ToolCallContent::Diff(_) => {}
+                // A link to the subagent's thread, which is listed beside this one.
+                ToolCallContent::Session(_) => {}
                 _ => output.lines.push("[unsupported tool output]".to_owned()),
             }
         }

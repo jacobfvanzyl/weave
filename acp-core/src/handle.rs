@@ -10,39 +10,39 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 
 use agent_client_protocol::Agent;
-use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::AgentCapabilities;
-use agent_client_protocol::schema::v1::AuthMethod;
-use agent_client_protocol::schema::v1::AuthMethodId;
-use agent_client_protocol::schema::v1::AuthenticateRequest;
-use agent_client_protocol::schema::v1::CancelNotification;
-use agent_client_protocol::schema::v1::CloseSessionRequest;
-use agent_client_protocol::schema::v1::ContentBlock;
-use agent_client_protocol::schema::v1::DeleteSessionRequest;
-use agent_client_protocol::schema::v1::Implementation;
-use agent_client_protocol::schema::v1::InitializeRequest;
-use agent_client_protocol::schema::v1::InitializeResponse;
-use agent_client_protocol::schema::v1::ListSessionsRequest;
-use agent_client_protocol::schema::v1::ListSessionsResponse;
-use agent_client_protocol::schema::v1::LoadSessionRequest;
-use agent_client_protocol::schema::v1::LoadSessionResponse;
-use agent_client_protocol::schema::v1::LogoutRequest;
-use agent_client_protocol::schema::v1::McpServer;
-use agent_client_protocol::schema::v1::Meta;
-use agent_client_protocol::schema::v1::NewSessionRequest;
-use agent_client_protocol::schema::v1::NewSessionResponse;
-use agent_client_protocol::schema::v1::PromptRequest;
-use agent_client_protocol::schema::v1::ResumeSessionRequest;
-use agent_client_protocol::schema::v1::ResumeSessionResponse;
-use agent_client_protocol::schema::v1::SessionConfigId;
-use agent_client_protocol::schema::v1::SessionConfigOption;
-use agent_client_protocol::schema::v1::SessionConfigOptionValue;
-use agent_client_protocol::schema::v1::SessionId;
-use agent_client_protocol::schema::v1::SessionModeId;
-use agent_client_protocol::schema::v1::SetSessionConfigOptionRequest;
-use agent_client_protocol::schema::v1::SetSessionModeRequest;
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::AgentCapabilities;
+use agent_client_protocol::v1::schema::AuthMethod;
+use agent_client_protocol::v1::schema::AuthMethodId;
+use agent_client_protocol::v1::schema::AuthenticateRequest;
+use agent_client_protocol::v1::schema::CancelNotification;
+use agent_client_protocol::v1::schema::CloseSessionRequest;
+use agent_client_protocol::v1::schema::ContentBlock;
+use agent_client_protocol::v1::schema::DeleteSessionRequest;
+use agent_client_protocol::v1::schema::Implementation;
+use agent_client_protocol::v1::schema::InitializeRequest;
+use agent_client_protocol::v1::schema::InitializeResponse;
+use agent_client_protocol::v1::schema::ListSessionsRequest;
+use agent_client_protocol::v1::schema::ListSessionsResponse;
+use agent_client_protocol::v1::schema::LoadSessionRequest;
+use agent_client_protocol::v1::schema::LoadSessionResponse;
+use agent_client_protocol::v1::schema::LogoutRequest;
+use agent_client_protocol::v1::schema::McpServer;
+use agent_client_protocol::v1::schema::Meta;
+use agent_client_protocol::v1::schema::NewSessionRequest;
+use agent_client_protocol::v1::schema::NewSessionResponse;
+use agent_client_protocol::v1::schema::PromptRequest;
+use agent_client_protocol::v1::schema::ResumeSessionRequest;
+use agent_client_protocol::v1::schema::ResumeSessionResponse;
+use agent_client_protocol::v1::schema::SessionConfigId;
+use agent_client_protocol::v1::schema::SessionConfigOption;
+use agent_client_protocol::v1::schema::SessionConfigOptionValue;
+use agent_client_protocol::v1::schema::SessionId;
+use agent_client_protocol::v1::schema::SessionModeId;
+use agent_client_protocol::v1::schema::SetSessionConfigOptionRequest;
+use agent_client_protocol::v1::schema::SetSessionModeRequest;
 use tokio::sync::mpsc;
 
 use crate::AgentEvent;
@@ -404,5 +404,5 @@ fn unsupported(capability: &str) -> Error {
 
 /// Whether an error is the protocol's "authentication required".
 pub fn is_auth_required(error: &Error) -> bool {
-    error.code == agent_client_protocol::schema::v1::ErrorCode::AuthRequired
+    error.code == agent_client_protocol::v1::schema::ErrorCode::AuthRequired
 }

@@ -4,7 +4,7 @@
 //! in the same words, which [`ended_text`] and [`waiting_text`] give.
 
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v1::StopReason;
+use agent_client_protocol::v1::schema::StopReason;
 use serde_json::Value;
 
 use crate::pending::PendingKind;

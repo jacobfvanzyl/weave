@@ -217,7 +217,7 @@ const EntryView = memo(function EntryView({
       return <ClientToolView entry={entry} />;
     case 'diagnostic':
       return (
-        <Marker variant="border" className={cn(entry.severity === 'error' && 'text-destructive')}>
+        <Marker variant="border" className={cn(entry.severity === 'error' && 'text-destructive', entry.severity === 'warning' && 'text-warning')}>
           <MarkerContent>{entry.title}{entry.detail ? ` — ${entry.detail}` : ''}</MarkerContent>
         </Marker>
       );

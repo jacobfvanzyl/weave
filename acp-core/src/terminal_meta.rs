@@ -16,11 +16,11 @@
 //! the same update already has its output. Replayed sessions resend the output, so it shows
 //! when a session is loaded too.
 
-use agent_client_protocol::schema::v1::Meta;
-use agent_client_protocol::schema::v1::SessionUpdate;
-use agent_client_protocol::schema::v1::TerminalExitStatus;
-use agent_client_protocol::schema::v1::TerminalId;
-use agent_client_protocol::schema::v1::ToolCallId;
+use agent_client_protocol::v1::schema::Meta;
+use agent_client_protocol::v1::schema::SessionUpdate;
+use agent_client_protocol::v1::schema::TerminalExitStatus;
+use agent_client_protocol::v1::schema::TerminalId;
+use agent_client_protocol::v1::schema::ToolCallId;
 use serde_json::Value;
 
 use crate::AgentEvent;
@@ -99,8 +99,8 @@ fn events_in(meta: &Meta) -> Vec<AgentEvent> {
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::v1::ToolCallUpdate;
-    use agent_client_protocol::schema::v1::ToolCallUpdateFields;
+    use agent_client_protocol::v1::schema::ToolCallUpdate;
+    use agent_client_protocol::v1::schema::ToolCallUpdateFields;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 

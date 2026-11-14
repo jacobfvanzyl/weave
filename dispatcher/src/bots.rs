@@ -30,7 +30,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v1::ContentBlock;
+use agent_client_protocol::v1::schema::ContentBlock;
 use weave_host_client::HostHandle;
 use weave_host_protocol::dispatcher::AddBotRequest;
 use weave_host_protocol::dispatcher::AddBotResponse;

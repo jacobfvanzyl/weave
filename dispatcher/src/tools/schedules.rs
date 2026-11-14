@@ -11,7 +11,7 @@
 //! - The others act on a schedule that prompts the calling Bot, by id or name, the person's
 //!   too; any other schedule, a wake-up included, is refused.
 
-use agent_client_protocol::schema::v1::ContentBlock;
+use agent_client_protocol::v1::schema::ContentBlock;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;

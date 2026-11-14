@@ -6,10 +6,11 @@ use std::io;
 use std::path::Path;
 
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v1::ReadTextFileRequest;
-use agent_client_protocol::schema::v1::ReadTextFileResponse;
-use agent_client_protocol::schema::v1::WriteTextFileRequest;
-use agent_client_protocol::schema::v1::WriteTextFileResponse;
+use agent_client_protocol::v1::schema::Error as SchemaError;
+use agent_client_protocol::v1::schema::ReadTextFileRequest;
+use agent_client_protocol::v1::schema::ReadTextFileResponse;
+use agent_client_protocol::v1::schema::WriteTextFileRequest;
+use agent_client_protocol::v1::schema::WriteTextFileResponse;
 
 pub(crate) async fn read_text_file(
     request: ReadTextFileRequest,
@@ -62,7 +63,9 @@ fn require_absolute(path: &Path) -> Result<(), Error> {
 
 fn io_error(path: &Path, error: &io::Error) -> Error {
     match error.kind() {
-        io::ErrorKind::NotFound => Error::resource_not_found(Some(path.display().to_string())),
+        io::ErrorKind::NotFound => {
+            SchemaError::resource_not_found(Some(path.display().to_string())).into()
+        }
         _ => Error::internal_error().data(format!("{}: {error}", path.display())),
     }
 }
