@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppController, AppModel } from '@/app/app-controller';
 import { saveLastSession } from '@/session/view';
+import { commandOn, runCommand } from '@/app/commands';
 import { requestOpenThread } from '@/app/open-thread';
 import { MOCK_FAILS, type MockScenario, useMockController } from '@/app/use-mock-controller';
 import { AppShell } from './app-shell';
@@ -213,8 +214,8 @@ describe('the list of Sessions', () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
-    // What adds to the list of Sessions says Session.
-    expect(screen.getByRole('button', { name: 'New Session' })).toBeInTheDocument();
+    // The list's rail has no New Session of its own: each heading's + starts one there.
+    expect(screen.queryByRole('button', { name: 'New Session' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'New Session on build' }));
     expect(screen.getByRole('dialog', { name: 'New Session' })).toBeInTheDocument();
     const form = screen.getByRole('form', { name: 'New Session' });
@@ -261,7 +262,7 @@ describe('ending a Session', () => {
     // Off the list, and off the screen.
     await waitFor(() => expect(screen.queryByRole('button', { name: /^odin/ })).not.toBeInTheDocument());
     expect(screen.queryByRole('region', { name: 'Session odin' })).not.toBeInTheDocument();
-    expect(screen.getByText('No Session open')).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="no-session"]')).toBeInTheDocument();
   });
 
   it('says why not while something in it is running, and keeps it', async () => {
@@ -289,7 +290,7 @@ describe('a Session’s last Block', () => {
     await user.click(await within(session).findByRole('button', { name: 'Close Diagnose upload failures' }));
     await waitFor(() => expect(screen.queryByRole('button', { name: /^odin/ })).not.toBeInTheDocument());
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-    expect(screen.getByText('No Session open')).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="no-session"]')).toBeInTheDocument();
   });
 
   it('leaves a Session that holds what no Block shows, with an empty tab', async () => {
@@ -313,7 +314,7 @@ describe('a Session nobody arranged', () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
-    expect(screen.getByText('No Session open')).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="no-session"]')).toBeInTheDocument();
     await user.click(tile(/weave.*mac · main/));
     const session = screen.getByRole('region', { name: 'Session weave' });
     const alpha = within(session).getByRole('group', { name: 'Block, Bring Alpha back' });
@@ -677,6 +678,42 @@ describe('a Session someone arranged', () => {
     expect(shares()).toEqual(['0.1', '0.9']);
   });
 
+  it('puts its tabs in another order, by dragging one along the rail or by Move Tab Left and Right (WVE-232)', async () => {
+    const user = userEvent.setup();
+    const session = open();
+    const tabs = within(session).getByRole('tablist', { name: 'Tabs' });
+    const order = () => within(tabs).getAllByRole('tab').map((tab) => tab.getAttribute('aria-label'));
+    expect(order()).toEqual(['Update the Host protocol spec', 'Notes']);
+    // Dragged before the first: the others make room as it goes, and it stays where it's let go.
+    const notes = () => within(tabs).getByRole('tab', { name: 'Notes' });
+    fireEvent.pointerDown(notes(), { button: 0, clientX: 200, pointerId: 1 });
+    fireEvent.pointerMove(notes(), { clientX: 198, pointerId: 1 });
+    expect(notes()).not.toHaveAttribute('data-dragging');
+    fireEvent.pointerMove(notes(), { clientX: 60, pointerId: 1 });
+    expect(notes()).toHaveAttribute('data-dragging', 'true');
+    expect(order()).toEqual(['Notes', 'Update the Host protocol spec']);
+    fireEvent.pointerUp(notes(), { clientX: 60, pointerId: 1 });
+    expect(notes()).not.toHaveAttribute('data-dragging');
+    expect(order()).toEqual(['Notes', 'Update the Host protocol spec']);
+    // Let go where it started, a tab stays there; so does one whose drag is cut short.
+    fireEvent.pointerDown(notes(), { button: 0, clientX: 200, pointerId: 2 });
+    fireEvent.pointerMove(notes(), { clientX: 400, pointerId: 2 });
+    expect(order()).toEqual(['Update the Host protocol spec', 'Notes']);
+    fireEvent.pointerCancel(notes(), { pointerId: 2 });
+    expect(order()).toEqual(['Notes', 'Update the Host protocol spec']);
+    // The commands move the tab in front.
+    expect(commandOn('tab.moveLeft')).toBe(true);
+    expect(commandOn('tab.moveRight')).toBe(false);
+    act(() => { runCommand('tab.moveLeft'); });
+    expect(order()).toEqual(['Update the Host protocol spec', 'Notes']);
+    expect(commandOn('tab.moveLeft')).toBe(false);
+    act(() => { runCommand('tab.moveRight'); });
+    expect(order()).toEqual(['Notes', 'Update the Host protocol spec']);
+    // A click still shows a tab.
+    await user.click(notes());
+    expect(notes()).toHaveAttribute('aria-selected', 'true');
+  });
+
   it('renames a tab in the tab itself, adds one after the last, and closes one from its own icon, asking first', async () => {
     const user = userEvent.setup();
     const session = open();
@@ -996,7 +1033,8 @@ describe('New Session (WVE-220)', () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
-    await user.click(screen.getByRole('button', { name: 'New Session' }));
+    // No button for it in the list's rail: a heading's + starts one there, and the command one anywhere.
+    act(() => { runCommand('session.new'); });
     const dialog = screen.getByRole('dialog', { name: 'New Session' });
     const find = within(dialog).getByRole('combobox', { name: 'Find a Project' });
     expect(find).toHaveFocus();
@@ -1028,7 +1066,8 @@ describe('New Session (WVE-220)', () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
-    await user.click(screen.getByRole('button', { name: 'New Session' }));
+    // No button for it in the list's rail: a heading's + starts one there, and the command one anywhere.
+    act(() => { runCommand('session.new'); });
     await user.click(within(screen.getByRole('dialog', { name: 'New Session' })).getByRole('option', { name: 'Other directory…' }));
     const form = screen.getByRole('form', { name: 'New Session' });
     expect(within(form).getByRole('button', { name: 'Project' })).toHaveTextContent('None: another directory');
@@ -1039,7 +1078,8 @@ describe('New Session (WVE-220)', () => {
     await user.click(within(form).getByRole('button', { name: 'Start' }));
     await screen.findByRole('region', { name: 'Session odin' });
 
-    await user.click(screen.getByRole('button', { name: 'New Session' }));
+    // No button for it in the list's rail: a heading's + starts one there, and the command one anywhere.
+    act(() => { runCommand('session.new'); });
     await user.click(within(screen.getByRole('dialog', { name: 'New Session' })).getByRole('option', { name: 'Other directory…' }));
     const again = screen.getByRole('form', { name: 'New Session' });
     expect(within(again).getByLabelText('Host')).toHaveDisplayValue('build');
@@ -1050,7 +1090,8 @@ describe('New Session (WVE-220)', () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
-    await user.click(screen.getByRole('button', { name: 'New Session' }));
+    // No button for it in the list's rail: a heading's + starts one there, and the command one anywhere.
+    act(() => { runCommand('session.new'); });
     await user.click(within(screen.getByRole('dialog', { name: 'New Session' })).getByRole('option', { name: 'Add Project…' }));
     const dialog = await screen.findByRole('dialog', { name: 'Add Project' });
     const form = within(dialog).getByRole('form', { name: 'Add Project' });

@@ -35,6 +35,8 @@ export const COMMANDS = [
   spec('tab.new', 'New Tab', 'Tab', 'Mod+T'),
   spec('tab.rename', 'Rename Tab…', 'Tab'),
   spec('tab.close', 'Close Tab', 'Tab'),
+  spec('tab.moveLeft', 'Move Tab Left', 'Tab'),
+  spec('tab.moveRight', 'Move Tab Right', 'Tab'),
   spec('block.splitRight', 'Split Right', 'Block', 'Mod+D'),
   spec('block.splitDown', 'Split Down', 'Block', 'Mod+Shift+D'),
   spec('block.zoom', 'Zoom', 'Block', 'Mod+Shift+Enter'),

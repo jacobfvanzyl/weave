@@ -18,6 +18,7 @@ import { type BlockContext, blockType } from '@/components/session/blocks';
 import { type NewBlockAnchor, NewBlockMenu } from '@/components/session/new-block-menu';
 import { NameInput } from '@/components/session/name-input';
 import { type BlockActions, BlockRail, TabBlocks } from '@/components/session/tab-blocks';
+import { useTabDrag } from '@/components/session/use-tab-drag';
 import { ThreadHeader } from '@/components/thread-view';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
@@ -45,6 +46,7 @@ import {
   frameBlock,
   layoutBlocks,
   minimizeBlock,
+  moveTab,
   newTab,
   placeBlock,
   prune,
@@ -474,6 +476,18 @@ export function SessionView({ controller, session, members, leading, phone = fal
     const next = layout.tabs[(at + by + layout.tabs.length) % layout.tabs.length];
     if (next) changeView((current) => showTab(current, next.id));
   };
+  /** The tab in front, one place along among the tabs (WVE-232). */
+  const tabAt = layout.tabs.findIndex(({ id }) => id === tab.id);
+  /**
+   * Puts the tab `id` at `index` among the others. The tab in front stays in front: a device that
+   * hasn't picked one shows the first, which would otherwise be another now.
+   */
+  const reorderTab = (id: string, index: (tabs: SessionTab[]) => number) => {
+    changeView((current) => showTab(current, tab.id));
+    update((current) => current.tabs.some((candidate) => candidate.id === id) ? moveTab(current, id, index(current.tabs)) : current);
+  };
+  const shiftTab = (by: number) => reorderTab(tab.id, (tabs) => tabs.findIndex(({ id }) => id === tab.id) + by);
+  const tabDrag = useTabDrag(layout.tabs.map(({ id }) => id), (id, index) => reorderTab(id, () => index), !bot && !phone);
   // A new tab is made by its first Block (WVE-228): New Block, aimed at one, and nothing if it's
   // put away. From a tab with nothing in it, that tab is the one to fill.
   const openTab = (anchor = tabButton()) => setAdding({ target: tabBlocks(tab).length === 0 ? { tab: tab.id } : { newTab: newTab(), after: tab.id }, anchor });
@@ -537,6 +551,8 @@ export function SessionView({ controller, session, members, leading, phone = fal
   useCommand('tab.new', () => openTab(), !bot);
   useCommand('tab.rename', () => setRenaming(tab.id), !bot);
   useCommand('tab.close', () => closeTab(tab), !bot);
+  useCommand('tab.moveLeft', () => shiftTab(-1), !bot && tabAt > 0);
+  useCommand('tab.moveRight', () => shiftTab(1), !bot && tabAt >= 0 && tabAt < layout.tabs.length - 1);
   useCommand('tab.next', () => stepTab(1), !bot && layout.tabs.length > 1);
   useCommand('tab.previous', () => stepTab(-1), !bot && layout.tabs.length > 1);
   useCommand('block.splitRight', () => { if (focused) setAdding({ target: { beside: focused.id, side: 'right' }, anchor: overFocused() }); }, docked && !phone);
@@ -621,6 +637,13 @@ export function SessionView({ controller, session, members, leading, phone = fal
                   ))}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => setRenaming(tab.id)}>Rename tab</DropdownMenuItem>
+                  {/* The list runs down, so the tab moves up and down it: Move Tab Left and Right elsewhere (WVE-232). */}
+                  {layout.tabs.length > 1 && (
+                    <>
+                      <DropdownMenuItem disabled={tabAt <= 0} onClick={() => shiftTab(-1)}>Move tab up</DropdownMenuItem>
+                      <DropdownMenuItem disabled={tabAt >= layout.tabs.length - 1} onClick={() => shiftTab(1)}>Move tab down</DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -637,9 +660,10 @@ export function SessionView({ controller, session, members, leading, phone = fal
   );
   const tabRail = (
     <>
-      <div role='tablist' aria-label='Tabs'
+      <div ref={tabDrag.rail} role='tablist' aria-label='Tabs'
         className='flex h-9 min-w-0 items-stretch gap-1 overflow-x-auto rounded-full bg-muted/50 p-1 [scrollbar-width:none]'>
-        {layout.tabs.map((listed) => {
+        {/* In the layout's order, or while a tab is dragged along the rail, with it where it would drop (WVE-232). */}
+        {tabDrag.order.flatMap((id) => layout.tabs.find((candidate) => candidate.id === id) ?? []).map((listed) => {
           const selected = listed.id === tab.id;
           const name = tabName(listed);
           const show = () => changeView((current) => showTab(current, listed.id));
@@ -647,10 +671,12 @@ export function SessionView({ controller, session, members, leading, phone = fal
           const icon = first ? blockType(first.type).icon : undefined;
           return (
             <div key={listed.id} role='tab' tabIndex={0} aria-selected={selected} aria-label={name} data-tab-drop={listed.id} title={name}
+              {...tabDrag.tabProps(listed.id)}
               className={cn(
-                'flex max-w-56 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-full border border-transparent pr-0.5 pl-1 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50',
+                'flex max-w-56 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-full border border-transparent pr-0.5 pl-1 text-xs text-muted-foreground outline-none select-none [-webkit-touch-callout:none] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50',
                 !icon && 'pl-3',
                 selected && 'border-foreground/10 bg-muted text-foreground',
+                tabDrag.dragging === listed.id && 'relative z-10 border-foreground/20 bg-muted text-foreground shadow-md',
               )}
               onClick={show}
               onDoubleClick={() => setRenaming(listed.id)}

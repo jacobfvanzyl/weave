@@ -357,10 +357,6 @@ export function SessionList({ controller, sessions, selected, selectedBot, front
             <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
           </Button>
         )}
-        <Button size='icon' variant='ghost' aria-label='New Session' title='New Session' data-sidebar='header-action' className={cn('shrink-0', model.hosts.length === 0 && 'ml-auto')}
-          disabled={!model.hosts.some(({ status }) => status === 'connected')} onClick={() => onNewSession()}>
-          <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-        </Button>
       </SidebarHeader>
       {filtering && model.hosts.length > 0 && (
         <div className='relative mx-2 mb-1.5 shrink-0'>

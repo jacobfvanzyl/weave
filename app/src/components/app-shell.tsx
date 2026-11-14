@@ -88,28 +88,23 @@ function NoSession({ controller, selected, known, leading }: {
   const directory = selected ? directoryName(sessionOfKey(selected).directory) : undefined;
   return (
     <>
-      <ThreadHeader leading={leading} />
-      <Empty className='flex-1'>
-        <EmptyHeader>
-          {selected && host
-            ? (
-              <>
-                <EmptyTitle>{directory}</EmptyTitle>
-                <EmptyDescription>
-                  {host.status === 'connected'
-                    ? <><Spinner className='mr-1.5 inline size-3' />Opening the Session…</>
-                    : `${host.name} isn't connected.${host.error ? ` ${host.error}` : ''}`}
-                </EmptyDescription>
-              </>
-            )
-            : (
-              <>
-                <EmptyTitle>No Session open</EmptyTitle>
-                <EmptyDescription>Pick a Session from the list, or start a thread in a directory to open one.</EmptyDescription>
-              </>
-            )}
-        </EmptyHeader>
-      </Empty>
+      {/* No line under its rail: nothing is under it to set apart. */}
+      <ThreadHeader leading={leading} divided={false} />
+      {/* With no Session picked the pane is bare: the list beside it says what there is. */}
+      {selected && host
+        ? (
+          <Empty className='flex-1'>
+            <EmptyHeader>
+              <EmptyTitle>{directory}</EmptyTitle>
+              <EmptyDescription>
+                {host.status === 'connected'
+                  ? <><Spinner className='mr-1.5 inline size-3' />Opening the Session…</>
+                  : `${host.name} isn't connected.${host.error ? ` ${host.error}` : ''}`}
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        )
+        : <div data-slot='no-session' className='flex-1' />}
     </>
   );
 }
@@ -183,8 +178,9 @@ function SplitShell({ controller, sessions, session, selected, frontTab, onOpenT
   };
   return (
     <>
-      {/* No line at its edge: the resize handle shows one under the pointer and while it drags. */}
-      <Sidebar collapsible='offcanvas' className='group-data-[side=left]:border-r-0'>
+      {/* No line at its edge beside a Session, whose Blocks have edges: the resize handle shows one
+          under the pointer and while it drags. Beside nothing, the line is what sets the list apart. */}
+      <Sidebar collapsible='offcanvas' className={cn(Boolean(bot || session) && 'group-data-[side=left]:border-r-0')}>
         <SessionList controller={controller} sessions={sessions} selected={selected} selectedBot={selectedBot(selected)} onOpenHosts={onOpenHosts} onNewSession={onNewSession}
           onAddProject={onAddProject} onEndSession={onEndSession} onOpen={open} frontTab={frontTab}
           onOpenTab={(tab) => { onOpenTab(tab); setOpenMobile(false); }} onOpenBot={(id) => open(botSelection(id))} onNewBot={onNewBot}

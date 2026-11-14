@@ -220,6 +220,17 @@ describe('removing', () => {
   });
 });
 
+describe('a tab moved', () => {
+  it('goes to a place among the others, kept within them', () => {
+    const start = layout({ id: 't', root: leaf('a') }, { id: 'u', root: leaf('b') }, { id: 'v', root: leaf('c') });
+    expect(shapes(moveTab(start, 'v', 0))).toBe('v:c  t:a  u:b');
+    expect(shapes(moveTab(start, 't', 1))).toBe('u:b  t:a  v:c');
+    expect(shapes(moveTab(start, 't', 9))).toBe('u:b  v:c  t:a');
+    expect(shapes(moveTab(start, 'u', -1))).toBe('u:b  t:a  v:c');
+    expect(moveTab(start, 'gone', 0)).toBe(start);
+  });
+});
+
 describe('empty tabs', () => {
   it('leave a layout read with them, down to the first when nothing has a Block', () => {
     const mixed = layout({ id: 't' }, { id: 'u', root: leaf('a') }, { id: 'v' }, { id: 'w', floating: [{ block: block('f'), frame: FRAME }] });
