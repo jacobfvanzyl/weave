@@ -11,7 +11,7 @@ The long-lived per-user process on one computer that runs agents and owns their 
 _Avoid_: server, Portal, Host Daemon
 
 **Client**:
-A program connected to the Host on someone's behalf, such as the TUI, `weave run`, or a later iPad app.
+A program connected to the Host on someone's behalf, such as the app, `weave run`, or the TUI.
 _Avoid_: frontend, UI, consumer
 
 **Remote client**:

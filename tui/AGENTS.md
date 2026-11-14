@@ -3,6 +3,11 @@
 The interactive terminal client (`weave-tui`): fullscreen transcript or inline viewport, chat
 state, composer. The `weave` binary in `../cli` runs it. Read the root `AGENTS.md` first.
 
+The TUI is no longer developed (ADR 0034, WVE-222): the app is the interactive client. Build
+nothing new here. Keep it building, its tests and snapshots passing and clippy clean, and make
+the changes that keep it working against the Host protocol as that changes, and fixes for what
+breaks. Bare `weave` still runs it, and no code is removed. What follows describes what is there.
+
 The TUI shows one thread at a time. Like Codex, it runs fullscreen by default: on the
 alternate screen, `weave` owns the transcript (`transcript.rs`: retained cells that
 reflow, scrolling, selection and copy, and Find, matched by `find.rs`), and folds the agent's

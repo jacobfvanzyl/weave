@@ -3,6 +3,9 @@
 The `weave` binary and its subcommands (`weave-cli`), Host autostart and the launchd and systemd
 services included. Read the root `AGENTS.md` first; its Commands section builds and runs it.
 
+Bare `weave` runs the TUI, which is no longer developed (ADR 0034, WVE-222): keep its command
+line working, and add nothing to it. The subcommands and `weave run` are developed as before.
+
 Each top-level command is a module of `src/commands/`, named for what the person manages
 (`threads`, `agents`, `daemon`, …), with its arguments, its `command` and `LOG`, the level it logs
 to stderr at by default; `main.rs` holds the TUI's command line and one line per command. What

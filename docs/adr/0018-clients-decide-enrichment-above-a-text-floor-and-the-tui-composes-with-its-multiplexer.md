@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; amended by ADR 0034: the TUI is no longer developed, and the app is the interactive client
 date: 2026-10-21
 ---
 
