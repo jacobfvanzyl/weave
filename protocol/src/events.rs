@@ -6,8 +6,10 @@ use agent_client_protocol::Error;
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::v1::schema::CompleteElicitationNotification;
 use agent_client_protocol::v1::schema::ContentBlock;
+use agent_client_protocol::v1::schema::Notice;
 use agent_client_protocol::v1::schema::PromptResponse;
 use agent_client_protocol::v1::schema::SessionConfigOption;
+use agent_client_protocol::v1::schema::SessionId;
 use agent_client_protocol::v1::schema::SessionModeState;
 use agent_client_protocol::v1::schema::SessionNotification;
 use agent_client_protocol::v1::schema::TerminalExitStatus;
@@ -196,6 +198,21 @@ pub struct ThreadChangedNotification {
     /// [`crate::mcp::FEATURE`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_servers: Option<Vec<McpServerStatus>>,
+}
+
+/// `thread/notice`: the agent told the person something outside the conversation (ACP's
+/// `notice` session update). It goes to the clients attached now and isn't journaled, so one
+/// that attaches later doesn't get it.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[notification(method = "thread/notice")]
+#[serde(rename_all = "camelCase")]
+pub struct AgentNoticeNotification {
+    /// The attached thread, the root of any subagent thread the notice is from.
+    pub thread_id: ThreadId,
+    /// The thread whose agent said it: `thread_id`, or a subagent thread under it.
+    pub session_id: SessionId,
+    pub notice: Notice,
 }
 
 /// `thread/elicitationCompleted`: an accepted URL elicitation's external step finished.

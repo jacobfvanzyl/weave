@@ -1,0 +1,16 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&AgentNoticeNotification\n{\n    thread_id: \"s-1\".into(), session_id: \"s-1\".into(), notice:\n    Notice::new(NoticeSeverity::Warning,\n    \"You're near this week's limit\").description(\"It resets on Monday.\".to_owned()),\n})"
+---
+{
+  "method": "thread/notice",
+  "params": {
+    "threadId": "s-1",
+    "sessionId": "s-1",
+    "notice": {
+      "severity": "warning",
+      "title": "You're near this week's limit",
+      "description": "It resets on Monday."
+    }
+  }
+}

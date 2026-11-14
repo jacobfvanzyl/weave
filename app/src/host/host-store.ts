@@ -35,6 +35,7 @@ import type {
   ThreadGit,
   ThreadSummary,
   WorktreeRemoval,
+  ThreadNotice,
 } from '@/app/app-controller';
 import { sessionKey, sessionOfKey, threadKey } from '@/app/app-controller';
 import { ThreadReadState } from '@/app/thread-read-state';
@@ -408,6 +409,9 @@ export class HostStore {
   #error?: string;
   /** What failed in a thread, by its key, while the thread is on screen. */
   readonly #threadErrors = new Map<string, string>();
+  /** What a thread's agent told the person outside the conversation, by its key, while the thread is on screen. */
+  readonly #threadNotices = new Map<string, ThreadNotice[]>();
+  #nextNotice = 1;
   #nextTag = 1;
   #nextLocal = 1;
   #snapshot?: AppModel;
@@ -851,6 +855,15 @@ export class HostStore {
       dismissError: () => {
         const followed = pick();
         if (followed) this.#clearError(keyOf(followed));
+      },
+      dismissNotice: (id) => {
+        const followed = pick();
+        if (!followed) return;
+        const key = keyOf(followed);
+        const left = (this.#threadNotices.get(key) ?? []).filter((notice) => notice.id !== id);
+        if (left.length > 0) this.#threadNotices.set(key, left);
+        else this.#threadNotices.delete(key);
+        this.#changed();
       },
       setConfigOption: (configId, value) => this.#reportIn(pick(), async (followed) => {
         // The change reaches every client, this one too, through the journal.
@@ -1498,6 +1511,22 @@ export class HostStore {
             if (followed) this.#pendingResolved(followed, connection, event.params);
             return;
           }
+          // Not journaled: it's this client's to keep while the thread is on screen. The last
+          // few are kept, so an agent that says a lot doesn't fill the Block.
+          case 'thread/notice': {
+            const key = threadKey(entry.hostId, event.params.threadId);
+            if (!this.#followed.has(key)) return;
+            const { severity, title, description } = event.params.notice;
+            const notice: ThreadNotice = {
+              id: this.#nextNotice++,
+              severity: severity === 'warning' || severity === 'error' ? severity : 'info',
+              title,
+              ...(description ? { detail: description } : {}),
+            };
+            this.#threadNotices.set(key, [...(this.#threadNotices.get(key) ?? []), notice].slice(-3));
+            this.#changed();
+            return;
+          }
           case 'thread/elicitationCompleted': {
             const followed = this.#followed.get(threadKey(entry.hostId, event.params.threadId));
             if (followed) this.#apply(followed, [{ type: 'elicitation/completed', notification: event.params.notification }]);
@@ -1642,6 +1671,9 @@ export class HostStore {
     // A thread's failure is read in its Block: it goes with the Block.
     for (const key of this.#threadErrors.keys()) {
       if (!wanted.has(key)) this.#threadErrors.delete(key);
+    }
+    for (const key of this.#threadNotices.keys()) {
+      if (!wanted.has(key)) this.#threadNotices.delete(key);
     }
     for (const key of wanted) {
       const again = exactly && key === front;
@@ -2528,6 +2560,7 @@ export class HostStore {
       ...(this.#bots && this.#canSetBotAvatars ? { canSetBotAvatars: true } : {}),
       ...(this.#error ? { error: this.#error } : {}),
       ...(this.#threadErrors.size > 0 ? { threadErrors: Object.fromEntries(this.#threadErrors) } : {}),
+      ...(this.#threadNotices.size > 0 ? { threadNotices: Object.fromEntries(this.#threadNotices) } : {}),
     };
   }
 }

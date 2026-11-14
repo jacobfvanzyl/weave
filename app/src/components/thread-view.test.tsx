@@ -128,6 +128,25 @@ describe('ThreadView', () => {
     expect(handlers.dismissError).toHaveBeenCalled();
   });
 
+  it("shows what its own thread's agent told the person, and dismisses it (WVE-230)", async () => {
+    const user = userEvent.setup();
+    const handlers = { ...actions(), dismissNotice: vi.fn() };
+    const thread: OpenThread = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [] };
+    const told = (key: string): AppController => {
+      const base = controller(thread, handlers);
+      return {
+        ...base,
+        model: { ...base.model, threadNotices: { [key]: [{ id: 7, severity: 'warning', title: 'Near the limit', detail: 'It resets on Monday.' }] } },
+      };
+    };
+    const { rerender } = render(<ThreadView controller={told('h/other')} thread={thread} />);
+    expect(screen.queryByText('Near the limit')).not.toBeInTheDocument();
+    rerender(<ThreadView controller={told('h/main')} thread={thread} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Near the limitIt resets on Monday.');
+    await user.click(screen.getByRole('button', { name: 'Dismiss notice' }));
+    expect(handlers.dismissNotice).toHaveBeenCalledWith(7);
+  });
+
   it('keeps a dismissed update notice hidden in that thread, until there is more to say', async () => {
     const user = userEvent.setup();
     const update = { agentId: 'claude', name: '@agentclientprotocol/claude-agent-acp', running: '0.86.0', latest: '0.94.0' };

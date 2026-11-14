@@ -441,6 +441,20 @@ export type AppModel = {
    * else, until the person dismisses it or does the same again.
    */
   threadErrors?: Record<string, string>;
+  /**
+   * What a thread's agent told the person outside the conversation (ACP's notices, WVE-230),
+   * by the thread's key: shown in its Block until dismissed or the Block leaves. The Host
+   * keeps none, so a device that opens the thread later doesn't have them.
+   */
+  threadNotices?: Record<string, ThreadNotice[]>;
+};
+
+/** One thing an agent told the person outside the conversation. */
+export type ThreadNotice = {
+  id: number;
+  severity: 'info' | 'warning' | 'error';
+  title: string;
+  detail?: string;
 };
 
 /** What's done in one thread: `AppActions` does them in the thread in front, `forThread` in another. */
@@ -465,6 +479,8 @@ export type ThreadActions = {
   setConfigOption(optionId: string, value: string | boolean): Promise<void> | void;
   /** Takes away what the thread shows of its last failure (`AppModel.threadErrors`). */
   dismissError?(): void;
+  /** Takes away one of the thread's notices (`AppModel.threadNotices`). */
+  dismissNotice?(id: number): void;
 };
 
 /** A thread this device started, and the Session it's in. */

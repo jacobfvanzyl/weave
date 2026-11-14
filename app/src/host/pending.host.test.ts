@@ -132,6 +132,18 @@ describe.skipIf(!devHostAvailable())('pending requests in the app with a dev Hos
     expect(model().threadErrors).toBeUndefined();
   });
 
+  it("shows what the agent tells the person outside the conversation until it's dismissed, and keeps it out of the transcript (WVE-230)", async () => {
+    await store.actions.send('/notice');
+    await said('I told you about the limit.');
+    const { key } = thread();
+    const [notice] = await waitFor(() => model().threadNotices?.[key], 'the notice');
+    expect(notice).toMatchObject({ severity: 'warning', title: "You're near this week's limit", detail: 'It resets on Monday.' });
+    expect(lines().some((entry) => entry.includes('limit') && !entry.startsWith('assistant:') && !entry.startsWith('user:'))).toBe(false);
+
+    store.actions.dismissNotice?.(notice.id);
+    expect(model().threadNotices).toBeUndefined();
+  });
+
   it('closes the card and says so when the TUI answers first', async () => {
     await tui.request('thread/attach', { threadId: threadId() });
     const heard = tuiEvents.length;

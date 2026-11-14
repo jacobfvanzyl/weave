@@ -712,6 +712,15 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
       const key = pick();
       if (key) setThreadError(key, undefined);
     },
+    dismissNotice(id) {
+      const key = pick();
+      if (!key) return;
+      update((current) => {
+        const { [key]: notices = [], ...rest } = current.model.threadNotices ?? {};
+        const left = notices.filter((notice) => notice.id !== id);
+        return { ...current, model: { ...current.model, threadNotices: left.length > 0 ? { ...rest, [key]: left } : rest } };
+      });
+    },
     cancelTurn() {
       const key = pick();
       if (!key) return;

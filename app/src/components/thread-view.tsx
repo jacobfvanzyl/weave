@@ -282,6 +282,7 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, chrome = 
   const [update, dismissUpdate] = useUpdateNotice(thread.key, thread.update);
   // What failed in this thread, and nothing else's: another Block's failure is its own to show.
   const failure = model.threadErrors?.[thread.key];
+  const notices = model.threadNotices?.[thread.key] ?? [];
   const [statusShown, setStatusShown] = useState(false);
   useEffect(() => setStatusShown(false), [thread.key]);
   // In a Block, its rail has the thread's menu, which asks here for what needs the thread's view.
@@ -352,6 +353,24 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, chrome = 
             )}
           </Alert>
         )}
+        {notices.map((notice) => (
+          <Alert
+            key={notice.id}
+            variant={notice.severity === 'error' ? 'destructive' : 'default'}
+            className={cn('m-2 w-auto has-data-[slot=alert-action]:pr-8', notice.severity === 'warning' && 'text-warning')}
+            data-slot='agent-notice'
+          >
+            <AlertTitle>{notice.title}</AlertTitle>
+            {notice.detail && <AlertDescription>{notice.detail}</AlertDescription>}
+            {actions.dismissNotice && (
+              <AlertAction>
+                <Button size='icon-xs' variant='ghost' aria-label='Dismiss notice' onClick={() => actions.dismissNotice?.(notice.id)}>
+                  <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+                </Button>
+              </AlertAction>
+            )}
+          </Alert>
+        ))}
         {summary?.continuedIn && (
           <Alert className='m-2 w-auto' data-slot='successor-notice'>
             <AlertTitle>This thread continues in {summary.continuedIn.label}</AlertTitle>

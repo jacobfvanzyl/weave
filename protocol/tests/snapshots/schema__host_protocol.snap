@@ -263,6 +263,7 @@ expression: schema()
     "threads/updated": "ThreadUpdatedNotification",
     "threads/removed": "ThreadRemovedNotification",
     "thread/elicitationCompleted": "ElicitationCompletedNotification",
+    "thread/notice": "AgentNoticeNotification",
     "pending/added": "PendingAddedNotification",
     "pending/resolved": "PendingResolvedNotification",
     "agents/updateAvailable": "UpdateAvailableNotification",
@@ -10630,6 +10631,28 @@ expression: schema()
       "description": "Notification sent by the agent when a URL-based elicitation is complete.",
       "x-side": "client",
       "x-method": "elicitation/complete"
+    },
+    "AgentNoticeNotification": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The attached thread, the root of any subagent thread the notice is from."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The thread whose agent said it: `thread_id`, or a subagent thread under it."
+        },
+        "notice": {
+          "$ref": "#/$defs/Notice"
+        }
+      },
+      "required": [
+        "threadId",
+        "sessionId",
+        "notice"
+      ],
+      "description": "`thread/notice`: the agent told the person something outside the conversation (ACP's\n`notice` session update). It goes to the clients attached now and isn't journaled, so one\nthat attaches later doesn't get it."
     },
     "PendingAddedNotification": {
       "type": "object",

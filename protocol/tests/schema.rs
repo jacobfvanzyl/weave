@@ -161,6 +161,7 @@ fn schema() -> Value {
         "threads/updated" => threads::ThreadUpdatedNotification,
         "threads/removed" => threads::ThreadRemovedNotification,
         "thread/elicitationCompleted" => events::ElicitationCompletedNotification,
+        "thread/notice" => events::AgentNoticeNotification,
         "pending/added" => pending::PendingAddedNotification,
         "pending/resolved" => pending::PendingResolvedNotification,
         "agents/updateAvailable" => agents::UpdateAvailableNotification,

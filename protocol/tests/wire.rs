@@ -17,6 +17,8 @@ use agent_client_protocol::v1::schema::ElicitationSessionScope;
 use agent_client_protocol::v1::schema::ElicitationUrlMode;
 use agent_client_protocol::v1::schema::Implementation;
 use agent_client_protocol::v1::schema::InitializeResponse;
+use agent_client_protocol::v1::schema::Notice;
+use agent_client_protocol::v1::schema::NoticeSeverity;
 use agent_client_protocol::v1::schema::PermissionOption;
 use agent_client_protocol::v1::schema::PermissionOptionKind;
 use agent_client_protocol::v1::schema::PromptResponse;
@@ -125,6 +127,7 @@ use weave_host_protocol::dispatcher::UpdateBotRequest;
 use weave_host_protocol::dispatcher::UpdateProjectRequest;
 use weave_host_protocol::dispatcher::WatchBotsRequest;
 use weave_host_protocol::dispatcher::carry_message;
+use weave_host_protocol::events::AgentNoticeNotification;
 use weave_host_protocol::events::ElicitationCompletedNotification;
 use weave_host_protocol::events::ThreadChangedNotification;
 use weave_host_protocol::events::ThreadEvent;
@@ -1878,6 +1881,15 @@ fn events() {
         message(&ElicitationCompletedNotification {
             thread_id: "s-1".into(),
             notification: CompleteElicitationNotification::new("connect-1"),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "agent_notice_notification",
+        message(&AgentNoticeNotification {
+            thread_id: "s-1".into(),
+            session_id: "s-1".into(),
+            notice: Notice::new(NoticeSeverity::Warning, "You're near this week's limit")
+                .description("It resets on Monday.".to_owned()),
         })
     );
 }

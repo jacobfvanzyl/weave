@@ -62,6 +62,7 @@ use weave_host_protocol::agents::AgentRelease;
 use weave_host_protocol::agents::AgentUpdate;
 use weave_host_protocol::agents::UpdateAvailableNotification;
 use weave_host_protocol::errors;
+use weave_host_protocol::events::AgentNoticeNotification;
 use weave_host_protocol::events::ElicitationCompletedNotification;
 use weave_host_protocol::events::ThreadChangedNotification;
 use weave_host_protocol::events::ThreadEventNotification;
@@ -1615,6 +1616,19 @@ impl Actor {
 
     fn agent_event(&mut self, event: AgentEvent) {
         match event {
+            // What the agent tells the person outside the conversation is for whoever is
+            // attached now: it isn't journaled, as ACP keeps it out of the session's history.
+            AgentEvent::SessionUpdate(SessionNotification {
+                session_id,
+                update: SessionUpdate::Notice(notice),
+                ..
+            }) => {
+                self.broadcast(&AgentNoticeNotification {
+                    thread_id: self.root.clone(),
+                    session_id,
+                    notice,
+                });
+            }
             AgentEvent::SessionUpdate(mut notification) => {
                 // Output in `_meta` already came through as terminal events.
                 strip_terminal_events(&mut notification.update);

@@ -7275,6 +7275,35 @@ export interface CompleteElicitationNotification {
   } | null;
 }
 /**
+ * `thread/notice`: the agent told the person something outside the conversation (ACP's
+ * `notice` session update). It goes to the clients attached now and isn't journaled, so one
+ * that attaches later doesn't get it.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "AgentNoticeNotification".
+ */
+export interface AgentNoticeNotification {
+  /**
+   * A unique identifier for a conversation session between a client and agent.
+   *
+   * Each session has its own context, conversation history, and state, so one
+   * agent can run several independent sessions.
+   *
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
+   */
+  threadId: string;
+  /**
+   * A unique identifier for a conversation session between a client and agent.
+   *
+   * Each session has its own context, conversation history, and state, so one
+   * agent can run several independent sessions.
+   *
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/v1/session-setup#session-id)
+   */
+  sessionId: string;
+  notice: Notice;
+}
+/**
  * `pending/added`: a request now waits in an attached thread.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -8983,6 +9012,7 @@ export interface HostNotifications {
   "threads/updated": ThreadUpdatedNotification;
   "threads/removed": ThreadRemovedNotification;
   "thread/elicitationCompleted": ElicitationCompletedNotification;
+  "thread/notice": AgentNoticeNotification;
   "pending/added": PendingAddedNotification;
   "pending/resolved": PendingResolvedNotification;
   "agents/updateAvailable": UpdateAvailableNotification;

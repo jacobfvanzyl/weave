@@ -673,7 +673,7 @@ the thread, as when a closed thread is opened again. A client that remembers
 
 | `event.kind` | Fields | Written when |
 | --- | --- | --- |
-| `update` | `notification`: ACP `SessionNotification` | the agent sends `session/update` (for this thread or a subagent thread; `notification.sessionId` says which), or a client changes a mode or config option. An agent's `notice` is journaled like the rest, so a client that attaches later still reads it, though the agent itself keeps none in its history |
+| `update` | `notification`: ACP `SessionNotification` | the agent sends `session/update` (for this thread or a subagent thread; `notification.sessionId` says which), or a client changes a mode or config option, but for an agent's `notice`, which isn't journaled (see `thread/notice`) |
 | `turnStarted` | `threadId`, `prompt`: ACP `ContentBlock[]`, `origin`, `queuedId?`, `turnId?`, `continues?` | a turn starts; `queuedId` names the queued prompt it started from, `turnId` the turn, `continues` the interrupted turn it continues |
 | `turnSteered` | `threadId`, `prompt`: ACP `ContentBlock[]`, `origin` | a steer joins the running turn (`turn/steer`) |
 | `turnEnded` | `threadId`, `response?`: ACP `PromptResponse`, `error?`: JSON-RPC error | a turn ends |
@@ -717,6 +717,11 @@ These aren't journaled. They go to the thread's attached clients.
 - `pending/resolved` `{threadId, pendingId, outcome: "answered" | "cancelled" | "withdrawn", by?: clientId}`
 - `thread/elicitationCompleted` `{threadId, notification: CompleteElicitationNotification}`:
   an accepted URL elicitation's external step finished.
+- `thread/notice` `{threadId, sessionId, notice: Notice}` (WVE-230): the agent told the person
+  something outside the conversation, ACP's `notice` session update, such as a limit it is
+  near. `sessionId` is the thread whose agent said it: `threadId`, or a subagent thread under
+  it. ACP keeps notices out of a session's history, and so does the Host: a client that
+  attaches later doesn't get it, and how long to show it is each client's to decide.
 - `agents/updateAvailable` `{threadId, agentId, name, running, latest}`: a newer version of
   the thread's agent is out (see [Updates](#updates)).
 

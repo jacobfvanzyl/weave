@@ -20,6 +20,7 @@ use weave_acp_core::AgentConnection;
 use weave_acp_core::ClientOptions;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::InitializeRequest;
+use weave_acp_core::schema::NoticeSeverity;
 use weave_acp_core::schema::PermissionOptionId;
 use weave_acp_core::schema::RequestPermissionOutcome;
 use weave_acp_core::schema::RequestPermissionResponse;
@@ -987,6 +988,63 @@ async fn steering_with_no_turn_running_sends_nothing() {
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     assert!(seen.steered.is_empty(), "{seen:?}");
+}
+
+/// What an agent tells the person outside the conversation (ACP's `notice`) reaches the
+/// clients attached then, and is in no journal: one that attaches afterwards reads the turn
+/// without it.
+#[tokio::test]
+async fn an_agents_notice_reaches_attached_clients_and_isnt_journaled() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut first = world.client(&daemon).await;
+    let thread_id = first.create(&world).await;
+    first.prompt(&thread_id, "notice").await;
+    let mut told = Vec::new();
+    let mut seen = Seen::default();
+    loop {
+        match first.next().await {
+            HostEvent::AgentNotice(notice) => told.push(notice),
+            event => {
+                if first.note(event, &mut seen, None).await {
+                    break;
+                }
+            }
+        }
+    }
+    assert_eq!(seen.agent, "I told you about the limit.");
+    let [told] = told.as_slice() else {
+        panic!("one notice: {told:?}");
+    };
+    assert_eq!(told.thread_id, thread_id);
+    assert_eq!(told.session_id, thread_id);
+    assert_eq!(told.notice.severity, NoticeSeverity::Warning);
+    assert_eq!(told.notice.title, "You're near this week's limit");
+    assert_eq!(
+        told.notice.description.as_deref(),
+        Some("It resets on Monday.")
+    );
+
+    let mut late = world.client(&daemon).await;
+    let attached = late.attach(&thread_id).await;
+    assert!(attached.replay.reset);
+    loop {
+        match late.next().await {
+            HostEvent::AgentNotice(notice) => panic!("a notice replayed: {notice:?}"),
+            HostEvent::Event(event) => {
+                if let ThreadEvent::Update { notification } = &event.event {
+                    assert!(
+                        !matches!(notification.update, SessionUpdate::Notice(_)),
+                        "a notice in the journal: {notification:?}"
+                    );
+                }
+                if matches!(event.event, ThreadEvent::TurnEnded { .. }) {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[tokio::test]

@@ -33,6 +33,7 @@ use weave_host_protocol::agents::UpdateAvailableNotification;
 use weave_host_protocol::devices::NewDevice;
 use weave_host_protocol::devices::auth_message;
 use weave_host_protocol::errors;
+use weave_host_protocol::events::AgentNoticeNotification;
 use weave_host_protocol::events::ElicitationCompletedNotification;
 use weave_host_protocol::events::ThreadChangedNotification;
 use weave_host_protocol::events::ThreadEventNotification;
@@ -70,6 +71,8 @@ pub enum HostEvent {
     PendingAdded(Box<PendingAddedNotification>),
     PendingResolved(PendingResolvedNotification),
     ElicitationCompleted(ElicitationCompletedNotification),
+    /// What an attached thread's agent told the person outside the conversation; not journaled.
+    AgentNotice(AgentNoticeNotification),
     /// A newer version of an attached thread's agent is out.
     UpdateAvailable(UpdateAvailableNotification),
     /// A thread appeared or changed, while this client watches the Host's threads.
@@ -180,6 +183,7 @@ impl HostConnection {
         let on_added = events.clone();
         let on_resolved = events.clone();
         let on_completed = events.clone();
+        let on_notice = events.clone();
         let on_update = events.clone();
         let on_thread_updated = events.clone();
         let on_thread_removed = events.clone();
@@ -218,6 +222,13 @@ impl HostConnection {
             .on_receive_notification(
                 async move |notification: PendingResolvedNotification, _cx| {
                     let _ = on_resolved.send(HostEvent::PendingResolved(notification));
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |notification: AgentNoticeNotification, _cx| {
+                    let _ = on_notice.send(HostEvent::AgentNotice(notification));
                     Ok(())
                 },
                 agent_client_protocol::on_receive_notification!(),

@@ -42,7 +42,8 @@ implementation. Each crate's own guide is the `AGENTS.md` in its directory.
 
 - weave speaks ACP v1 stable, as schema 1.17 has it, and implements it completely but for
   client system prompts (WVE-226). Session compaction and notices, stable since schema 1.11,
-  are advertised by default and withheld per agent (`compaction = false`, `notices = false`).
+  are advertised by default and withheld per agent (`compaction = false`, `notices = false`);
+  a notice goes to the clients attached then and isn't journaled (`thread/notice`, WVE-230).
   Two unstable RFDs are in scope too: subagent sessions (draft; `unstable_subagents`,
   advertised by default, `subagents = false`), and MCP-over-ACP (draft;
   `unstable_mcp_over_acp`), which carries the Host MCP server to agents that advertise

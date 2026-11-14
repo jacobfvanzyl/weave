@@ -27,6 +27,8 @@ use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::InitializeResponse;
 use weave_acp_core::schema::PromptCapabilities;
 use weave_acp_core::schema::SessionConfigOption;
+use weave_acp_core::schema::SessionNotification;
+use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::TerminalExitStatus;
 use weave_acp_core::supports_steering;
 use weave_host_client::HostConnection;
@@ -639,6 +641,16 @@ impl App {
                     outcome: resolved.outcome,
                     elsewhere,
                 })
+            }
+            // Shown as the update it was, in the thread that's in front.
+            HostEvent::AgentNotice(told) => {
+                if chat.active_thread() != Some(&told.thread_id) {
+                    return Vec::new();
+                }
+                chat.handle_agent_event(ChatEvent::SessionUpdate(SessionNotification::new(
+                    told.session_id,
+                    SessionUpdate::Notice(told.notice),
+                )))
             }
             HostEvent::ElicitationCompleted(completed) => chat.handle_agent_event(
                 ChatEvent::ElicitationCompleted(completed.notification.elicitation_id),
