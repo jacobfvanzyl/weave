@@ -1869,6 +1869,7 @@ impl Connection {
                 client_tools: self.client_tools(),
                 backlog: self.backlog(),
                 observer,
+                run: false,
             }),
             from,
             notices: ready.notices,
@@ -2340,6 +2341,7 @@ impl Connection {
                     client_tools,
                     backlog,
                     observer: false,
+                    run: true,
                 },
             )
         });

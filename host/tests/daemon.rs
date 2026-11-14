@@ -248,6 +248,18 @@ impl World {
         (Daemon::new(config), started)
     }
 
+    /// A Host whose headless threads give what they offer people `deadline` to be answered.
+    fn daemon_answering_within(&self, deadline: Duration) -> Daemon {
+        let mut config = self.config(
+            false,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            false,
+        );
+        config.answer_deadline = deadline;
+        Daemon::new(config)
+    }
+
     /// A Host whose agents take MCP servers over ACP.
     fn daemon_over_acp(&self) -> Daemon {
         let mut config = self.config(
@@ -301,6 +313,7 @@ impl World {
             sessions: journals.then(|| self.dir.path().join("layouts")),
             idle_grace,
             drain_timeout: weave_host::DEFAULT_DRAIN_TIMEOUT,
+            answer_deadline: weave_host::DEFAULT_ANSWER_DEADLINE,
             blank_grace,
             launcher: fake_agents(self.dir.path().join("agent-state.json"), require_auth),
             config_file: Some(self.dir.path().join("config.toml")),
@@ -449,6 +462,18 @@ impl TestClient {
 
     async fn create(&mut self, world: &World) -> ThreadId {
         self.create_with(world, "fake").await.thread_id
+    }
+
+    /// A headless thread, attached: one that approves `approve` and rejects the rest.
+    async fn create_headless(&mut self, world: &World, approve: Vec<ToolKind>) -> ThreadId {
+        self.connection
+            .send(CreateThreadRequest {
+                policy: Some(PermissionPolicy::headless(approve)),
+                ..Self::create_request(world, "fake")
+            })
+            .await
+            .expect("thread/create")
+            .thread_id
     }
 
     /// A thread in `dir`, prompted once so it isn't blank.
@@ -1253,6 +1278,11 @@ async fn headless_runs_follow_their_policy() {
     let mut notices = Vec::new();
     loop {
         let event = client.next().await;
+        // The run's own client is no person to offer the rejection to (WVE-147).
+        assert!(
+            !matches!(event, HostEvent::PendingAdded(_)),
+            "offered to the run: {event:?}"
+        );
         if let HostEvent::Event(event) = &event {
             match &event.event {
                 ThreadEvent::TurnStarted {
@@ -1287,6 +1317,213 @@ async fn headless_runs_follow_their_policy() {
             .threads
             .iter()
             .any(|thread| thread.info.session_id == response.thread_id && thread.headless)
+    );
+}
+
+/// The notice a headless thread journals when what it offered expired, `when` as it says.
+fn expired_write(path: &Path, when: &str) -> String {
+    format!(
+        "The request for “Write {}” expired unanswered {when}, so this thread's policy rejected \
+         it: it doesn't approve tools of kind edit. A headless run approves them with `weave run \
+         --approve edit`.",
+        path.display()
+    )
+}
+
+#[tokio::test]
+async fn a_headless_thread_nobody_is_attached_to_rejects_at_once() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let rejected = world.cwd().join("rejected.txt");
+    let thread_id = daemon
+        .run(run_request(&world, &rejected, Vec::new()))
+        .await
+        .expect("run");
+    wait_for(|| {
+        daemon.status().threads.iter().any(|thread| {
+            thread.info.session_id == thread_id && thread.activity == Some(Activity::Idle)
+        })
+    })
+    .await;
+    assert!(!rejected.exists());
+    // Its journal says the policy rejected it, not that it expired.
+    let mut follower = world.client(&daemon).await;
+    let observed = follower
+        .connection
+        .send(AttachThreadRequest {
+            thread_id: thread_id.clone(),
+            after: None,
+            agent_id: None,
+            cwd: None,
+            trace: false,
+            observe: true,
+        })
+        .await
+        .expect("observe");
+    assert_eq!(observed.state.pending, Vec::new());
+    let mut seen = Seen::default();
+    follower.until_turn_ends(&mut seen, None).await;
+    assert_eq!(
+        seen.notices,
+        vec![format!(
+            "This thread's policy rejected “Write {}”: it doesn't approve tools of kind edit. A \
+             headless run approves them with `weave run --approve edit`.",
+            rejected.display()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn a_headless_thread_offers_what_its_policy_would_reject_to_a_person_attached() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+
+    // What the policy approves it still answers, with a person attached.
+    let approving = client.create_headless(&world, vec![ToolKind::Edit]).await;
+    let approved = world.cwd().join("approved.txt");
+    client
+        .prompt(&approving, &format!("write {} ok", approved.display()))
+        .await;
+    let mut seen = Seen::default();
+    loop {
+        let event = client.next().await;
+        assert!(
+            !matches!(event, HostEvent::PendingAdded(_)),
+            "offered: {event:?}"
+        );
+        if client.note(event, &mut seen, None).await {
+            break;
+        }
+    }
+    assert!(approved.exists());
+
+    // What it would reject waits for the person, as an interactive thread's request does, and
+    // their answer stands (WVE-147).
+    let thread_id = client.create_headless(&world, Vec::new()).await;
+    let offered = world.cwd().join("offered.txt");
+    client
+        .prompt(&thread_id, &format!("write {} ok", offered.display()))
+        .await;
+    let mut seen = Seen::default();
+    let (_, asked) = client.asked(&mut seen).await;
+    assert!(matches!(asked.request, PendingKind::Permission { .. }));
+    wait_for(|| {
+        daemon.status().threads.iter().any(|thread| {
+            thread.info.session_id == thread_id
+                && thread.headless
+                && thread.activity == Some(Activity::Waiting)
+        })
+    })
+    .await;
+    client
+        .allow(&thread_id, &asked, "allow")
+        .await
+        .expect("answer");
+    client.until_turn_ends(&mut seen, None).await;
+    assert!(offered.exists(), "the person's answer stood");
+    assert_eq!(seen.notices, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn what_a_headless_thread_offered_and_nobody_answered_in_time_gets_its_policys_answer() {
+    let world = World::new();
+    let daemon = world.daemon_answering_within(Duration::from_millis(200));
+    let mut client = world.client(&daemon).await;
+    let thread_id = client.create_headless(&world, Vec::new()).await;
+    let path = world.cwd().join("expired.txt");
+    client
+        .prompt(&thread_id, &format!("write {} ok", path.display()))
+        .await;
+    let mut seen = Seen::default();
+    let (_, asked) = client.asked(&mut seen).await;
+    let mut resolved = None;
+    loop {
+        match client.next().await {
+            HostEvent::PendingResolved(stopped) => {
+                assert_eq!(stopped.pending_id, asked.id);
+                resolved = Some((stopped.outcome, stopped.by));
+            }
+            event => {
+                if client.note(event, &mut seen, None).await {
+                    break;
+                }
+            }
+        }
+    }
+    // Nobody answered it: it stops waiting as cancelled, and the policy rejects it.
+    assert_eq!(resolved, Some((Resolution::Cancelled, None)));
+    assert!(!path.exists());
+    assert!(
+        seen.agent.contains("Permission was not granted."),
+        "{seen:?}"
+    );
+    assert_eq!(
+        seen.notices,
+        vec![expired_write(&path, "after 200 milliseconds")]
+    );
+
+    // A question the policy would dismiss is offered, and dismissed, the same way.
+    client.prompt(&thread_id, "ask").await;
+    let mut seen = Seen::default();
+    let (_, asked) = client.asked(&mut seen).await;
+    assert!(matches!(asked.request, PendingKind::Elicitation { .. }));
+    client.until_turn_ends(&mut seen, None).await;
+    assert!(
+        seen.agent.contains("You dismissed the question."),
+        "{seen:?}"
+    );
+    assert_eq!(
+        seen.notices,
+        vec![
+            "The agent's question “Tell me a little about yourself.” expired unanswered after \
+             200 milliseconds, so this thread's policy dismissed it."
+                .to_owned()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn what_a_headless_thread_offered_gets_its_policys_answer_when_the_last_client_leaves() {
+    let world = World::new();
+    // The default deadline, which nothing here waits out.
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut person = world.client(&daemon).await;
+    let thread_id = person.create_headless(&world, Vec::new()).await;
+    let path = world.cwd().join("left.txt");
+    person
+        .prompt(&thread_id, &format!("write {} ok", path.display()))
+        .await;
+    person.asked(&mut Seen::default()).await;
+    // An observer, as `weave threads follow` is, is no client, so it keeps nothing waiting.
+    let mut follower = world.client(&daemon).await;
+    let observed = follower
+        .connection
+        .send(AttachThreadRequest {
+            thread_id: thread_id.clone(),
+            after: None,
+            agent_id: None,
+            cwd: None,
+            trace: false,
+            observe: true,
+        })
+        .await
+        .expect("observe");
+    assert_eq!(observed.state.pending.len(), 1);
+    person
+        .connection
+        .send(DetachThreadRequest {
+            thread_id: thread_id.clone(),
+            close: CloseWhen::Never,
+        })
+        .await
+        .expect("thread/detach");
+    let mut seen = Seen::default();
+    follower.until_turn_ends(&mut seen, None).await;
+    assert!(!path.exists());
+    assert_eq!(
+        seen.notices,
+        vec![expired_write(&path, "when the last client left")]
     );
 }
 

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; amended on 2026-11-14 (WVE-147): what a headless thread's policy would reject goes first to a person attached to it, and a rejection after nobody answered says it expired
 date: 2026-11-01
 ---
 
@@ -22,3 +22,14 @@ Weave's own tools stay under the thread's policy. And when a policy rejects a pe
 - Scripts, delegated threads and later triggers (WVE-125) get the agent's configured mode. One that relied on the policy alone with such a mode set now passes `--mode`, or the request's `mode`, naming the agent's default.
 - A session taken up by `session/run` keeps whatever mode its agent restores, as before.
 - Every rejection is a notice in the journal, so a run whose agent keeps trying the same tool shows it each time.
+
+## Amended 2026-11-14: a person attached answers first (WVE-147)
+
+A headless thread's policy answered every request, even while a person had the thread open. Now it answers at once only what it approves, and what it would reject while nobody is attached. What it would reject, and an elicitation it would dismiss, goes to the clients attached when the request comes, as an ordinary pending request, and the person's answer stands. Nobody answering within the answer deadline, 30 minutes from when the request was offered, not from when anyone looked, the policy rejects it. A deadline never approves anything. The last client detaching first has the policy reject it then. Observers aren't clients, and the client `thread/run` attaches, as `weave run`'s is, doesn't count either: it's a script following its run, and it stops waiting when the turn waits on a person, so counting it would offer every run's rejections to nobody.
+
+A rejection after nobody answered is a notice of its own, distinguishable from the policy's plain one: "The request for “Write a.rs” expired unanswered after 30 minutes, so this thread's policy rejected it: …", or "… when the last client left, …", followed by the kind and its `--approve`, as before. An elicitation that expired says the policy dismissed it. The request resolves as `cancelled`, as one whose turn ended does, so no client needs a new outcome to read it.
+
+The research behind it is `docs/research/agents-that-work-while-the-person-is-away.md`, §7.3: products that offer an unattended run's requests to a person let them wait or expire to no, and none approves on a timeout.
+
+- A headless thread with a person attached waits on them, as an interactive thread does: it's `waiting` in listings, a Bot whose policy rejects goes `needsYou`, and whatever waits for its turn, a schedule's occurrence or `weave threads prompt --wait`, waits up to the deadline too, or stops for the person as it does for an interactive thread.
+- The deadline is the Host's `DaemonConfig.answer_deadline` (`DEFAULT_ANSWER_DEADLINE`), not yet in the config file.

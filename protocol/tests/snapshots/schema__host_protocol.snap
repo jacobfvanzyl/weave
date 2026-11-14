@@ -3543,7 +3543,7 @@ expression: schema()
         {
           "type": "string",
           "const": "reject",
-          "description": "Reject them, and dismiss elicitations: nobody is there to answer."
+          "description": "Reject them, and dismiss elicitations: nobody is there to answer. The Host offers them\nto a person attached to the thread first, and rejects or dismisses them when nobody\nanswers in time or nobody is attached."
         }
       ],
       "description": "What happens to permission requests a policy doesn't approve."
@@ -10708,7 +10708,7 @@ expression: schema()
         {
           "type": "string",
           "const": "cancelled",
-          "description": "Its turn was cancelled or ended, or its thread closed."
+          "description": "Its turn was cancelled or ended, or its thread closed; or, in a headless thread, nobody\nanswered it in time, or everyone left first, and the thread's policy answered it."
         },
         {
           "type": "string",

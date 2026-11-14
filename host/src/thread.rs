@@ -137,6 +137,9 @@ pub(crate) struct ClientLink {
     /// It observes the thread (`thread/attach`'s `observe`): it's sent what clients are, but
     /// isn't one of them.
     pub(crate) observer: bool,
+    /// It attached with `thread/run`, as `weave run` does: a script following its run, not a
+    /// person, so a headless thread doesn't offer it what its policy would reject (WVE-147).
+    pub(crate) run: bool,
 }
 
 /// A connection that closes a client with too much waiting to be sent, as having fallen behind.
@@ -721,6 +724,37 @@ struct Pending {
     thread_id: Option<ThreadId>,
     created_ms: u64,
     request: PendingRequest,
+    /// Offered to the people attached to a headless thread in place of its policy's answer.
+    offered: Option<Offered>,
+}
+
+/// A request a headless thread's policy would have rejected, or an elicitation it would have
+/// dismissed, offered instead to the people attached when it came (WVE-147). The policy's own
+/// answer applies when nobody has answered by `deadline`, or once nobody is attached.
+struct Offered {
+    /// When the answer deadline, counted from the offer, passes.
+    deadline: Instant,
+    /// For a permission request, the policy's answer and the kind of tool it asked about.
+    rejection: Option<(RequestPermissionResponse, ToolKind)>,
+}
+
+/// Why an offered request got its policy's answer after all.
+#[derive(Clone, Copy)]
+enum Expiry {
+    /// Nobody answered it in time.
+    Deadline(Duration),
+    /// The last client attached left before anyone answered it.
+    Unattended,
+}
+
+impl Expiry {
+    /// When it expired, as a notice says it.
+    fn when(self) -> String {
+        match self {
+            Self::Deadline(after) => format!("after {}", span(after)),
+            Self::Unattended => "when the last client left".to_owned(),
+        }
+    }
 }
 
 impl Pending {
@@ -906,6 +940,11 @@ impl Actor {
                 self.shared.config.idle_grace
             };
             let deadline = self.idle_since.map(|since| since + grace);
+            let expires = self
+                .pending
+                .iter()
+                .filter_map(|pending| pending.offered.as_ref().map(|offered| offered.deadline))
+                .min();
             tokio::select! {
                 command = self.commands.recv() => match command {
                     Some(command) => self.command(command),
@@ -918,6 +957,16 @@ impl Actor {
                 () = sleep_until(deadline), if deadline.is_some() => {
                     self.stop(Ending::Closed("idle".to_owned()));
                 }
+                () = sleep_until(expires), if expires.is_some() => {
+                    let now = Instant::now();
+                    let after = Expiry::Deadline(self.shared.config.answer_deadline);
+                    self.expire(|offered| offered.deadline <= now, after);
+                }
+            }
+            // However the last client went (detaching, closing, its connection failing), nobody
+            // is left to answer what was offered to it.
+            if self.stopping.is_none() && !self.attended() {
+                self.expire(|_| true, Expiry::Unattended);
             }
             if self.stopping.is_none()
                 && !self.reopens.is_empty()
@@ -953,6 +1002,12 @@ impl Actor {
 
     fn is_idle(&self) -> bool {
         self.clients.is_empty() && self.turns.is_empty() && self.pending.is_empty()
+    }
+
+    /// Whether a person may be attached to answer what a headless thread's policy would reject:
+    /// a client attached other than a run following itself. Observers aren't clients.
+    fn attended(&self) -> bool {
+        self.clients.values().any(|link| !link.run)
     }
 
     fn command(&mut self, command: Command) {
@@ -1153,7 +1208,7 @@ impl Actor {
         match target {
             Ok(target) => {
                 let thread_id = Some(self.root.clone());
-                self.ask(thread_id, PendingRequest::ClientTool { call, target });
+                self.ask(thread_id, PendingRequest::ClientTool { call, target }, None);
             }
             Err(why) => {
                 let _ = call.reply.send(ClientToolResult::error(why));
@@ -1663,6 +1718,18 @@ impl Actor {
             AgentEvent::PermissionRequested(request) => {
                 let kind = self.tool_kinds.of(&request.request);
                 match self.policy.answer(&request.request, kind) {
+                    // What the policy would reject goes to a person attached now, if there is
+                    // one, and the rejection waits for nobody answering (WVE-147).
+                    Some(response) if refuses(&request.request, &response) && self.attended() => {
+                        tracing::info!(
+                            thread = %self.root,
+                            tool = %request.request.tool_call.tool_call_id,
+                            "offered what the thread's policy would reject to its clients"
+                        );
+                        let thread_id = Some(request.request.session_id.clone());
+                        let offered = Some(self.offer(Some((response, kind))));
+                        self.ask(thread_id, PendingRequest::Permission(request), offered);
+                    }
                     Some(response) => {
                         tracing::info!(
                             thread = %self.root,
@@ -1678,14 +1745,17 @@ impl Actor {
                     }
                     None => {
                         let thread_id = Some(request.request.session_id.clone());
-                        self.ask(thread_id, PendingRequest::Permission(request));
+                        self.ask(thread_id, PendingRequest::Permission(request), None);
                     }
                 }
             }
             AgentEvent::ElicitationRequested(request) => {
-                if self.policy.dismisses_elicitations() {
+                let dismisses = self.policy.dismisses_elicitations();
+                if dismisses && !self.attended() {
                     let _ = request.cancel();
                 } else {
+                    // One the policy would dismiss is offered as one it would reject is.
+                    let offered = dismisses.then(|| self.offer(None));
                     let scope = match &request.request.mode {
                         ElicitationMode::Form(form) => Some(&form.scope),
                         ElicitationMode::Url(url) => Some(&url.scope),
@@ -1695,7 +1765,7 @@ impl Actor {
                         Some(ElicitationScope::Session(scope)) => Some(scope.session_id.clone()),
                         _ => None,
                     };
-                    self.ask(thread_id, PendingRequest::Elicitation(request));
+                    self.ask(thread_id, PendingRequest::Elicitation(request), offered);
                 }
             }
             AgentEvent::ElicitationCompleted(id) => {
@@ -1752,7 +1822,63 @@ impl Actor {
         }
     }
 
-    fn ask(&mut self, thread_id: Option<ThreadId>, request: PendingRequest) {
+    /// A request offered now in place of the policy's answer, `rejection` for a permission
+    /// request, which applies if nobody answers within the answer deadline.
+    fn offer(&self, rejection: Option<(RequestPermissionResponse, ToolKind)>) -> Offered {
+        Offered {
+            deadline: Instant::now() + self.shared.config.answer_deadline,
+            rejection,
+        }
+    }
+
+    /// The offered requests `which` picks get their policy's answer after all, having
+    /// expired as `expiry` says: each stops waiting as cancelled, as nobody answered it, and the
+    /// thread journals a notice saying so.
+    fn expire(&mut self, which: impl Fn(&Offered) -> bool, expiry: Expiry) {
+        let (expired, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(|pending| pending.offered.as_ref().is_some_and(&which));
+        self.pending = kept;
+        for pending in expired {
+            self.resolved(&pending.id, Resolution::Cancelled, None);
+            let rejection = pending.offered.and_then(|offered| offered.rejection);
+            let answered = match (pending.request, rejection) {
+                (PendingRequest::Permission(request), Some((response, kind))) => {
+                    let text = expired_text(&request.request, kind, expiry);
+                    self.record(Entry::Notice { text });
+                    request.respond_with(response)
+                }
+                (PendingRequest::Permission(request), None) => request.cancel(),
+                (PendingRequest::Elicitation(request), _) => {
+                    let text = format!(
+                        "The agent's question “{}” expired unanswered {}, so this thread's \
+                         policy dismissed it.",
+                        request.request.message,
+                        expiry.when()
+                    );
+                    self.record(Entry::Notice { text });
+                    request.cancel()
+                }
+                // Never offered: a client tool call has no policy's answer.
+                (PendingRequest::ClientTool { call, .. }, _) => {
+                    let _ = call.reply.send(ClientToolResult::error(
+                        "Nobody answered the tool call in time.",
+                    ));
+                    Ok(())
+                }
+            };
+            if let Err(error) = answered {
+                tracing::debug!(%error, "couldn't pass the policy's answer on to the agent");
+            }
+        }
+    }
+
+    fn ask(
+        &mut self,
+        thread_id: Option<ThreadId>,
+        request: PendingRequest,
+        offered: Option<Offered>,
+    ) {
         // A person has to answer: the thread whose agent began the turn is told, to tell them.
         let asks = match &request {
             PendingRequest::Permission(request) => Some(Asks::Permission(
@@ -1779,6 +1905,7 @@ impl Actor {
             thread_id,
             created_ms: now_ms(),
             request,
+            offered,
         };
         self.next_pending += 1;
         self.broadcast(&PendingAddedNotification {
@@ -2427,6 +2554,27 @@ fn refuses(request: &RequestPermissionRequest, response: &RequestPermissionRespo
 /// tool, and how a headless run would approve its kind, which nobody would find in the agent's
 /// reply (WVE-166).
 fn rejected_text(request: &RequestPermissionRequest, kind: ToolKind) -> String {
+    let (tool, kind) = tool_and_kind(request, kind);
+    format!(
+        "This thread's policy rejected {tool}: it doesn't approve tools of kind {kind}. A \
+         headless run approves them with `weave run --approve {kind}`."
+    )
+}
+
+/// What an offered `request` expiring, as `expiry` says, tells its clients: that nobody
+/// answered it, unlike [`rejected_text`]'s, and then the same as that (WVE-147).
+fn expired_text(request: &RequestPermissionRequest, kind: ToolKind, expiry: Expiry) -> String {
+    let (tool, kind) = tool_and_kind(request, kind);
+    format!(
+        "The request for {tool} expired unanswered {}, so this thread's policy rejected it: it \
+         doesn't approve tools of kind {kind}. A headless run approves them with `weave run \
+         --approve {kind}`.",
+        expiry.when()
+    )
+}
+
+/// The tool `request` asks about, as a notice names it, and its kind as `--approve` takes it.
+fn tool_and_kind(request: &RequestPermissionRequest, kind: ToolKind) -> (String, String) {
     let tool = match request.tool_call.fields.title.as_deref() {
         Some(title) => format!("“{title}”"),
         None => format!("tool call {}", request.tool_call.tool_call_id),
@@ -2435,10 +2583,18 @@ fn rejected_text(request: &RequestPermissionRequest, kind: ToolKind) -> String {
         .ok()
         .and_then(|kind| kind.as_str().map(str::to_owned))
         .unwrap_or_else(|| "other".to_owned());
-    format!(
-        "This thread's policy rejected {tool}: it doesn't approve tools of kind {kind}. A \
-         headless run approves them with `weave run --approve {kind}`."
-    )
+    (tool, kind)
+}
+
+/// `duration` as a notice says it: in whole minutes, seconds or milliseconds.
+fn span(duration: Duration) -> String {
+    let (count, unit) = match duration.as_secs() {
+        seconds if seconds >= 60 => (u128::from(seconds / 60), "minute"),
+        seconds if seconds >= 1 => (u128::from(seconds), "second"),
+        _ => (duration.as_millis(), "millisecond"),
+    };
+    let plural = if count == 1 { "" } else { "s" };
+    format!("{count} {unit}{plural}")
 }
 
 /// The other Host whose thread's agent began a turn from `origin`, if one did.
@@ -2504,5 +2660,16 @@ mod tests {
             "the first"
         );
         assert_eq!(stepped(reported, None), None);
+    }
+
+    #[test]
+    fn an_expiry_says_how_long_nobody_answered() {
+        let after = |duration| Expiry::Deadline(duration).when();
+        assert_eq!(after(crate::DEFAULT_ANSWER_DEADLINE), "after 30 minutes");
+        assert_eq!(after(Duration::from_secs(60)), "after 1 minute");
+        assert_eq!(after(Duration::from_secs(90)), "after 1 minute");
+        assert_eq!(after(Duration::from_secs(5)), "after 5 seconds");
+        assert_eq!(after(Duration::from_millis(200)), "after 200 milliseconds");
+        assert_eq!(Expiry::Unattended.when(), "when the last client left");
     }
 }

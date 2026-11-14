@@ -133,6 +133,9 @@ const SUSPEND_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// How often a drain looks whether turns are still running.
 const DRAIN_POLL: Duration = Duration::from_millis(200);
+/// How long a request a headless thread's policy would reject waits for a person attached to
+/// the thread to answer it, from when it was offered, before the policy rejects it (WVE-147).
+pub const DEFAULT_ANSWER_DEADLINE: Duration = Duration::from_secs(30 * 60);
 
 pub struct DaemonConfig {
     /// Where thread journals are written; `None` keeps them in memory only.
@@ -145,6 +148,8 @@ pub struct DaemonConfig {
     pub drain_timeout: Duration,
     /// How long a blank thread nothing needs stays open.
     pub blank_grace: Duration,
+    /// How long a request a headless thread's policy would reject waits for an attached person.
+    pub answer_deadline: Duration,
     pub launcher: Launcher,
     /// The config file agents and MCP servers come from; the default one when absent.
     pub config_file: Option<PathBuf>,
@@ -202,6 +207,7 @@ impl DaemonConfig {
             idle_grace: DEFAULT_IDLE_GRACE,
             drain_timeout: DEFAULT_DRAIN_TIMEOUT,
             blank_grace: DEFAULT_BLANK_GRACE,
+            answer_deadline: DEFAULT_ANSWER_DEADLINE,
             launcher: process_launcher(),
             config_file,
             registry_cache: None,

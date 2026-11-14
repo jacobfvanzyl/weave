@@ -1,5 +1,7 @@
 //! Answering permission requests without asking anyone, by a [`PermissionPolicy`]: as the
-//! Host does for headless threads, and `weave agents smoke` for its one turn.
+//! Host does for headless threads, and `weave agents smoke` for its one turn. The Host offers
+//! what a headless thread's policy would reject to a person attached to the thread first, and
+//! the policy's answer applies when nobody answers in time (WVE-147).
 
 use std::collections::HashMap;
 
@@ -35,7 +37,9 @@ pub enum Unapproved {
     /// Ask the attached clients, and wait for one if none is attached.
     #[default]
     Ask,
-    /// Reject them, and dismiss elicitations: nobody is there to answer.
+    /// Reject them, and dismiss elicitations: nobody is there to answer. The Host offers them
+    /// to a person attached to the thread first, and rejects or dismisses them when nobody
+    /// answers in time or nobody is attached.
     Reject,
 }
 
@@ -94,7 +98,8 @@ impl PermissionPolicy {
         }
     }
 
-    /// Whether elicitations are dismissed, as nobody is there to answer them.
+    /// Whether elicitations are dismissed, as nobody is there to answer them, unless a person
+    /// attached to the thread answers first.
     pub fn dismisses_elicitations(&self) -> bool {
         self.otherwise == Unapproved::Reject
     }

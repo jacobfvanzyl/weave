@@ -69,7 +69,8 @@ pub struct PendingAddedNotification {
 #[serde(rename_all = "camelCase")]
 pub enum Resolution {
     Answered,
-    /// Its turn was cancelled or ended, or its thread closed.
+    /// Its turn was cancelled or ended, or its thread closed; or, in a headless thread, nobody
+    /// answered it in time, or everyone left first, and the thread's policy answered it.
     Cancelled,
     /// The agent withdrew it.
     Withdrawn,

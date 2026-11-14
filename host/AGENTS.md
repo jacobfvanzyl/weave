@@ -57,7 +57,8 @@ journals, synced, then the answer, or a refusal that frees the key. The key is j
 finds out from the journal whether the work happened (`client::keyed`). Keys go with the journals'
 retention. Permission requests and elicitations are pending
 requests (`pending/added`) every attached client sees, and later attachers in their state;
-the first `pending/answer` counts, and `turn/cancel` cancels them. `threads/watch` (a
+the first `pending/answer` counts, and `turn/cancel` cancels them, those a headless thread
+offered too (below). `threads/watch` (a
 `features` entry) keeps a client's list of the Host's threads live without attaching:
 `Shared::watch` answers with `Shared::listings` and registers the connection under the
 watchers' lock, so nothing comes between, and `tell_updated` sends `threads/updated` from
@@ -98,7 +99,15 @@ answer `agents/get`, sign-in or listing) is a spare the next thread for that age
 directory takes, stopped after a minute unused. New threads start in the agent's configured
 `mode` (`modes.rs`), those `thread/run` starts too (ADR 0026); when a thread's policy rejects a
 permission request, it journals a `notice` saying which tool, its kind and `--approve` for it
-(`thread::rejected_text`). When a thread of a preset or registry agent opens, `updates.rs` looks for
+(`thread::rejected_text`). What a headless thread's policy would reject, and an elicitation it
+would dismiss, is offered instead as a pending request while a client is attached (`Actor::attended`:
+not an observer, nor the client `thread/run` attached, `ClientLink::run`, as `weave run`'s), and
+the person's answer stands (WVE-147). The `Pending` keeps the policy's answer (`Offered`), which
+`Actor::expire` gives it when `DaemonConfig.answer_deadline` (30 minutes from the offer; tests
+shorten it) passes, from the actor loop's own timer, or once nobody is attached, checked after
+every step of the loop however the last client went; it resolves `cancelled` and journals a
+notice that it expired unanswered (`thread::expired_text`). Nobody attached when it comes, the
+policy answers at once. When a thread of a preset or registry agent opens, `updates.rs` looks for
 a newer version in the background, one lookup an hour per package (or for the registry's
 catalog) with the version source swappable (`DaemonConfig.upstream`), and tells the agent's
 threads of an older one, which tell their clients (`agents/updateAvailable`,

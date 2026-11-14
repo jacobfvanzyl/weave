@@ -387,7 +387,9 @@ go into the parent's journal.
 A thread is needed while a client is attached to it, a turn runs in it, or a pending
 request waits in it. A blank thread stops being blank at its first prompt; until then
 it isn't listed, and it is closed rather than suspended, with its journal removed, when
-the Host stops. A headless thread is one whose permission policy answers without asking.
+the Host stops. A headless thread is one whose permission policy answers without asking; what
+it would reject it offers first to a person attached (see
+[Pending requests](#pending-requests)).
 
 ### `ThreadState`
 
@@ -996,7 +998,8 @@ type PendingRequest = {
 ```
 
 A thread's permission policy answers the permission requests it can, and a policy that
-rejects what it doesn't approve dismisses elicitations. When a policy rejects a permission
+rejects what it doesn't approve dismisses elicitations, unless a person attached answers first
+(see [below](#a-person-attached-to-a-headless-thread-wve-147)). When a policy rejects a permission
 request, the thread journals a `notice` naming the tool, its kind and how `weave run` approves
 that kind, since the agent's reply may not say why it couldn't go on (WVE-166). Every other
 permission request or elicitation becomes a pending request: in `ThreadState.pending` for clients that attach
@@ -1013,7 +1016,37 @@ A pending request also resolves when its turn is cancelled or ends (`cancelled`)
 the agent withdraws it (`withdrawn`, from ACP `$/cancel_request`). A client detaching
 doesn't resolve anything: the request waits for another client, or for one to attach. A
 client tool call is the exception on both counts: only its `target` answers it (anyone
-else gets `not_target`), and it resolves `cancelled` when its target detaches.
+else gets `not_target`), and it resolves `cancelled` when its target detaches. What a
+headless thread offered is the other exception, below.
+
+### A person attached to a headless thread (WVE-147)
+
+A headless thread's policy answers what it approves whether or not anyone is attached. What it
+would reject, and an elicitation it would dismiss, goes to the person instead when a client is
+attached to the thread as the request comes: it's a pending request like an interactive
+thread's, and the person's answer stands. Observers aren't clients, and neither is the client
+`thread/run` attached with `attach`, as `weave run` is: a script following its run, which
+stops waiting when the turn waits on a person, so its rejections would go to nobody.
+
+- **The deadline.** If nobody answers within 30 minutes of the request being offered (not of
+  anyone looking at it), the policy answers it: it rejects a permission request and dismisses
+  an elicitation. A deadline never approves anything.
+- **Nobody left.** When the last client attached detaches while it waits, the policy answers it
+  then. With nobody attached when the request comes, the policy answers at once, as before.
+- **What clients see.** Either way it resolves `cancelled`, without `by`, and the thread
+  journals a `notice` that says it expired unanswered, which a plain rejection's doesn't: "The
+  request for “Write a.rs” expired unanswered after 30 minutes, so this thread's policy
+  rejected it: it doesn't approve tools of kind edit. A headless run approves them with `weave
+  run --approve edit`." The last client leaving says "when the last client left" in place of
+  "after 30 minutes". An elicitation's says "The agent's question “…” expired unanswered after
+  30 minutes, so this thread's policy dismissed it."
+- **Waiting.** While it waits the thread is `waiting`, as an interactive thread is, so what
+  follows its turn waits too or stops for a person: `weave run --resume` and `weave threads
+  prompt --wait` on it stop as for any request a person must answer, a thread whose agent began
+  the turn is told it waits, a Dispatcher occurrence's turn runs until the deadline, and a Bot
+  whose policy rejects goes `needsYou`.
+
+The deadline is the Host's (`DaemonConfig.answer_deadline`), not a client's to set.
 
 ## The Host MCP server
 
