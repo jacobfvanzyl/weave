@@ -1339,6 +1339,9 @@ impl Actor {
         if self.shared.draining() {
             return Err(errors::host_stopping());
         }
+        if thread_id == self.root {
+            self.turn_from(&origin);
+        }
         self.handle.prompt(thread_id.clone(), prompt.clone())?;
         self.blank.store(false, Ordering::Relaxed);
         let (seq, at) = self.record(Entry::TurnStarted {
@@ -1496,6 +1499,7 @@ impl Actor {
     /// continuation always ends.
     fn continue_interrupted(&mut self, continuation: Continuation) {
         let root = self.root.clone();
+        self.turn_from(&continuation.origin);
         self.turns.insert(
             root.clone(),
             Turn {
@@ -1980,16 +1984,21 @@ impl Actor {
         }
     }
 
+    /// The thread's own turn from `origin` is about to start: before its agent hears of it, and
+    /// may call a Host tool, the summary says which other Host's agent began it, if one did, as
+    /// [`Self::update_summary`] says once it runs.
+    fn turn_from(&self, origin: &TurnOrigin) {
+        lock(&self.summary).turn_from_host = other_host(origin);
+    }
+
     /// Keep the summary current, and tell attached clients what changed.
     fn update_summary(&mut self) {
         let activity = self.activity();
         let clients = u32::try_from(self.clients.len()).unwrap_or(u32::MAX);
-        let turn_from_host = match self.turns.get(&self.root).map(|turn| &turn.origin) {
-            Some(TurnOrigin::Thread {
-                host: Some(host), ..
-            }) => Some(host.clone()),
-            _ => None,
-        };
+        let turn_from_host = self
+            .turns
+            .get(&self.root)
+            .and_then(|turn| other_host(&turn.origin));
         let (title, git, opened_at, successor, labels, usage) = {
             let mut summary = lock(&self.summary);
             summary.clients = clients;
@@ -2430,6 +2439,16 @@ fn rejected_text(request: &RequestPermissionRequest, kind: ToolKind) -> String {
         "This thread's policy rejected {tool}: it doesn't approve tools of kind {kind}. A \
          headless run approves them with `weave run --approve {kind}`."
     )
+}
+
+/// The other Host whose thread's agent began a turn from `origin`, if one did.
+fn other_host(origin: &TurnOrigin) -> Option<String> {
+    match origin {
+        TurnOrigin::Thread {
+            host: Some(host), ..
+        } => Some(host.clone()),
+        _ => None,
+    }
 }
 
 /// `new`, if it isn't what clients were last told.

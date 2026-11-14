@@ -851,8 +851,10 @@ async fn a_call_to_another_host_fails_at_once_when_nothing_reaches_it() {
     .await;
     assert_eq!(hosts["hosts"][0]["connected"], false, "{hosts}");
 
-    // Nor does one that is away.
+    // Nor does one that is away, once A has seen its connection close.
     running.stop().await;
+    mini.dispatcher_until(|joined| joined.is_some_and(|joined| !joined.connected))
+        .await;
     let refused = call_fails(&a_local, &mut a_events, &caller, "start_thread", start).await;
     assert!(
         refused.contains("Dispatcher isn't connected to this Host"),

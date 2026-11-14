@@ -1221,6 +1221,18 @@ async fn a_new_thread_survives_restarts_repeating_nothing() {
     let mut setup = Setup::with(World::with_journals().await, "2026-11-04T08:00:00Z").await;
     let odin = setup.odin().await;
     let first = setup.turn("hello").await;
+    // Deafened, the relay drops whatever the Host says, its watch's news too, so first the
+    // Dispatcher has to have heard the thread go idle, and to wait on no answer. A Bot listed
+    // idle may only not have heard of its thread yet; one that needed the person and is idle
+    // again has heard the end of its last turn.
+    let target = setup.studio.home().join("odin").join("out.txt");
+    setup
+        .send(&format!("write {} hello", target.display()))
+        .await;
+    setup
+        .odin_until(|bot| bot.state == BotState::NeedsYou)
+        .await;
+    allow(&setup.studio, &first).await;
     setup.odin_until(|bot| bot.state == BotState::Idle).await;
 
     // The Host takes the save prompt, but its answer is lost, and the Dispatcher restarts.
@@ -1478,10 +1490,12 @@ async fn a_bot_pauses_while_its_thread_waits_on_the_person() {
     // Answered, the thread goes on, and so does the Bot.
     allow(&setup.studio, &thread).await;
     ended(&setup.studio, &thread, &turn_of(&still)).await;
-    let resumed = setup
-        .odin_until(|bot| bot.paused.is_none() && bot.waiting_since.is_none())
+    // The Host has ended the turn; the Dispatcher hears so a moment later.
+    setup
+        .odin_until(|bot| {
+            bot.paused.is_none() && bot.waiting_since.is_none() && bot.state == BotState::Idle
+        })
         .await;
-    assert_eq!(resumed.state, BotState::Idle);
     setup.clock.set("2026-11-05T10:00:00Z");
     let ran = setup
         .occurrences_until("tick", |all| {

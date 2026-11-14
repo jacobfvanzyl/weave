@@ -29,19 +29,23 @@ use crate::common::host_until;
 use crate::common::run;
 use crate::common::start;
 
-/// Wait until `world`'s Host has forgotten the Dispatcher it joined.
+/// Wait until `world`'s Host has forgotten the Dispatcher it joined, and removed its record of
+/// it, which it does just after.
 async fn forgotten(world: &World) {
+    let record = world.dir.path().join("dispatcher.json");
     tokio::time::timeout(WAIT, async {
-        while world.daemon.dispatcher().is_some() {
+        while world.daemon.dispatcher().is_some() || record.exists() {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("forgotten in time");
-    assert!(
-        !world.dir.path().join("dispatcher.json").exists(),
-        "its record is gone too"
-    );
+    .unwrap_or_else(|_| {
+        panic!(
+            "forgotten in time: {:?}, its record there: {}",
+            world.daemon.dispatcher(),
+            record.exists()
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -221,7 +225,9 @@ async fn a_host_elsewhere_joins_over_the_websocket_which_stays_on_for_it() {
         "127.0.0.1:0".parse().expect("an address"),
         Arc::clone(&serve) as Arc<dyn Serve>,
     );
-    remote.offer_lifetime = Duration::from_millis(200);
+    // Long enough for the Host to join before it expires, however loaded the computer is.
+    let lifetime = Duration::from_secs(5);
+    remote.offer_lifetime = lifetime;
     let config = weave_dispatcher::DispatcherConfig {
         remote: Some(remote),
         ..dispatcher_config(dir.path())
@@ -234,6 +240,8 @@ async fn a_host_elsewhere_joins_over_the_websocket_which_stays_on_for_it() {
     };
 
     let offer = dispatcher.offer_host(false).await.expect("a code");
+    // The Dispatcher looks a tenth of a second after the code expires.
+    let looked = tokio::time::Instant::now() + lifetime + Duration::from_millis(100);
     let DispatcherAddress::Url(url) = &offer.address else {
         panic!("a URL for a Host elsewhere: {offer:?}");
     };
@@ -252,7 +260,7 @@ async fn a_host_elsewhere_joins_over_the_websocket_which_stays_on_for_it() {
     assert!(!joined.here);
 
     // The code expires, and the WebSocket stays on for the Host that joined over it.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep_until(looked + Duration::from_millis(300)).await;
     assert!(dispatcher.status().expect("status").remote.is_some());
     assert!(!serve.removed.load(std::sync::atomic::Ordering::SeqCst));
 

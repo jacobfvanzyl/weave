@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use agent_client_protocol::Builder;
 use agent_client_protocol::ConnectionTo;
+use agent_client_protocol::Lines;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use weave_dispatcher::Dispatcher;
@@ -138,6 +139,56 @@ async fn connect(
     (connected, closed)
 }
 
+/// Say hello with `credentials`, which the Dispatcher refuses: why, and the code it closes the
+/// connection with. The client stops reading once its hello is refused, which may be before the
+/// Dispatcher's close arrives, so the WebSocket is read here, to its end, apart from it.
+async fn refused(url: &str, credentials: Credentials) -> (agent_client_protocol::Error, u16) {
+    use futures::SinkExt as _;
+    use futures::StreamExt as _;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let socket = open_websocket(url, DISPATCHER_SUBPROTOCOL)
+        .await
+        .expect("the WebSocket");
+    let (sink, mut stream) = socket.split();
+    let (lines, incoming) = tokio::sync::mpsc::unbounded_channel();
+    let reading = tokio::spawn(async move {
+        while let Some(message) = stream.next().await {
+            match message {
+                Ok(Message::Text(text)) => {
+                    let _ = lines.send(Ok(text.to_string()));
+                }
+                Ok(Message::Close(frame)) => return frame.map(|frame| u16::from(frame.code)),
+                Ok(_) => {}
+                Err(_) => return None,
+            }
+        }
+        None
+    });
+    let outgoing = sink
+        .sink_map_err(std::io::Error::other)
+        .with(|line: String| std::future::ready(Ok::<_, std::io::Error>(Message::text(line))));
+    let incoming = futures::stream::unfold(incoming, |mut incoming| async move {
+        incoming
+            .recv()
+            .await
+            .map(|line: std::io::Result<String>| (line, incoming))
+    });
+    let connected = DispatcherConnection::connect_with(
+        Lines::new(Box::pin(outgoing), Box::pin(incoming)),
+        info("weave-cli"),
+        credentials,
+    )
+    .await;
+    let refused = connected.err().expect("refused");
+    let closed = tokio::time::timeout(WAIT, reading)
+        .await
+        .expect("closed in time")
+        .expect("read")
+        .expect("a close code");
+    (refused, closed)
+}
+
 /// Pair a new device with `code`, giving the connection it pairs on, its device and its key.
 async fn pair(url: &str, code: &str) -> (DispatcherConnection, DeviceInfo, DeviceKey) {
     let key = DeviceKey::generate();
@@ -221,7 +272,7 @@ async fn a_device_pairs_once_then_proves_its_key_and_asks_the_dispatcher() {
     paired.shutdown().await;
 
     // The code works once.
-    let (again, closed_again) = connect(
+    let (again, closed_again) = refused(
         &url,
         Credentials::Pair {
             code: code.clone(),
@@ -231,9 +282,8 @@ async fn a_device_pairs_once_then_proves_its_key_and_asks_the_dispatcher() {
         },
     )
     .await;
-    let refused = again.err().expect("a used code");
-    assert!(errors::is(&refused, errors::UNAUTHENTICATED), "{refused}");
-    assert_eq!(closed(&closed_again).await, CLOSE_UNAUTHENTICATED);
+    assert!(errors::is(&again, errors::UNAUTHENTICATED), "{again}");
+    assert_eq!(closed_again, CLOSE_UNAUTHENTICATED);
 
     // From then on it proves its key, and asks what the CLI asks.
     let (connected, _) = connect(&url, self::device(&device, &key, Some(status.id.clone()))).await;
@@ -316,15 +366,9 @@ async fn a_device_that_cant_prove_itself_is_refused_and_closed() {
         ),
     ];
     for (what, credentials) in refusals {
-        let (connected, reason) = connect(&url, credentials).await;
-        let refused = connected
-            .err()
-            .unwrap_or_else(|| panic!("{what} connected"));
-        assert!(
-            errors::is(&refused, errors::UNAUTHENTICATED),
-            "{what}: {refused}"
-        );
-        assert_eq!(closed(&reason).await, CLOSE_UNAUTHENTICATED, "{what}");
+        let (why, code) = refused(&url, credentials).await;
+        assert!(errors::is(&why, errors::UNAUTHENTICATED), "{what}: {why}");
+        assert_eq!(code, CLOSE_UNAUTHENTICATED, "{what}");
     }
 
     // Another Dispatcher's id: the device won't sign for it.
@@ -601,8 +645,9 @@ async fn upgrades_need_the_subprotocol_and_an_allowed_origin() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_client_that_proves_no_device_in_time_is_closed() {
     let dir = tempfile::tempdir().expect("tempdir");
+    // Long enough for a device to pair before it passes, however loaded the computer is.
     let websocket = RemoteConfig {
-        hello_deadline: Duration::from_millis(200),
+        hello_deadline: Duration::from_secs(3),
         ..RemoteConfig::default()
     };
     let (dispatcher, _serving) = start_with(dir.path(), Arc::default(), websocket);
@@ -641,42 +686,42 @@ async fn a_client_that_proves_no_device_in_time_is_closed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_client_that_stops_answering_pings_is_closed() {
-    use futures::StreamExt as _;
-    use tokio_tungstenite::tungstenite::Message;
+    use tokio::io::AsyncReadExt as _;
 
+    // A pong has an interval to come back in: long enough for one that answers, however loaded
+    // the computer is.
+    let interval = Duration::from_secs(1);
     let dir = tempfile::tempdir().expect("tempdir");
     let websocket = RemoteConfig {
-        ping_interval: Duration::from_millis(100),
+        ping_interval: interval,
         ..RemoteConfig::default()
     };
     let (dispatcher, _serving) = start_with(dir.path(), Arc::default(), websocket);
     let cli = ask(dir.path()).await;
     let (url, code) = offer(&cli).await;
 
-    // One that answers stays.
+    // One that answers stays, past the Dispatcher's first look for a pong.
     let (answering, _, _) = pair(&url, &code).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(interval * 5 / 2).await;
     answering
         .send(DispatcherStatusRequest {})
         .await
         .expect("still connected");
 
-    // One that reads nothing never answers, and is closed.
-    let mut silent = upgrade(&url, Some(DISPATCHER_SUBPROTOCOL), None)
+    // One that reads its connection's bytes without taking them as WebSocket frames never
+    // answers a ping, and is closed: its connection ends.
+    let silent = upgrade(&url, Some(DISPATCHER_SUBPROTOCOL), None)
         .await
         .expect("upgrades");
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    let tokio_tungstenite::MaybeTlsStream::Plain(mut silent) = silent.into_inner() else {
+        panic!("a plain TCP connection");
+    };
     let ended = tokio::time::timeout(WAIT, async {
-        loop {
-            match silent.next().await {
-                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return,
-                Some(Ok(_)) => {}
-            }
-        }
+        let mut buffer = [0u8; 1024];
+        while silent.read(&mut buffer).await.is_ok_and(|read| read > 0) {}
     })
     .await;
     assert!(ended.is_ok(), "the Dispatcher closed it");
-    let _ = silent.close(None).await;
     answering.shutdown().await;
     cli.shutdown().await;
     dispatcher.stop().await;

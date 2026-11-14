@@ -207,6 +207,11 @@ they learn it when they join.
 
 Tests: in-process Hosts join the Dispatcher over its `hosts.sock`, each through a Unix-socket
 relay that a restart cuts, as a Host process exiting closes its connections (`tests/common`).
+They run under the whole workspace's load, so they wait for the state they need rather than for a
+time (WVE-215): `World::join` waits for `hosts.sock`, which `serve` binds in the task `start`
+spawns; `World::dispatcher_until` waits for the Host's own view of its connection; and a deafened
+relay drops the Host's watch news as well as its answers, so a test deafens it only once the
+Dispatcher has heard its thread's last change.
 `tests/devices.rs` pairs devices over a loopback WebSocket with a fake Serve, and checks
 what proves a device and what doesn't, what a device may ask, revoking, the Serve entry, and the
 WebSocket's subprotocol and `Origin` checks, hello deadline and pings, which moved here from the

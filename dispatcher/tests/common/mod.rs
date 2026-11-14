@@ -176,15 +176,17 @@ impl World {
             .expect("joined");
     }
 
-    /// Join the Dispatcher from `dispatcher_dir` with `code`, through the relay to its socket.
+    /// Join the Dispatcher from `dispatcher_dir` with `code`, through the relay to its socket,
+    /// once it listens there.
     pub async fn join_with(
         &self,
         dispatcher_dir: &Path,
         code: String,
         name: &str,
     ) -> Result<JoinedDispatcher, Error> {
-        self.relay
-            .point(&dispatcher_config(dispatcher_dir).paths.hosts_socket());
+        let hosts_socket = dispatcher_config(dispatcher_dir).paths.hosts_socket();
+        listening(&hosts_socket).await;
+        self.relay.point(&hosts_socket);
         self.daemon
             .join_dispatcher(JoinDispatcherRequest {
                 address: DispatcherAddress::Socket(self.relay.path.clone()),
@@ -192,6 +194,22 @@ impl World {
                 name: Some(name.to_owned()),
             })
             .await
+    }
+
+    /// Wait until the Host's own view of the Dispatcher it joined is as `wanted` says.
+    pub async fn dispatcher_until(&self, wanted: impl Fn(Option<&JoinedDispatcher>) -> bool) {
+        tokio::time::timeout(WAIT, async {
+            while !wanted(self.daemon.dispatcher().as_ref()) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "the Host's Dispatcher in time: {:?}",
+                self.daemon.dispatcher()
+            )
+        });
     }
 
     /// The home `~/…` paths between Hosts are under.
@@ -416,6 +434,18 @@ pub fn dispatcher_config_with(dir: &std::path::Path, clock: Arc<dyn Clock>) -> D
         reach_timeout: Duration::from_secs(2),
         ..DispatcherConfig::new(DispatcherPaths::in_dir(dir.join("dispatcher")))
     }
+}
+
+/// Wait until something listens on `socket`. A Dispatcher binds its socket for Hosts as it starts
+/// serving, in the task [`start`] spawns, so a Host joining at once may find nothing there yet.
+pub async fn listening(socket: &Path) {
+    tokio::time::timeout(WAIT, async {
+        while UnixStream::connect(socket).await.is_err() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("something listening on {} in time", socket.display()));
 }
 
 /// A Dispatcher from `dir`, answering on its socket.
