@@ -17,6 +17,8 @@ import {
   sessionOfKey,
   threadKey,
 } from '@/app/app-controller';
+import { threadOf } from './blocks';
+import { tabBlocks } from './layout';
 
 /** A directory as a Session is keyed by it: without a slash at its end, which a thread's may have. */
 const plain = (path: string) => path.length > 1 ? path.replace(/\/+$/, '') || '/' : path;
@@ -246,8 +248,9 @@ export type SessionListView = {
   /** The person's Projects, by name, each with its Sessions on whichever Hosts it has them. */
   projects: { project: ProjectSummary; sessions: ListedSession[] }[];
   /**
-   * The Hosts that have a Session no Project has, in the Dispatcher's order, each with those
-   * Sessions, the most recently active first. A Host whose Sessions are all in Projects isn't here.
+   * The person's Hosts, in the Dispatcher's order, each with its Sessions no Project has, the most
+   * recently active first: every Host, whether or not it has any (WVE-231), except while the list
+   * is filtered, when only those with a match are here.
    */
   hosts: { host: HostSummary; sessions: SessionSummary[] }[];
 };
@@ -257,11 +260,10 @@ const matches = (session: SessionSummary, query: string, project?: ProjectSummar
 
 /**
  * The sidebar's Sessions: under their Projects, and after them, under its Host, each Session no
- * Project has (ADR 0031: a directory no Project names stays under its Host). A Host is a heading
- * only for those: one whose Sessions are all in Projects isn't listed, and a Session under a
- * Project says which Host it's on. A Project with no Session yet is listed too, for starting one,
- * except while the list is filtered. Without Projects, as from a Dispatcher that keeps none, every
- * Session is under its Host.
+ * Project has (ADR 0031: a directory no Project names stays under its Host). A Session under a
+ * Project says which Host it's on. Every Host is listed, with or without such Sessions (WVE-231),
+ * and a Project with no Session yet is too, for starting one, except while the list is filtered.
+ * Without Projects, as from a Dispatcher that keeps none, every Session is under its Host.
  */
 export function sessionListView(
   sessions: readonly SessionSummary[],
@@ -284,8 +286,82 @@ export function sessionListView(
       .sort((left, right) => left.name.localeCompare(right.name))
       .map((project) => ({ project, sessions: byProject.get(project.id) ?? [] }))
       .filter(({ sessions: listed }) => !query || listed.length > 0),
-    hosts: hosts.flatMap((host) => byHost.has(host.id) ? [{ host, sessions: byHost.get(host.id) ?? [] }] : []),
+    hosts: hosts.flatMap((host) => byHost.has(host.id) || !query ? [{ host, sessions: byHost.get(host.id) ?? [] }] : []),
   };
+}
+
+/** What a group of Sessions has going on, for a heading that hides them (WVE-231). */
+export function sessionsActivity(sessions: readonly SessionSummary[]): { activity?: 'waiting' | 'running'; unread: boolean } {
+  const activity = sessions.some(({ waiting }) => waiting > 0) ? 'waiting' : sessions.some(({ running }) => running > 0) ? 'running' : undefined;
+  return { ...(activity ? { activity } : {}), unread: sessions.some(({ unread }) => unread) };
+}
+
+/** A tab with a Thread Block, as the sidebar's Threads view lists it (WVE-231). */
+export type ThreadTab = {
+  /** The Session's key and the tab's id. */
+  key: string;
+  session: SessionSummary;
+  host?: HostSummary;
+  project?: ProjectSummary;
+  tabId: string;
+  /** The tab's name where it was given one, else its first thread's title. */
+  name: string;
+  /** Its Thread Blocks, in the tab's order, each with its thread's key, listed or not. */
+  blocks: { id: string; thread: string }[];
+  waiting: number;
+  running: number;
+  unread: boolean;
+  lastActivityAt?: number;
+};
+
+/**
+ * The sidebar's Threads view (WVE-231): one item for each tab of a Session that has a Thread
+ * Block, docked or floating, minimized or not, under no Project or Host, the most recently active
+ * first. Only the Sessions given are in it, so a Bot's isn't; one whose Host keeps no layout has
+ * no tabs to list.
+ */
+export function threadTabs(
+  sessions: readonly SessionSummary[],
+  model: Pick<AppModel, 'known' | 'threads' | 'unread' | 'hosts' | 'projects'>,
+  options: { query?: string } = {},
+): ThreadTab[] {
+  const query = options.query?.trim().toLocaleLowerCase() ?? '';
+  const layouts = new Map((model.known ?? []).map((known) => [sessionKey(known.hostId, known.directory), known.layout]));
+  const listed = new Map(model.threads.map((thread) => [thread.key, thread]));
+  const tabs: ThreadTab[] = [];
+  for (const session of sessions) {
+    const host = model.hosts.find(({ id }) => id === session.hostId);
+    const project = containing(model.projects ?? [], session.hostId, session.directory, session.git?.repo);
+    for (const tab of layouts.get(session.key)?.tabs ?? []) {
+      const blocks = tabBlocks(tab).flatMap((block) => {
+        const threadId = threadOf(block);
+        return threadId ? [{ id: block.id, thread: threadKey(session.hostId, threadId) }] : [];
+      });
+      if (blocks.length === 0) continue;
+      const members = blocks.flatMap(({ thread }) => listed.get(thread) ?? []);
+      const titles = members.map(({ title }) => title ?? '');
+      const name = tab.title || titles.find(Boolean) || 'New thread';
+      if (query && ![name, ...titles, session.name, session.directory, session.git?.branch ?? '', project?.name ?? '', host?.name ?? '']
+        .some((value) => value.toLocaleLowerCase().includes(query))) continue;
+      const live = members.filter(({ state }) => state !== 'closed');
+      const latest = Math.max(0, ...members.map(recency));
+      tabs.push({
+        key: `${session.key}#${tab.id}`,
+        session,
+        ...(host ? { host } : {}),
+        ...(project ? { project } : {}),
+        tabId: tab.id,
+        name,
+        blocks,
+        waiting: live.filter(({ activity }) => activity === 'waiting').length,
+        running: live.filter(({ activity }) => activity === 'running').length,
+        unread: blocks.some(({ thread }) => model.unread.has(thread)),
+        ...(latest > 0 ? { lastActivityAt: latest } : {}),
+      });
+    }
+  }
+  // Those with nothing listed yet keep their Session's order, after the rest.
+  return tabs.sort((left, right) => (right.lastActivityAt ?? 0) - (left.lastActivityAt ?? 0));
 }
 
 /** How many Sessions other than `except` have a thread waiting on the person. */

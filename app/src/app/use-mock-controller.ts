@@ -1183,5 +1183,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
   }, []);
 
   const botList = withBotStates(model);
-  return { model: { ...model, thread, open, ...(session ? { session } : {}), ...(botList ? { bots: botList } : {}) }, actions };
+  // Every Session's layout, as a Host's list has it (WVE-231).
+  const known = model.known?.map((listed) => ({ ...listed, layout: layoutOf(state.current, sessionKey(listed.hostId, listed.directory)) }));
+  return { model: { ...model, ...(known ? { known } : {}), thread, open, ...(session ? { session } : {}), ...(botList ? { bots: botList } : {}) }, actions };
 }

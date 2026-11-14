@@ -1,8 +1,10 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Add01Icon, Cancel01Icon, FolderAddIcon, GitBranchIcon, LaptopIcon, Search01Icon, ServerStack01Icon } from '@hugeicons/core-free-icons';
-import type { AppController, DispatcherSummary, HostStatus, HostSummary, ProjectSummary, SessionSummary } from '@/app/app-controller';
+import type { AppController, DispatcherSummary, HostStatus, HostSummary, ProjectSummary, SessionSummary, ThreadActivity } from '@/app/app-controller';
 import { dragsWindow, platform } from '@/app/platform';
+import { type SidebarViewName, hostGroup, projectGroup, toggleGroup, useSidebarView } from '@/app/sidebar-view';
+import { type GroupFold, GroupHeading } from '@/components/group-heading';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { BotList } from '@/components/bots/bot-list';
 import { RemoveWorktreeDialog } from '@/components/remove-worktree-dialog';
@@ -15,7 +17,6 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupAction,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarInput,
   SidebarMenu,
@@ -27,7 +28,7 @@ import { cn } from '@/lib/utils';
 import type { AddProjectTarget } from '@/components/add-project-dialog';
 import type { NewSessionTarget } from '@/components/new-session-dialog';
 import { ProjectHeading } from '@/components/project-heading';
-import { type ListedSession, sessionLabel, sessionListView } from '@/session/sessions';
+import { type ListedSession, type ThreadTab, sessionLabel, sessionListView, sessionsActivity, threadTabs } from '@/session/sessions';
 
 export const sinceLabel = (at: number | undefined, now = Date.now()) => {
   if (at === undefined) return '';
@@ -38,6 +39,53 @@ export const sinceLabel = (at: number | undefined, now = Date.now()) => {
   return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
 };
 
+/** What's waiting or running, in words, after a tile's label. */
+const stateOf = ({ waiting, running }: { waiting: number; running: number }) =>
+  waiting > 0 ? `${waiting} waiting on you` : running > 0 ? `${running} running` : undefined;
+
+/**
+ * A tile in the list, a Session's or a tab's: its name, a dot for what its threads are doing, how
+ * long since something happened in it, and under them where it is, when it says.
+ */
+function Tile({ name, label, title, activity, unread, state, at, selected, onOpen }: {
+  name: string;
+  /** Under its name; none for a tile of one line. */
+  label?: string;
+  title?: string;
+  activity?: ThreadActivity;
+  unread: boolean;
+  state?: string;
+  at?: number;
+  selected: boolean;
+  onOpen(): void;
+}) {
+  return (
+    <SidebarMenuButton
+      size='lg'
+      isActive={selected}
+      aria-current={selected ? 'page' : undefined}
+      className={cn('h-auto rounded-xl border border-transparent py-1.5 pl-3.5 data-active:border-sidebar-border', label === undefined ? 'min-h-9' : 'min-h-12')}
+      onClick={onOpen}
+    >
+      {/* No icon of its own (WVE-223): a small indent under its heading, and what its threads
+          are doing as a dot after its name. */}
+      <span className='flex min-w-0 flex-1 flex-col gap-0.5'>
+        <span className='flex min-w-0 items-center gap-2'>
+          <span className='truncate font-medium text-sidebar-foreground'>{name}</span>
+          <ActivityIndicator activity={activity} unread={unread} className='size-2 shrink-0' />
+          <span className='ml-auto shrink-0 text-[0.6875rem] text-muted-foreground'>{sinceLabel(at)}</span>
+        </span>
+        {label !== undefined && (
+          <span className='flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground'>
+            <span className='truncate' title={title}>{label}</span>
+            {state && <span className='shrink-0'>· {state}</span>}
+          </span>
+        )}
+      </span>
+    </SidebarMenuButton>
+  );
+}
+
 /**
  * One Session in the list: a tile with its name, where it is, and a mark when a thread in it
  * waits on the person, runs, or ended a turn they haven't seen. What else a tile shows of what's
@@ -47,8 +95,8 @@ export const sinceLabel = (at: number | undefined, now = Date.now()) => {
 function SessionRow({ session, host, label, selected, onOpen, onEnd, actions }: {
   session: SessionSummary;
   host?: HostSummary;
-  /** Under its name: its branch, with its Host's name under a Project. */
-  label: string;
+  /** Under its name: its Host's name and its branch, under a Project. None under its Host, which shows its name alone (WVE-231). */
+  label?: string;
   selected: boolean;
   onOpen(): void;
   /** Asks to end the Session; none where its Host can't, or isn't connected. */
@@ -60,33 +108,9 @@ function SessionRow({ session, host, label, selected, onOpen, onEnd, actions }: 
   const { git } = session;
   const removable = git !== undefined && session.directory !== git.repo && !unreachable && host?.canWorktree === true;
   const activity = session.waiting > 0 ? 'waiting' : session.running > 0 ? 'running' : undefined;
-  const state = session.waiting > 0
-    ? `${session.waiting} waiting on you`
-    : session.running > 0
-      ? `${session.running} running`
-      : undefined;
   const tile = (
-    <SidebarMenuButton
-      size='lg'
-      isActive={selected}
-      aria-current={selected ? 'page' : undefined}
-      className='h-auto min-h-12 rounded-xl border border-transparent py-1.5 pl-3.5 data-active:border-sidebar-border'
-      onClick={onOpen}
-    >
-      {/* No icon of its own (WVE-223): a small indent under its heading, and what its threads
-          are doing as a dot after its name. */}
-      <span className='flex min-w-0 flex-1 flex-col gap-0.5'>
-        <span className='flex min-w-0 items-center gap-2'>
-          <span className='truncate font-medium text-sidebar-foreground'>{session.name}</span>
-          <ActivityIndicator activity={activity} unread={session.unread} className='size-2 shrink-0' />
-          <span className='ml-auto shrink-0 text-[0.6875rem] text-muted-foreground'>{sinceLabel(session.lastActivityAt)}</span>
-        </span>
-        <span className='flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground'>
-          <span className='truncate' title={session.directory}>{label}</span>
-          {state && <span className='shrink-0'>· {state}</span>}
-        </span>
-      </span>
-    </SidebarMenuButton>
+    <Tile name={session.name} label={label} title={session.directory} activity={activity} unread={session.unread} state={stateOf(session)}
+      at={session.lastActivityAt} selected={selected} onOpen={onOpen} />
   );
   return (
     <SidebarMenuItem>
@@ -94,7 +118,7 @@ function SessionRow({ session, host, label, selected, onOpen, onEnd, actions }: 
         ? (
           <ContextMenu>
             <ContextMenuTrigger className='[-webkit-touch-callout:none]'>{tile}</ContextMenuTrigger>
-            <ContextMenuContent aria-label={`${session.name} ${label} actions`}>
+            <ContextMenuContent aria-label={`${[session.name, label].filter(Boolean).join(' ')} actions`}>
               {onEnd && (
                 <ContextMenuItem variant='destructive' onClick={onEnd}>
                   <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
@@ -128,16 +152,17 @@ const hostStatus: Record<HostStatus, string | undefined> = {
   incompatible: 'incompatible',
 };
 
-/** A Host's heading, over its Sessions no Project has: its name, and how it's connected when it isn't. */
-function HostHeading({ host, onNewSession }: { host: HostSummary; onNewSession(): void }) {
+/**
+ * A Host's heading, over its Sessions no Project has: its name, and how it's connected when it
+ * isn't. A click collapses it, when it has any.
+ */
+function HostHeading({ host, fold, onNewSession }: { host: HostSummary; fold?: GroupFold; onNewSession(): void }) {
   const status = hostStatus[host.status];
   return (
     <>
-      <SidebarGroupLabel title={host.error} className='h-9 gap-2 pr-9 text-sm font-medium text-sidebar-foreground [&>svg]:size-4.5'>
-        <HugeiconsIcon icon={LaptopIcon} strokeWidth={1.75} className='text-peach' aria-hidden />
-        <span className='min-w-0 truncate'>{host.name}</span>
+      <GroupHeading name={host.name} icon={LaptopIcon} iconClassName='text-peach' fold={fold} title={host.error}>
         {status && <span className='shrink-0 text-[0.6875rem] font-normal text-muted-foreground'>· {status}</span>}
-      </SidebarGroupLabel>
+      </GroupHeading>
       <SidebarGroupAction aria-label={`New Session on ${host.name}`} title={`New Session on ${host.name}`}
         className='top-3.5 right-2.5' disabled={host.status !== 'connected'} onClick={onNewSession}>
         <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
@@ -206,13 +231,36 @@ function usePullToRefresh(onRefresh?: () => Promise<void> | void) {
   };
 }
 
+const VIEWS: { name: SidebarViewName; label: string }[] = [{ name: 'sessions', label: 'Sessions' }, { name: 'threads', label: 'Threads' }];
+
+/** The sidebar's two views, as a pill of two in the style of a Session's tab rail (WVE-231). */
+function ViewToggle({ view, onChange }: { view: SidebarViewName; onChange(view: SidebarViewName): void }) {
+  return (
+    <div role='tablist' aria-label='View' className='flex h-9 min-w-0 flex-1 items-stretch gap-1 rounded-full bg-muted/50 p-1'>
+      {VIEWS.map(({ name, label }) => (
+        <button key={name} type='button' role='tab' aria-selected={view === name}
+          className={cn(
+            'min-w-0 flex-1 cursor-default truncate rounded-full border border-transparent px-3 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50',
+            view === name && 'border-foreground/10 bg-muted text-foreground',
+          )}
+          onClick={() => onChange(name)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /**
- * The person's Sessions (ADR 0031, WVE-203): under their Projects, each saying which Host it's
- * on, and after them, under its Host, each one no Project has. A Host with none of those isn't a
- * heading. Above them all, the Bots, from a Dispatcher that keeps them (WVE-178). While the Dispatcher can't be reached, a banner says so, and the Sessions of the Hosts
- * it last listed stay, greyed out unless their Host is still connected.
+ * The sidebar. Above everything, the Bots, from a Dispatcher that keeps them (WVE-178). Below
+ * them, one of two views, which the pill at the bottom switches between and the device remembers
+ * (WVE-231). Sessions (ADR 0031, WVE-203): under "Projects", each Project's, saying which Host
+ * each is on, and under "Hosts" every Host, with each Session of its own no Project has, by name
+ * alone; a heading collapses, unless it's a Host with none. Threads: a tile for each tab that has
+ * a Thread Block, under no heading. While the Dispatcher can't be reached, a banner says so, and
+ * the Sessions of the Hosts it last listed stay, greyed out unless their Host is still connected.
  */
-export function SessionList({ controller, sessions, selected, selectedBot, leading, onOpen, onOpenBot, onNewBot, onOpenHosts, onNewSession, onAddProject, onEndSession }: {
+export function SessionList({ controller, sessions, selected, selectedBot, frontTab, leading, onOpen, onOpenTab, onOpenBot, onNewBot, onOpenHosts, onNewSession, onAddProject, onEndSession }: {
   controller: AppController;
   /** First in its top rail: the toggle that hides it, beside a Session. */
   leading?: ReactNode;
@@ -221,7 +269,11 @@ export function SessionList({ controller, sessions, selected, selectedBot, leadi
   selected?: string;
   /** The Bot on screen, by id. */
   selectedBot?: string;
+  /** The tab in front in the Session on screen, by id. */
+  frontTab?: string;
   onOpen(key: string): void;
+  /** Opens a tab's Session with that tab in front. */
+  onOpenTab(tab: ThreadTab): void;
   onOpenBot?(id: string): void;
   onNewBot?(): void;
   onOpenHosts(): void;
@@ -247,8 +299,20 @@ export function SessionList({ controller, sessions, selected, selectedBot, leadi
     if (filtering) filterInput.current?.focus();
   }, [filtering]);
   const pull = usePullToRefresh(actions.refresh);
+  const [sidebar, changeSidebar] = useSidebarView();
+  const threadsView = sidebar.view === 'threads';
   const view = sessionListView(sessions, model.hosts, model.projects, { query });
-  const listed = view.projects.length > 0 || view.hosts.length > 0;
+  const tabs = threadsView ? threadTabs(sessions, model, { query }) : [];
+  const listed = threadsView ? tabs.length > 0 : view.projects.length > 0 || view.hosts.length > 0;
+  /**
+   * How a heading folds: open unless the device collapsed it, and while the list is filtered,
+   * which looks inside and leaves what's remembered alone.
+   */
+  const fold = (group: string, under: readonly SessionSummary[]): GroupFold => ({
+    open: Boolean(query) || !sidebar.collapsed.includes(group),
+    onToggle: () => changeSidebar((current) => toggleGroup(current, group)),
+    ...sessionsActivity(under),
+  });
   const canStart = model.hosts.some(({ status }) => status === 'connected');
   const canAddProject = Boolean(model.canManageProjects && onAddProject && model.hosts.length > 0);
   const projectsHeading = view.projects.length > 0 || (canAddProject && !query);
@@ -264,10 +328,11 @@ export function SessionList({ controller, sessions, selected, selectedBot, leadi
    */
   const row = ({ session, host }: ListedSession, named: boolean) => {
     const on = named && host ? `${host.name}${hostStatus[host.status] ? `, ${hostStatus[host.status]}` : ''}` : undefined;
+    const label = named ? [on, sessionLabel(session)].filter(Boolean).join(' · ') : undefined;
     return (
       <div key={session.key} data-away={(named && hostAway(host)) || undefined} className={cn(named && hostAway(host) && 'opacity-60')}
         title={named && host && host.status !== 'connected' ? host.error : undefined}>
-        <SessionRow session={session} host={host} label={[on, sessionLabel(session)].filter(Boolean).join(' · ')}
+        <SessionRow session={session} host={host} label={label}
           selected={session.key === selected} onOpen={() => onOpen(session.key)} actions={actions}
           // Only a Session its Host keeps, on a Host that closes what's in it.
           onEnd={kept(session) && host?.status === 'connected' && host.canEndSessions ? () => onEndSession(session) : undefined} />
@@ -345,8 +410,8 @@ export function SessionList({ controller, sessions, selected, selectedBot, leadi
         )}
         {/* What's the person's own to arrange, apart from their Bots: the Projects, under a heading
             that adds one, where the first is added too. */}
-        {model.bots && !query && (projectsHeading || view.hosts.length > 0) && <SidebarSeparator className='my-1' />}
-        {projectsHeading && (
+        {model.bots && !query && model.hosts.length > 0 && <SidebarSeparator className='my-1' />}
+        {!threadsView && projectsHeading && (
           <div data-slot='projects-heading' className='relative flex h-8 items-center px-4 pt-1'>
             <h2 className='text-[0.6875rem] font-medium tracking-wide text-muted-foreground'>Projects</h2>
             {canAddProject && (
@@ -357,44 +422,82 @@ export function SessionList({ controller, sessions, selected, selectedBot, leadi
             )}
           </div>
         )}
-        {view.projects.map(({ project, sessions: under }) => (
-          <SidebarGroup key={project.id} role='group' aria-label={project.name} className='py-1.5'>
-            <ProjectHeading controller={controller} project={project}
-              onNewSession={startable(project) ? () => onNewSession({ projectId: project.id }) : undefined}
-              onAddLocation={onAddProject ? () => onAddProject({ to: project }) : undefined} />
-            <SidebarMenu className='gap-0.5'>{under.map((listedSession) => row(listedSession, true))}</SidebarMenu>
-            {under.length === 0 && <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>No Sessions yet</p>}
+        {!threadsView && view.projects.map(({ project, sessions: under }) => {
+          const folded = fold(projectGroup(project.id), under.map(({ session }) => session));
+          return (
+            <SidebarGroup key={project.id} role='group' aria-label={project.name} className='py-1.5'>
+              <ProjectHeading controller={controller} project={project} fold={folded}
+                onNewSession={startable(project) ? () => onNewSession({ projectId: project.id }) : undefined}
+                onAddLocation={onAddProject ? () => onAddProject({ to: project }) : undefined} />
+              {folded.open && <SidebarMenu className='gap-0.5'>{under.map((listedSession) => row(listedSession, true))}</SidebarMenu>}
+              {folded.open && under.length === 0 && <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>No Sessions yet</p>}
+            </SidebarGroup>
+          );
+        })}
+        {!threadsView && view.hosts.length > 0 && (
+          <div data-slot='hosts-heading' className='flex h-8 items-center px-4 pt-1'>
+            <h2 className='text-[0.6875rem] font-medium tracking-wide text-muted-foreground'>Hosts</h2>
+          </div>
+        )}
+        {!threadsView && view.hosts.map(({ host, sessions: under }) => {
+          // A Host with no Session of its own to show has nothing to fold, and no chevron.
+          const folded = under.length > 0 ? fold(hostGroup(host.id), under) : undefined;
+          return (
+            <SidebarGroup key={host.id} role='group' aria-label={host.name} data-away={hostAway(host) || undefined}
+              className={cn('py-1.5', hostAway(host) && 'opacity-60')}>
+              <HostHeading host={host} fold={folded} onNewSession={() => onNewSession({ hostId: host.id })} />
+              {!hostAway(host) && host.status !== 'connected' && host.error && (
+                <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>{host.error}</p>
+              )}
+              {folded?.open && <SidebarMenu className='gap-0.5'>{under.map((session) => row({ session, host }, false))}</SidebarMenu>}
+            </SidebarGroup>
+          );
+        })}
+        {threadsView && listed && (
+          <SidebarGroup role='group' aria-label='Threads' className='py-1.5'>
+            <div data-slot='threads-heading' className='flex h-8 items-center px-2 pt-1'>
+              <h2 className='text-[0.6875rem] font-medium tracking-wide text-muted-foreground'>Threads</h2>
+            </div>
+            <SidebarMenu className='gap-0.5'>
+              {tabs.map((tab) => {
+                const { session, host } = tab;
+                const front = session.key === selected && tab.tabId === frontTab;
+                return (
+                  <SidebarMenuItem key={tab.key} data-away={hostAway(host) || undefined} className={cn(hostAway(host) && 'opacity-60')}>
+                    <Tile name={tab.name} title={session.directory}
+                      label={[session.name, host?.name, session.git ? sessionLabel(session) : undefined].filter(Boolean).join(' · ')}
+                      activity={tab.waiting > 0 ? 'waiting' : tab.running > 0 ? 'running' : undefined} unread={tab.unread} state={stateOf(tab)}
+                      at={tab.lastActivityAt} selected={front} onOpen={() => onOpenTab(tab)} />
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
           </SidebarGroup>
-        ))}
-        {view.hosts.map(({ host, sessions: under }) => (
-          <SidebarGroup key={host.id} role='group' aria-label={host.name} data-away={hostAway(host) || undefined}
-            className={cn('py-1.5', hostAway(host) && 'opacity-60')}>
-            <HostHeading host={host} onNewSession={() => onNewSession({ hostId: host.id })} />
-            {!hostAway(host) && host.status !== 'connected' && host.error && (
-              <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>{host.error}</p>
-            )}
-            <SidebarMenu className='gap-0.5'>{under.map((session) => row({ session, host }, false))}</SidebarMenu>
-          </SidebarGroup>
-        ))}
+        )}
         {model.hosts.length > 0 && !listed && (
           <Empty className='p-6'>
             <EmptyHeader>
-              <EmptyTitle>{query ? 'No matching Sessions' : 'No Sessions'}</EmptyTitle>
+              <EmptyTitle>{threadsView ? (query ? 'No matching threads' : 'No threads') : query ? 'No matching Sessions' : 'No Sessions'}</EmptyTitle>
               <EmptyDescription>
-                {query ? 'Try another filter.' : 'A Session is a directory you work in. Start one with New Session.'}
+                {query
+                  ? 'Try another filter.'
+                  : threadsView
+                    ? 'A tab with a thread in it shows here.'
+                    : 'A Session is a directory you work in. Start one with New Session.'}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
         )}
       </SidebarContent>
 
-      <SidebarFooter className='shrink-0 flex-row items-center gap-1 px-2 pt-1.5 pb-[calc(env(safe-area-inset-bottom)+0.375rem)]'>
-        <Button variant='ghost' size='icon-lg' className='relative' aria-label='Connections' title='Connections' onClick={onOpenHosts}>
+      <SidebarFooter className='shrink-0 flex-row items-center gap-1.5 px-2 pt-1.5 pb-[calc(env(safe-area-inset-bottom)+0.375rem)]'>
+        <Button variant='ghost' size='icon-lg' className='relative shrink-0' aria-label='Connections' title='Connections' onClick={onOpenHosts}>
           <HugeiconsIcon icon={ServerStack01Icon} strokeWidth={2} />
           {unreachable > 0 && (
             <Badge variant='destructive' className='absolute -top-1 -right-1' aria-label={`${unreachable} unreachable`}>{unreachable}</Badge>
           )}
         </Button>
+        {model.hosts.length > 0 && <ViewToggle view={sidebar.view} onChange={(next) => changeSidebar((current) => ({ ...current, view: next }))} />}
       </SidebarFooter>
     </div>
   );

@@ -103,9 +103,11 @@ export type SessionViewProps = {
   onOpenBot?(): void;
   /** The Session ended, with its last Block (WVE-228). */
   onEnded?(): void;
+  /** The tab in front, by id, whenever it's another (WVE-231). */
+  onFrontTab?(tab: string): void;
 };
 
-export function SessionView({ controller, session, members, leading, phone = false, reveal, onRevealed, onOpenThread, onCreated, onBack, bot, onOpenBot, onEnded }: SessionViewProps) {
+export function SessionView({ controller, session, members, leading, phone = false, reveal, onRevealed, onOpenThread, onCreated, onBack, bot, onOpenBot, onEnded, onFrontTab }: SessionViewProps) {
   const { model, actions } = controller;
   const { layout } = session;
   const [view, changeView] = useSessionView(session.key);
@@ -113,6 +115,9 @@ export function SessionView({ controller, session, members, leading, phone = fal
   const canTerminals = Boolean(host?.canTerminals);
   // A Bot's Session shows its first tab, and never writes another.
   const tab = bot ? layout.tabs[0] : tabInFront(layout, view);
+  useEffect(() => {
+    onFrontTab?.(tab.id);
+  }, [tab.id]);
   // Its Thread Block, which stays at the top left.
   const locked = bot ? lockedBlock(layout) : undefined;
   const isLocked = (block: SessionBlock) => block.id === locked?.id;

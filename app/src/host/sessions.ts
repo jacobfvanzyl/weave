@@ -102,7 +102,9 @@ export class HostSessions {
 
   /** The Sessions the Hosts list. */
   known(): KnownSession[] {
-    return [...this.#kept.values()].flatMap(({ hostId, session }) => session
+    return [...this.#kept.values()].flatMap((kept) => {
+      const { hostId, session } = kept;
+      return session
       ? [{
           hostId,
           directory: session.directory,
@@ -111,8 +113,10 @@ export class HostSessions {
           terminals: session.terminals ?? [],
           ...(this.#deps.connection(hostId)?.supports(HOST_PROTOCOL.features.sessionsAdd) ? { keepsOwn: true } : {}),
           ...(session.updatedAt ? { updatedAt: session.updatedAt } : {}),
+          ...(kept.saved || kept.changes.length > 0 ? { layout: this.#shown(kept) } : {}),
         }]
-      : []);
+      : [];
+    });
   }
 
   /**

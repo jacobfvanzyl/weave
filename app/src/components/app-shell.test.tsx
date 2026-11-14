@@ -42,7 +42,7 @@ const pick = async (user: ReturnType<typeof userEvent.setup>, under: string, nam
 };
 
 describe('the list of Sessions', () => {
-  it('puts a Project’s Sessions together with their Host and branch, and the rest under their Hosts, a Host with none left out', () => {
+  it('puts a Project’s Sessions together with their Host and branch, and the rest under their Hosts, by name alone', () => {
     setIdiom('phone');
     render(<MockApp />);
     const weave = screen.getByRole('group', { name: 'weave' });
@@ -52,14 +52,76 @@ describe('the list of Sessions', () => {
     // A thread waiting on the person marks its Session's tile.
     expect(within(reconnect).getByRole('img', { name: 'Waiting for you' })).toBeInTheDocument();
     expect(reconnect).toHaveTextContent('1 waiting on you');
-    // Nothing of the Mac's is outside the Project, so it's no heading; the other Host's directory is in none.
-    expect(screen.queryByRole('group', { name: 'mac' })).not.toBeInTheDocument();
-    expect(within(screen.getByRole('group', { name: 'build' })).getByRole('button', { name: /^odin.*\/srv\/odin/ })).toBeInTheDocument();
+    // Every Host is under "Hosts" (WVE-231). Nothing of the Mac's is outside the Project, so its
+    // heading has nothing to fold; the other Host's directory is in no Project, and its tile has its name alone.
+    const hosts = screen.getByRole('heading', { name: 'Hosts' });
+    const mac = screen.getByRole('group', { name: 'mac' });
+    expect(hosts.compareDocumentPosition(mac) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(weave.compareDocumentPosition(hosts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(mac).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(['New Session on mac']);
+    const build = screen.getByRole('group', { name: 'build' });
+    expect(within(build).getByRole('button', { name: /^build/, expanded: true })).toBeInTheDocument();
+    expect(within(build).getByRole('button', { name: /^odin/ })).not.toHaveTextContent('/srv/odin');
     // Threads aren't listed: a Session's are inside it.
     expect(screen.queryByText('Bring Alpha back')).not.toBeInTheDocument();
     // Nor is a Session made up for a worktree whose thread closed before its Host kept any.
     expect(screen.queryByRole('button', { name: /old-spike/ })).not.toBeInTheDocument();
     expect(within(weave).getAllByRole('button', { name: /mac · / })).toHaveLength(2);
+  });
+
+  it('collapses a Project or a Host from its heading, remembers it, and says what it hides is doing', async () => {
+    setIdiom('phone');
+    const user = userEvent.setup();
+    const { unmount } = render(<MockApp />);
+    const weave = () => screen.getByRole('group', { name: 'weave' });
+    await user.click(within(weave()).getByRole('button', { name: /^weave/, expanded: true }));
+    expect(within(weave()).queryByRole('button', { name: /mac · / })).not.toBeInTheDocument();
+    // A thread in it waits on the person: the heading says so while it hides it.
+    const heading = within(weave()).getByRole('button', { name: /^weave/, expanded: false });
+    expect(within(heading).getByRole('img', { name: 'Waiting for you' })).toBeInTheDocument();
+    await user.click(within(screen.getByRole('group', { name: 'build' })).getByRole('button', { name: /^build/, expanded: true }));
+    expect(screen.queryByRole('button', { name: /^odin/ })).not.toBeInTheDocument();
+    // The filter looks inside what's collapsed, and leaves it collapsed after.
+    await user.click(screen.getByRole('button', { name: 'Filter Sessions' }));
+    await user.type(screen.getByRole('searchbox', { name: 'Filter Sessions' }), 'reconnect');
+    expect(within(weave()).getAllByRole('button', { name: /mac · / })).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Filter Sessions' }));
+    expect(within(weave()).queryByRole('button', { name: /mac · / })).not.toBeInTheDocument();
+    // The device keeps it.
+    unmount();
+    render(<MockApp />);
+    expect(within(weave()).queryByRole('button', { name: /mac · / })).not.toBeInTheDocument();
+    await user.click(within(weave()).getByRole('button', { name: /^weave/, expanded: false }));
+    expect(within(weave()).getAllByRole('button', { name: /mac · / })).toHaveLength(2);
+    expect(within(within(weave()).getByRole('button', { name: /^weave/, expanded: true })).queryByRole('img')).not.toBeInTheDocument();
+  });
+
+  it('switches to Threads, a tile for each tab with a thread under no Project or Host, and remembers the view', async () => {
+    setIdiom('phone');
+    const user = userEvent.setup();
+    const { unmount } = render(<MockApp />);
+    const view = screen.getByRole('tablist', { name: 'View' });
+    expect(within(view).getByRole('tab', { name: 'Sessions' })).toHaveAttribute('aria-selected', 'true');
+    await user.click(within(view).getByRole('tab', { name: 'Threads' }));
+    expect(within(screen.getByRole('tablist', { name: 'View' })).getByRole('tab', { name: 'Threads' })).toHaveAttribute('aria-selected', 'true');
+    // The Bots stay; the Projects and Hosts go.
+    expect(screen.getByRole('group', { name: 'Bots' })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'weave' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Hosts' })).not.toBeInTheDocument();
+    const threads = screen.getByRole('group', { name: 'Threads' });
+    expect(within(threads).getByRole('button', { name: /^Bring Alpha back.*weave · mac · main/ })).toBeInTheDocument();
+    expect(within(threads).getByRole('button', { name: /weave · mac · fix-reconnect.*1 waiting on you/ })).toBeInTheDocument();
+    // The filter is the view's too.
+    await user.click(screen.getByRole('button', { name: 'Filter Sessions' }));
+    await user.type(screen.getByRole('searchbox', { name: 'Filter Sessions' }), 'alpha');
+    expect(within(screen.getByRole('group', { name: 'Threads' })).getAllByRole('button')).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Filter Sessions' }));
+    unmount();
+    render(<MockApp />);
+    expect(screen.getByRole('group', { name: 'Threads' })).toBeInTheDocument();
+    // A tile opens its Session.
+    await user.click(within(screen.getByRole('group', { name: 'Threads' })).getByRole('button', { name: /^Bring Alpha back/ }));
+    expect(await screen.findByRole('region', { name: 'Session weave' })).toBeInTheDocument();
   });
 
   it('filters Sessions', async () => {
@@ -326,6 +388,23 @@ describe('a Session someone arranged', () => {
     render(<MockApp scenario='session' />);
     return screen.getByRole('region', { name: 'Session weave' });
   };
+
+  it('marks the tab in front in the list’s Threads view, and brings a tab in front from there', async () => {
+    const user = userEvent.setup();
+    const session = open();
+    await user.click(within(screen.getByRole('tablist', { name: 'View' })).getByRole('tab', { name: 'Threads' }));
+    // The tab of threads is listed, by its first thread; Notes, which has none, isn't.
+    const threads = screen.getByRole('group', { name: 'Threads' });
+    const tile = () => within(threads).getByRole('button', { name: /^Update the Host protocol spec.*weave · mac · main/ });
+    expect(within(threads).queryByRole('button', { name: /^Notes/ })).not.toBeInTheDocument();
+    expect(tile()).toHaveAttribute('aria-current', 'page');
+    const tabs = within(session).getByRole('tablist', { name: 'Tabs' });
+    await user.click(within(tabs).getByRole('tab', { name: 'Notes' }));
+    expect(tile()).not.toHaveAttribute('aria-current');
+    await user.click(tile());
+    await waitFor(() => expect(within(tabs).getByRole('tab', { name: 'Update the Host protocol spec' })).toHaveAttribute('aria-selected', 'true'));
+    expect(tile()).toHaveAttribute('aria-current', 'page');
+  });
 
   it('lays its tabs out as they were arranged: Blocks docked side by side and one above another, one floating and one put away', async () => {
     const user = userEvent.setup();
@@ -817,8 +896,11 @@ describe('Projects (WVE-220)', () => {
     expect(add).toHaveTextContent('');
     expect((projects.parentElement as HTMLElement).contains(add)).toBe(true);
     // A Project's icon is green, a Host's peach.
-    expect(heading('weave').querySelector('svg')).toHaveClass('text-green');
-    expect(heading('build').querySelector('svg')).toHaveClass('text-peach');
+    // A Project's icon is green, a Host's peach, each with a chevron at the row's end; a Host with nothing to fold has the icon alone.
+    expect(heading('weave').querySelectorAll('svg')[0]).toHaveClass('text-green');
+    expect(heading('build').querySelectorAll('svg')[0]).toHaveClass('text-peach');
+    expect(heading('build').querySelectorAll('svg')).toHaveLength(2);
+    expect([...heading('mac').querySelectorAll('svg')].map((icon) => icon.classList.contains('text-peach'))).toEqual([true]);
   });
 
   it('adds a directory as a Project from the list, named after it, and puts its Sessions under it', async () => {
@@ -834,9 +916,9 @@ describe('Projects (WVE-220)', () => {
     await waitFor(() => expect(within(form).getByLabelText('Name')).toHaveValue('odin'));
     await user.click(within(form).getByRole('button', { name: 'Add Project' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add Project' })).not.toBeInTheDocument());
-    // The Session that directory had is the Project's now, and the Host is no heading.
+    // The Session that directory had is the Project's now, and the Host has none of its own left.
     expect(within(screen.getByRole('group', { name: 'odin' })).getByRole('button', { name: /^odin.*build/ })).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: 'build' })).not.toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'build' })).queryByRole('button', { name: /^odin/ })).not.toBeInTheDocument();
   });
 
   it('offers a clone of a Project’s repository to that Project, as another Host’s location of it', async () => {

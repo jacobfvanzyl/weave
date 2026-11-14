@@ -288,6 +288,11 @@ export type KnownSession = {
    */
   keepsOwn?: boolean;
   updatedAt?: number;
+  /**
+   * Its tabs of Blocks, as this device would show them (WVE-231): what its Host keeps, with the
+   * changes still to save. None before anyone gave it a Block.
+   */
+  layout?: SessionLayout;
 };
 
 /** The Session on screen: its layout as every device sees it, and its directory's terminals. */

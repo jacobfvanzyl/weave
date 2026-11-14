@@ -5,13 +5,14 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Add01Icon, Cancel01Icon, Delete02Icon, Edit02Icon, Folder01Icon, FolderAddIcon } from '@hugeicons/core-free-icons';
 import type { AppController, ProjectSummary } from '@/app/app-controller';
+import { type GroupFold, GroupHeading } from '@/components/group-heading';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { SidebarGroupAction, SidebarGroupLabel } from '@/components/ui/sidebar';
+import { SidebarGroupAction } from '@/components/ui/sidebar';
 
 type Asking = { kind: 'rename' } | { kind: 'removeHost'; hostId: string } | { kind: 'remove' };
 
@@ -92,10 +93,14 @@ function ProjectDialog({ controller, project, asking, onClose }: {
   );
 }
 
-/** A Project's heading: its name, over its Sessions on every Host, a Session to start in it, and its menu. */
-export function ProjectHeading({ controller, project, onNewSession, onAddLocation }: {
+/**
+ * A Project's heading: its name, over its Sessions on every Host, which a click collapses
+ * (WVE-231), a Session to start in it, and its menu.
+ */
+export function ProjectHeading({ controller, project, fold, onNewSession, onAddLocation }: {
   controller: AppController;
   project: ProjectSummary;
+  fold?: GroupFold;
   /** None while none of its Hosts is connected. */
   onNewSession?(): void;
   /** Asks for a location of it on another Host. */
@@ -106,12 +111,7 @@ export function ProjectHeading({ controller, project, onNewSession, onAddLocatio
   const manages = Boolean(model.canManageProjects && actions.updateProject && actions.removeProject);
   const elsewhere = model.hosts.some(({ id, status }) => status === 'connected' && !project.locations.some(({ hostId }) => hostId === id));
   const hostName = (hostId: string) => model.hosts.find(({ id }) => id === hostId)?.name ?? hostId;
-  const label = (
-    <SidebarGroupLabel className='h-9 gap-2 pr-9 text-sm font-medium text-sidebar-foreground [&>svg]:size-4.5'>
-      <HugeiconsIcon icon={Folder01Icon} strokeWidth={1.75} className='text-green' aria-hidden />
-      <span className='min-w-0 truncate'>{project.name}</span>
-    </SidebarGroupLabel>
-  );
+  const label = <GroupHeading name={project.name} icon={Folder01Icon} iconClassName='text-green' fold={fold} />;
   return (
     <>
       {manages

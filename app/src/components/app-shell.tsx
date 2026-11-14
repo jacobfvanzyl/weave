@@ -28,8 +28,8 @@ import { Sidebar, SidebarInset, useSidebar } from '@/components/ui/sidebar';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { botOfThread, botSelection, selectedBot, waitingBots } from '@/session/bots';
-import { botSessionKey, directoryName, sessionListView, sessionSummaries, sessionWith, threadDirectories, threadDirectory, waitingSessions } from '@/session/sessions';
-import { loadLastSession, saveLastSession } from '@/session/view';
+import { type ThreadTab, botSessionKey, directoryName, sessionListView, sessionSummaries, sessionWith, threadDirectories, threadDirectory, waitingSessions } from '@/session/sessions';
+import { loadLastSession, loadView, saveLastSession } from '@/session/view';
 
 function WaitingBadge({ count }: { count: number }) {
   if (count === 0) return null;
@@ -135,6 +135,11 @@ type ShellProps = {
   reveal?: string;
   onRevealed(): void;
   onOpenSession(key?: string): void;
+  /** Opens a tab from the list's Threads view: its Session, with that tab in front (WVE-231). */
+  onOpenTab(tab: ThreadTab): void;
+  /** The tab in front in the Session on screen, and the Session's own telling of it. */
+  frontTab?: string;
+  onFrontTab(key: string, tab: string): void;
   onOpenThread(key: string): void;
   /** A thread was started in a directory with no Session shown: its Session's, which it starts. */
   onCreated(thread: CreatedThread): void;
@@ -146,11 +151,11 @@ type ShellProps = {
   onSessionEnded(key: string): void;
 };
 
-function PhoneShell({ controller, sessions, session, selected, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onAddProject, onEndSession, onSessionEnded }: ShellProps) {
+function PhoneShell({ controller, sessions, session, selected, onOpenTab, onFrontTab, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onAddProject, onEndSession, onSessionEnded }: ShellProps) {
   const back = () => onOpenSession(undefined);
   const leading = <BackButton count={waiting} onBack={back} />;
   if (!selected) {
-    return <SessionList controller={controller} sessions={sessions} onOpen={onOpenSession} onOpenBot={(id) => onOpenSession(botSelection(id))} onNewBot={onNewBot}
+    return <SessionList controller={controller} sessions={sessions} onOpen={onOpenSession} onOpenTab={onOpenTab} onOpenBot={(id) => onOpenSession(botSelection(id))} onNewBot={onNewBot}
       onOpenHosts={onOpenHosts} onNewSession={onNewSession} onAddProject={onAddProject} onEndSession={onEndSession} />;
   }
   if (bot) {
@@ -162,11 +167,12 @@ function PhoneShell({ controller, sessions, session, selected, bot, botSession, 
   if (!session) return <NoSession controller={controller} selected={selected} known={sessions.some(({ key }) => key === selected)} leading={leading} />;
   return (
     <SessionView key={session.key} controller={controller} session={session} members={membersOf(sessions, session.key)} phone leading={leading}
-      reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} onBack={back} onEnded={() => onSessionEnded(session.key)} />
+      reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} onBack={back} onEnded={() => onSessionEnded(session.key)}
+      onFrontTab={(tab) => onFrontTab(session.key, tab)} />
   );
 }
 
-function SplitShell({ controller, sessions, session, selected, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onAddProject, onEndSession, onSessionEnded }: ShellProps) {
+function SplitShell({ controller, sessions, session, selected, frontTab, onOpenTab, onFrontTab, bot, botSession, waiting, onOpenBotPage, onNewBot, reveal, onRevealed, onOpenSession, onOpenThread, onCreated, onOpenHosts, onNewSession, onAddProject, onEndSession, onSessionEnded }: ShellProps) {
   const { setOpenMobile } = useSidebar();
   // The toggle is in the list's rail while the list shows, and in the Session's while it doesn't.
   const hidden = useSidebarHidden();
@@ -180,7 +186,8 @@ function SplitShell({ controller, sessions, session, selected, bot, botSession, 
       {/* No line at its edge: the resize handle shows one under the pointer and while it drags. */}
       <Sidebar collapsible='offcanvas' className='group-data-[side=left]:border-r-0'>
         <SessionList controller={controller} sessions={sessions} selected={selected} selectedBot={selectedBot(selected)} onOpenHosts={onOpenHosts} onNewSession={onNewSession}
-          onAddProject={onAddProject} onEndSession={onEndSession} onOpen={open} onOpenBot={(id) => open(botSelection(id))} onNewBot={onNewBot}
+          onAddProject={onAddProject} onEndSession={onEndSession} onOpen={open} frontTab={frontTab}
+          onOpenTab={(tab) => { onOpenTab(tab); setOpenMobile(false); }} onOpenBot={(id) => open(botSelection(id))} onNewBot={onNewBot}
           leading={hidden ? undefined : <SidebarToggle waiting={waiting} />} />
         <SidebarResizeHandle />
       </Sidebar>
@@ -190,7 +197,8 @@ function SplitShell({ controller, sessions, session, selected, bot, botSession, 
               onOpenBot={onOpenBotPage} onOpenThread={onOpenThread} onCreated={onCreated} />
           : session
           ? <SessionView key={session.key} controller={controller} session={session} members={membersOf(sessions, session.key)} leading={leading}
-              reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} onEnded={() => onSessionEnded(session.key)} />
+              reveal={reveal} onRevealed={onRevealed} onOpenThread={onOpenThread} onCreated={onCreated} onEnded={() => onSessionEnded(session.key)}
+      onFrontTab={(tab) => onFrontTab(session.key, tab)} />
           : <NoSession controller={controller} selected={selected} known={sessions.some(({ key }) => key === selected)} leading={leading} />}
       </SidebarInset>
     </>
@@ -219,6 +227,8 @@ export function AppShell({ controller, pairingOffer }: {
   const [starting, setStarting] = useState<string>();
   const sessions = useMemo(() => sessionSummaries(model, { also: starting }), [model.threads, model.known, model.unread, model.bots, starting]);
   const [reveal, setReveal] = useState<string>();
+  // The tab in front in the Session on screen, as it says, for the list's Threads view.
+  const [front, setFront] = useState<{ key: string; tab: string }>();
   // A thread asked for before its Host listed it, as by the link the app was opened with.
   const [wanted, setWanted] = useState<string>();
   const [hostsOpen, setHostsOpen] = useState(false);
@@ -301,6 +311,15 @@ export function AppShell({ controller, pairingOffer }: {
     const key = botSessionKey(gone, model.threads);
     setSelected(key && model.known?.some((known) => sessionKey(known.hostId, known.directory) === key) ? key : undefined);
   };
+  /**
+   * A tab picked in the list's Threads view: its Session, showing the thread in the Block that
+   * last had the keyboard there on this device, else its first, which brings its tab in front.
+   */
+  const openTab = (tab: ThreadTab) => {
+    const focused = loadView(tab.session.key).focus[tab.tabId];
+    setSelected(tab.session.key);
+    if (tab.session.key !== selected || tab.tabId !== front?.tab) setReveal((tab.blocks.find(({ id }) => id === focused) ?? tab.blocks[0])?.thread);
+  };
   useOpenThreadRequests(openThread);
 
   useEffect(() => {
@@ -354,6 +373,9 @@ export function AppShell({ controller, pairingOffer }: {
     reveal: shown ? reveal : undefined,
     onRevealed: () => setReveal(undefined),
     onOpenSession: setSelected,
+    onOpenTab: openTab,
+    frontTab: front && front.key === selected ? front.tab : undefined,
+    onFrontTab: (key, tab) => setFront((current) => current?.key === key && current.tab === tab ? current : { key, tab }),
     onOpenThread: openThread,
     onCreated: created,
     onOpenHosts: openHosts,

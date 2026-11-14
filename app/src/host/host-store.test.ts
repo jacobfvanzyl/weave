@@ -1007,7 +1007,8 @@ describe('HostStore Sessions', () => {
     expect(host.params['sessions/add']).toEqual([{ directory: '/work', threads: [THREAD] }, { directory: '/work', threads: ['gone'] }]);
     expect(store.snapshot().session).toMatchObject({ saved: true, own: { threads: [THREAD], terminals: [] } });
     expect(blocks(store)).toEqual([THREAD]);
-    expect(store.snapshot().known).toEqual([{ hostId: HOST, directory: '/work', threads: [THREAD], terminals: [], keepsOwn: true, updatedAt: 2 }]);
+    // The list has it with its layout, as every Session's, for the sidebar's Threads view (WVE-231).
+    expect(store.snapshot().known).toEqual([{ hostId: HOST, directory: '/work', threads: [THREAD], terminals: [], keepsOwn: true, updatedAt: 2, layout: store.snapshot().session?.layout }]);
     store.stop();
   });
 

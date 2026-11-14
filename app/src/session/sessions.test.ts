@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { HostSummary, KnownSession, ProjectSummary, ThreadSummary } from '@/app/app-controller';
 import { containing, projectAt, projectLocation, projectsByUse, projectsOfRepository, sessionLabel, sessionListView, sessionOfThread, sessionSummaries,
   sessionWith,
+  sessionsActivity,
   threadSessions,
+  threadTabs,
   ownThreads, waitingSessions } from './sessions';
+import { threadBlock, terminalBlock } from './blocks';
+import { LAYOUT_VERSION } from './layout';
 
 const MAC = 'h-mac';
 const HOMELAB = 'h-homelab';
@@ -197,12 +201,19 @@ describe('the sidebar’s list', () => {
   });
   const projects = [project('odin', [[MAC, '/code/odin'], [HOMELAB, '/home/jaco/odin']])];
 
-  it('puts a Project’s Sessions on every Host together, and the rest under their Hosts, a Host with none left out', () => {
+  it('puts a Project’s Sessions on every Host together, and the rest under their Hosts, every Host listed', () => {
     const view = sessionListView(sessions, hosts, projects);
     expect(view.projects.map(({ project: listed, sessions: under }) => [listed.name, under.map(({ session, host }) => `${host?.name} ${sessionLabel(session)}`)]))
       .toEqual([['odin', ['Mac main', 'homelab main', 'Mac auth']]]);
     expect(view.hosts.map(({ host, sessions: under }) => [host.name, under.map(({ key }) => key)]))
-      .toEqual([['Mac', ['h-mac:/scratch']]]);
+      .toEqual([['Mac', ['h-mac:/scratch']], ['homelab', []]]);
+  });
+
+  it('says what a heading’s Sessions are doing, the most pressing first', () => {
+    const [first, second] = sessions;
+    expect(sessionsActivity([])).toEqual({ unread: false });
+    expect(sessionsActivity([{ ...first, running: 1 }, { ...second, unread: true }])).toEqual({ activity: 'running', unread: true });
+    expect(sessionsActivity([{ ...first, running: 1 }, { ...second, waiting: 2 }])).toEqual({ activity: 'waiting', unread: false });
   });
 
   it('lists a Project with no Session yet, for starting one, unless the list is filtered', () => {
@@ -226,6 +237,69 @@ describe('the sidebar’s list', () => {
     // By the Host a Session is on, too.
     expect(sessionListView(sessions, hosts, projects, { query: 'homelab' }).projects[0].sessions.map(({ session }) => session.key)).toEqual(['h-homelab:/home/jaco/odin']);
     expect(sessionListView(sessions, hosts, projects, { query: 'odin' }).projects[0].sessions).toHaveLength(3);
+  });
+});
+
+describe('the sidebar’s Threads view', () => {
+  const hosts: HostSummary[] = [{ id: MAC, name: 'Mac', status: 'connected' }, { id: HOMELAB, name: 'homelab', status: 'connected' }];
+  const projects = [project('odin', [[MAC, '/code/odin']])];
+  const threads = [
+    thread(MAC, 't1', '/code/odin', { title: 'Fix the parser', lastActivityAt: 10, activity: 'running' }),
+    thread(MAC, 't2', '/code/odin', { title: 'Write the docs', lastActivityAt: 30 }),
+    thread(MAC, 't3', '/code/odin', { title: 'Review', lastActivityAt: 5, activity: 'waiting' }),
+    thread(HOMELAB, 't4', '/srv/logs', { title: 'Tail the logs', lastActivityAt: 20 }),
+  ];
+  const known = [
+    kept(MAC, '/code/odin', {
+      git: { repo: '/code/odin', branch: 'main' },
+      threads: ['t1', 't2', 't3'],
+      layout: {
+        version: LAYOUT_VERSION,
+        tabs: [
+          {
+            id: 'work',
+            root: { kind: 'row', children: [{ kind: 'block', ...threadBlock('t1', 'b1') }, { kind: 'block', ...terminalBlock('term', 'b-term') }] },
+            floating: [{ block: threadBlock('t3', 'b3'), frame: { x: 0, y: 0, width: 0.5, height: 0.5 }, minimized: true }],
+          },
+          { id: 'shell', root: { kind: 'block', ...terminalBlock('term-2', 'b-term-2') } },
+          { id: 'docs', title: 'Docs', root: { kind: 'block', ...threadBlock('t2', 'b2') } },
+        ],
+      },
+    }),
+    kept(HOMELAB, '/srv/logs', { threads: ['t4'], layout: { version: LAYOUT_VERSION, tabs: [{ id: 'logs', root: { kind: 'block', ...threadBlock('t4', 'b4') } }] } }),
+    // One nobody arranged has no tabs to list.
+    kept(HOMELAB, '/srv/empty'),
+  ];
+  const model = { threads, known, unread: new Set(['h-mac/t2']), hosts, projects };
+  const sessions = sessionSummaries(model);
+
+  it('has an item for each tab with a Thread Block, the most recently active first', () => {
+    const tabs = threadTabs(sessions, model);
+    expect(tabs.map(({ name, session, host, project: under }) => [name, session.name, host?.name, under?.name])).toEqual([
+      ['Docs', 'odin', 'Mac', 'odin'],
+      ['Tail the logs', 'logs', 'homelab', undefined],
+      ['Fix the parser', 'odin', 'Mac', 'odin'],
+    ]);
+    // A tab's threads are those docked and those floating, minimized or not, and it says what they're doing.
+    expect(tabs[2]).toMatchObject({
+      tabId: 'work',
+      blocks: [{ id: 'b1', thread: 'h-mac/t1' }, { id: 'b3', thread: 'h-mac/t3' }],
+      waiting: 1,
+      running: 1,
+      unread: false,
+      lastActivityAt: 10,
+    });
+    expect(tabs[0]).toMatchObject({ unread: true, waiting: 0, running: 0 });
+  });
+
+  it('filters by the tab’s name, its threads’ titles, its Session, Project and Host', () => {
+    const names = (query: string) => threadTabs(sessions, model, { query }).map(({ name }) => name);
+    expect(names('docs')).toEqual(['Docs']);
+    expect(names('write the')).toEqual(['Docs']);
+    expect(names('review')).toEqual(['Fix the parser']);
+    expect(names('HOMELAB')).toEqual(['Tail the logs']);
+    expect(names('odin')).toEqual(['Docs', 'Fix the parser']);
+    expect(names('nothing')).toEqual([]);
   });
 });
 
