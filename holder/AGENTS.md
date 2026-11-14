@@ -36,11 +36,14 @@ deadline can pass meanwhile (`NameServerFailure`, WVE-154).
 
 To move the pin:
 
-1. Update `ghostty.toml`. If Ghostty's `minimum_zig_version` moved, update Zig's version and its
+1. Update `ghostty.toml` to the commit of a libghostty-vt release (a `vt-*` tag), naming the tag
+   beside it. If Ghostty's `minimum_zig_version` moved, update Zig's version and its
    checksums from ziglang.org's `index.json`.
 2. Regenerate the bindings with `cargo build -p weave-holder --features bindgen`. This needs
    libclang: Xcode's on macOS, `libclang-dev` on Debian.
 3. Review the diff of `src/ffi/bindings.rs`, and run the tests.
+4. Build the app's terminal against it too (`bun run ghostty:web` in `app/`): `app/wasm/terminal.c`
+   calls more of the library than `src/vt.rs` does.
 
 The codec names the commit (`weave-holder --version`), so a pin change is a codec change. Holders
 already running keep theirs, and clients restore from them through the formatter's VT.

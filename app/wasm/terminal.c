@@ -244,7 +244,7 @@ EXPORT(wt_frame) Frame *wt_frame(Terminal *t) {
   if (!size_frame(t) || ghostty_render_state_update(t->state, t->terminal) != GHOSTTY_SUCCESS) return NULL;
   if (t->full) {
     GhosttyRenderStateDirty dirty = GHOSTTY_RENDER_STATE_DIRTY_FULL;
-    ghostty_render_state_set(t->state, GHOSTTY_RENDER_STATE_OPTION_DIRTY, &dirty);
+    ghostty_render_state_set(t->state, GHOSTTY_RENDER_STATE_OPT_DIRTY, &dirty);
     t->full = false;
   }
   GhosttyColorRgb background = theme_background, foreground = theme_foreground;
@@ -280,15 +280,15 @@ EXPORT(wt_frame) Frame *wt_frame(Terminal *t) {
       GhosttyColorRgb fg = foreground, bg = background;
       ghostty_render_state_row_cells_get(t->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, &bg);
       ghostty_render_state_row_cells_get(t->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR, &fg);
-      GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
+      GhosttyStyle style = {0};
       ghostty_render_state_row_cells_get(t->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style);
-      if (style.inverse) { GhosttyColorRgb swap = fg; fg = bg; bg = swap; }
-      if (style.faint) { fg.r /= 2; fg.g /= 2; fg.b /= 2; }
-      if (style.bold) cell.flags |= CELL_BOLD;
-      if (style.italic) cell.flags |= CELL_ITALIC;
-      if (style.underline != 0) cell.flags |= CELL_UNDERLINE;
-      if (style.strikethrough) cell.flags |= CELL_STRIKE;
-      if (style.invisible) cell.flags |= CELL_INVISIBLE;
+      if (style.flags & GHOSTTY_STYLE_FLAG_INVERSE) { GhosttyColorRgb swap = fg; fg = bg; bg = swap; }
+      if (style.flags & GHOSTTY_STYLE_FLAG_FAINT) { fg.r /= 2; fg.g /= 2; fg.b /= 2; }
+      if (style.flags & GHOSTTY_STYLE_FLAG_BOLD) cell.flags |= CELL_BOLD;
+      if (style.flags & GHOSTTY_STYLE_FLAG_ITALIC) cell.flags |= CELL_ITALIC;
+      if (GHOSTTY_STYLE_UNDERLINE(style) != GHOSTTY_SGR_UNDERLINE_NONE) cell.flags |= CELL_UNDERLINE;
+      if (style.flags & GHOSTTY_STYLE_FLAG_STRIKETHROUGH) cell.flags |= CELL_STRIKE;
+      if (style.flags & GHOSTTY_STYLE_FLAG_INVISIBLE) cell.flags |= CELL_INVISIBLE;
       cell.foreground = rgb(fg); cell.background = rgb(bg);
       uint32_t codepoints = 0;
       ghostty_render_state_row_cells_get(t->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN, &codepoints);
@@ -328,14 +328,14 @@ EXPORT(wt_frame) Frame *wt_frame(Terminal *t) {
 
 /** Scrolls back (negative) or forward by `lines`. */
 EXPORT(wt_scroll) void wt_scroll(Terminal *t, int32_t lines) {
-  GhosttyTerminalScrollViewport scroll = {GHOSTTY_SCROLL_VIEWPORT_DELTA, {0}};
+  GhosttyTerminalScrollViewport scroll = {GHOSTTY_TERMINAL_SCROLL_VIEWPORT_DELTA, {0}};
   scroll.value.delta = lines;
   ghostty_terminal_scroll_viewport(t->terminal, scroll);
 }
 
 /** Back to where the program is writing. */
 EXPORT(wt_scroll_bottom) void wt_scroll_bottom(Terminal *t) {
-  GhosttyTerminalScrollViewport scroll = {GHOSTTY_SCROLL_VIEWPORT_BOTTOM, {0}};
+  GhosttyTerminalScrollViewport scroll = {GHOSTTY_TERMINAL_SCROLL_VIEWPORT_BOTTOM, {0}};
   ghostty_terminal_scroll_viewport(t->terminal, scroll);
 }
 
@@ -385,21 +385,22 @@ static GhosttyKey physical_key(const char *name, size_t len) {
  */
 EXPORT(wt_key) int32_t wt_key(Terminal *t, const char *name, size_t name_len, const char *text, size_t text_len, uint32_t mods, uint32_t action, uint32_t unshifted) {
   if (action > 2 || mods > 63 || text_len > 1024 * 1024) return -1;
-  ghostty_key_encoder_setopt_from_terminal(t->key_encoder, t->terminal);
+  ghostty_key_encoder_set_from_terminal(t->key_encoder, t->terminal);
   ghostty_key_event_set_action(t->key_event, (GhosttyKeyAction)action);
   ghostty_key_event_set_key(t->key_event, physical_key(name, name_len));
   ghostty_key_event_set_mods(t->key_event, (GhosttyMods)mods);
   ghostty_key_event_set_consumed_mods(t->key_event, 0);
   ghostty_key_event_set_composing(t->key_event, false);
   ghostty_key_event_set_unshifted_codepoint(t->key_event, unshifted);
-  ghostty_key_event_set_utf8(t->key_event, text_len ? text : NULL, text_len);
+  GhosttyString typed = {text_len ? (const uint8_t *)text : NULL, text_len}, none = {NULL, 0};
+  ghostty_key_event_set_utf8(t->key_event, typed);
   if (!reserve(t, text_len + 256)) return -1;
   size_t written = 0;
-  GhosttyResult result = ghostty_key_encoder_encode(t->key_encoder, t->key_event, (char *)t->out, t->out_cap, &written);
+  GhosttyResult result = ghostty_key_encoder_encode(t->key_encoder, t->key_event, t->out, t->out_cap, &written);
   if (result == GHOSTTY_OUT_OF_SPACE && written <= 2 * 1024 * 1024 && reserve(t, written))
-    result = ghostty_key_encoder_encode(t->key_encoder, t->key_event, (char *)t->out, t->out_cap, &written);
+    result = ghostty_key_encoder_encode(t->key_encoder, t->key_event, t->out, t->out_cap, &written);
   // The event borrows the text only until here.
-  ghostty_key_event_set_utf8(t->key_event, NULL, 0);
+  ghostty_key_event_set_utf8(t->key_event, none);
   if (result != GHOSTTY_SUCCESS) return -1;
   t->out_len = written;
   return (int32_t)written;
@@ -414,13 +415,13 @@ EXPORT(wt_mouse) int32_t wt_mouse(Terminal *t, float x, float y, uint32_t button
   bool tracking = false;
   ghostty_terminal_get(t->terminal, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &tracking);
   if (!tracking || button > 11 || action > 2) return -1;
-  ghostty_mouse_encoder_setopt_from_terminal(t->mouse_encoder, t->terminal);
+  ghostty_mouse_encoder_set_from_terminal(t->mouse_encoder, t->terminal);
   // Encode cell coordinates using integral cell units; font advances can be fractional.
   GhosttyMouseEncoderSize size = GHOSTTY_INIT_SIZED(GhosttyMouseEncoderSize);
   size.screen_width = t->columns; size.screen_height = t->rows; size.cell_width = 1; size.cell_height = 1;
-  ghostty_mouse_encoder_setopt(t->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size);
+  ghostty_mouse_encoder_set(t->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size);
   bool any = pressed != 0;
-  ghostty_mouse_encoder_setopt(t->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED, &any);
+  ghostty_mouse_encoder_set(t->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED, &any);
   ghostty_mouse_event_set_action(t->mouse_event, (GhosttyMouseAction)action);
   if (button) ghostty_mouse_event_set_button(t->mouse_event, (GhosttyMouseButton)button); else ghostty_mouse_event_clear_button(t->mouse_event);
   ghostty_mouse_event_set_mods(t->mouse_event, (GhosttyMods)mods);
@@ -428,7 +429,7 @@ EXPORT(wt_mouse) int32_t wt_mouse(Terminal *t, float x, float y, uint32_t button
   ghostty_mouse_event_set_position(t->mouse_event, position);
   if (!reserve(t, 128)) return -1;
   size_t written = 0;
-  if (ghostty_mouse_encoder_encode(t->mouse_encoder, t->mouse_event, (char *)t->out, t->out_cap, &written) != GHOSTTY_SUCCESS) return -1;
+  if (ghostty_mouse_encoder_encode(t->mouse_encoder, t->mouse_event, t->out, t->out_cap, &written) != GHOSTTY_SUCCESS) return -1;
   t->out_len = written;
   return (int32_t)written;
 }
@@ -440,13 +441,13 @@ EXPORT(wt_paste) int32_t wt_paste(Terminal *t, char *text, size_t len) {
   if (ghostty_terminal_get(t->terminal, GHOSTTY_TERMINAL_DATA_MODE, &mode) != GHOSTTY_SUCCESS) return -1;
   if (!reserve(t, len + 12)) return -1;
   size_t written = 0;
-  if (ghostty_paste_encode(text, len, mode.value, (char *)t->out, t->out_cap, &written) != GHOSTTY_SUCCESS) return -1;
+  if (ghostty_paste_encode(text, len, mode.value, t->out, t->out_cap, &written) != GHOSTTY_SUCCESS) return -1;
   t->out_len = written;
   return (int32_t)written;
 }
 
 static bool cell_at(Terminal *t, uint32_t x, uint32_t y, GhosttyGridRef *ref) {
-  *ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+  *ref = (GhosttyGridRef){0};
   GhosttyPoint point = {GHOSTTY_POINT_TAG_VIEWPORT, {{0}}};
   point.value.coordinate.x = (uint16_t)(x >= t->columns ? t->columns - 1 : x);
   point.value.coordinate.y = y >= t->rows ? t->rows - 1u : y;
@@ -467,7 +468,7 @@ EXPORT(wt_select) bool wt_select(Terminal *t, uint32_t type, uint32_t x, uint32_
   GhosttyGridRef ref;
   if (!cell_at(t, x, y, &ref)) return false;
   GhosttySurfacePosition position = {px, py};
-  GhosttySelection selection = GHOSTTY_INIT_SIZED(GhosttySelection);
+  GhosttySelection selection = {0};
   GhosttyResult result = GHOSTTY_NO_VALUE;
   if (type == 0) {
     // A press within half a second and a cell of the last counts on from it.
@@ -496,7 +497,7 @@ EXPORT(wt_select) bool wt_select(Terminal *t, uint32_t type, uint32_t x, uint32_
     result = ghostty_selection_gesture_event(t->gesture, t->terminal, t->drag, &selection);
     if (result == GHOSTTY_SUCCESS) select(t, &selection);
   }
-  GhosttySelection current = GHOSTTY_INIT_SIZED(GhosttySelection);
+  GhosttySelection current = {0};
   return ghostty_terminal_get(t->terminal, GHOSTTY_TERMINAL_DATA_SELECTION, &current) == GHOSTTY_SUCCESS;
 }
 
@@ -507,10 +508,18 @@ EXPORT(wt_select_clear) void wt_select_clear(Terminal *t) {
 
 /** The selected text, as copying takes it: wrapped lines joined, trailing spaces gone. At `wt_out`; its bytes, or -1 with nothing selected. */
 EXPORT(wt_selection) int32_t wt_selection(Terminal *t) {
-  GhosttyTerminalSelectionFormatOptions options = GHOSTTY_INIT_SIZED(GhosttyTerminalSelectionFormatOptions);
-  options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN; options.unwrap = true; options.trim = true;
+  GhosttySelection selection = {0};
+  if (ghostty_terminal_get(t->terminal, GHOSTTY_TERMINAL_DATA_SELECTION, &selection) != GHOSTTY_SUCCESS) return -1;
+  GhosttyFormatter formatter = NULL;
+  if (ghostty_formatter_terminal_new(NULL, &formatter, t->terminal) != GHOSTTY_SUCCESS) return -1;
+  // A new formatter writes plain text and trims it.
+  bool unwrap = true;
   uint8_t *bytes = NULL; size_t len = 0;
-  if (ghostty_terminal_selection_format_alloc(t->terminal, NULL, options, &bytes, &len) != GHOSTTY_SUCCESS) return -1;
+  bool formatted = ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_UNWRAP, &unwrap) == GHOSTTY_SUCCESS
+    && ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_SELECTION, &selection) == GHOSTTY_SUCCESS
+    && ghostty_formatter_format_alloc(formatter, NULL, &bytes, &len) == GHOSTTY_SUCCESS;
+  ghostty_formatter_free(formatter);
+  if (!formatted) return -1;
   bool fits = reserve(t, len);
   if (fits) { for (size_t i = 0; i < len; i++) t->out[i] = bytes[i]; t->out_len = len; }
   ghostty_free(NULL, bytes, len);

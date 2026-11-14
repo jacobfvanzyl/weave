@@ -338,49 +338,61 @@ impl Terminal {
 
     /// The screen and its history through the formatter.
     pub fn format(&self, format: Format, formatting: Formatting) -> Result<String, Error> {
-        let styled = format != Format::Text;
-        let options = ffi::GhosttyFormatterTerminalOptions {
-            size: size_of::<ffi::GhosttyFormatterTerminalOptions>(),
-            emit: match format {
-                Format::Text => ffi::GHOSTTY_FORMATTER_FORMAT_PLAIN,
-                Format::Vt => ffi::GHOSTTY_FORMATTER_FORMAT_VT,
-                Format::Html => ffi::GHOSTTY_FORMATTER_FORMAT_HTML,
-            },
-            unwrap: formatting.unwrap,
-            trim: formatting.trim,
-            extra: ffi::GhosttyFormatterTerminalExtra {
-                size: size_of::<ffi::GhosttyFormatterTerminalExtra>(),
-                palette: styled,
-                modes: styled,
-                scrolling_region: styled,
-                tabstops: styled,
-                pwd: styled,
-                keyboard: styled,
-                screen: ffi::GhosttyFormatterScreenExtra {
-                    size: size_of::<ffi::GhosttyFormatterScreenExtra>(),
-                    cursor: styled,
-                    style: styled,
-                    hyperlink: styled,
-                    protection: styled,
-                    kitty_keyboard: styled,
-                    charsets: styled,
-                },
-            },
-            selection: ptr::null(),
+        let emit: ffi::GhosttyFormatterFormat = match format {
+            Format::Text => ffi::GHOSTTY_FORMATTER_FORMAT_PLAIN,
+            Format::Vt => ffi::GHOSTTY_FORMATTER_FORMAT_VT,
+            Format::Html => ffi::GHOSTTY_FORMATTER_FORMAT_HTML,
         };
-        let mut options = options;
+        // Everything a terminal restores from, which only VT output writes.
+        let extras: ffi::GhosttyFormatterExtras = if format == Format::Text {
+            ffi::GHOSTTY_FORMATTER_EXTRAS_NONE
+        } else {
+            ffi::GHOSTTY_FORMATTER_EXTRAS_ALL
+        };
         let screen = if formatting.history {
             None
         } else {
             self.screen_selection()?
         };
-        if let Some(screen) = &screen {
-            options.selection = screen;
-        }
         let mut formatter: ffi::GhosttyFormatter = ptr::null_mut();
         check("ghostty_formatter_terminal_new", unsafe {
-            ffi::ghostty_formatter_terminal_new(ptr::null(), &mut formatter, self.raw, options)
+            ffi::ghostty_formatter_terminal_new(ptr::null(), &mut formatter, self.raw)
         })?;
+        let set = |option: ffi::GhosttyFormatterOption, value: *const c_void| {
+            check("ghostty_formatter_set", unsafe {
+                ffi::ghostty_formatter_set(formatter, option, value)
+            })
+        };
+        let options = set(ffi::GHOSTTY_FORMATTER_OPT_EMIT, (&raw const emit).cast())
+            .and_then(|()| {
+                set(
+                    ffi::GHOSTTY_FORMATTER_OPT_UNWRAP,
+                    (&raw const formatting.unwrap).cast(),
+                )
+            })
+            .and_then(|()| {
+                set(
+                    ffi::GHOSTTY_FORMATTER_OPT_TRIM,
+                    (&raw const formatting.trim).cast(),
+                )
+            })
+            .and_then(|()| {
+                set(
+                    ffi::GHOSTTY_FORMATTER_OPT_EXTRAS,
+                    (&raw const extras).cast(),
+                )
+            })
+            .and_then(|()| match &screen {
+                Some(screen) => set(
+                    ffi::GHOSTTY_FORMATTER_OPT_SELECTION,
+                    ptr::from_ref(screen).cast(),
+                ),
+                None => Ok(()),
+            });
+        if let Err(error) = options {
+            unsafe { ffi::ghostty_formatter_free(formatter) };
+            return Err(error);
+        }
         let mut out: *mut u8 = ptr::null_mut();
         let mut len = 0;
         let formatted = check("ghostty_formatter_format_alloc", unsafe {
@@ -400,7 +412,6 @@ impl Terminal {
         let start = self.grid_ref(0, 0)?;
         let end = self.grid_ref(size.cols - 1, u32::from(size.rows) - 1)?;
         Ok(Some(ffi::GhosttySelection {
-            size: size_of::<ffi::GhosttySelection>(),
             start,
             end,
             rectangle: false,
@@ -416,7 +427,6 @@ impl Terminal {
             },
         };
         let mut grid_ref = ffi::GhosttyGridRef {
-            size: size_of::<ffi::GhosttyGridRef>(),
             node: ptr::null_mut(),
             x: 0,
             y: 0,

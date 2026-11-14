@@ -4,7 +4,7 @@
 
 [ghostty]
 repository = "https://github.com/ghostty-org/ghostty"
-commit = "fb13fa9602f47590ccfaaea4cd8e178fac2ec8cc" # main, 2026-10-25
+commit = "108cacb17ed8990840cd14abfce43d8ed8503ca1" # vt-1.0.1, 2026-11-11
 
 [zig]
 version = "0.17.0"
