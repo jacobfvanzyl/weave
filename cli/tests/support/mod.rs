@@ -153,6 +153,8 @@ fn serve(dir: &Path) -> (DaemonPaths, Daemon, Runtime) {
     config.devices = Some(paths.devices());
     config.traces = dir.join("traces");
     config.launcher = launcher;
+    // SSH hosts as written, so a repository's remote never reads the person's SSH config.
+    config.ssh = Some(std::sync::Arc::new(weave_host::remotes::AsWritten));
     let daemon = Daemon::new(config);
     let serving = daemon.clone();
     runtime.spawn(async move {

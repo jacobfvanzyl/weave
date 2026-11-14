@@ -43,6 +43,7 @@ pub mod mcp;
 mod modes;
 pub mod paths;
 mod queue;
+pub mod remotes;
 mod repos;
 mod serve_entry;
 mod service_tools;
@@ -189,6 +190,9 @@ pub struct DaemonConfig {
     /// Where the Host keeps the Dispatcher it joins (ADR 0030) and its own key for it; none for
     /// a Host that joins none, as one inside a client.
     pub dispatcher: Option<DispatcherSettings>,
+    /// Where SSH remotes' hosts go, for a repository's identity (WVE-213); none runs `ssh -G`
+    /// with the agents' environment. Tests give their own, such as [`remotes::AsWritten`].
+    pub ssh: Option<Arc<dyn remotes::SshHosts>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -225,6 +229,7 @@ impl DaemonConfig {
             home: None,
             retired: Vec::new(),
             dispatcher: None,
+            ssh: None,
         }
     }
 
@@ -1250,7 +1255,12 @@ impl Daemon {
             shared: Arc::new_cyclic(|shared| Shared {
                 admissions,
                 mcp: Arc::new(mcp::Mcp::new(shared.clone())),
-                git: git::Git::new(&config.environment.vars),
+                git: git::Git::new(
+                    &config.environment.vars,
+                    config.ssh.clone().unwrap_or_else(|| {
+                        Arc::new(remotes::OpenSsh::new(&config.environment.vars))
+                    }),
+                ),
                 devices,
                 dispatcher: joined,
                 service_tools: service_tools::ServiceTools::default(),

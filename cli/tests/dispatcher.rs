@@ -1093,8 +1093,9 @@ fn projects_name_directories_on_your_hosts() {
 /// knowing them only from what's given here, as `identity` says, never from the computer's own
 /// configuration.
 /// A Host in the test runs git as the person would, away from the configuration of whoever runs
-/// the tests, as `Test`.
+/// the tests, as `Test`, and takes SSH hosts as written, never reading their SSH configuration.
 fn isolate_git(config: &mut DaemonConfig) {
+    config.ssh = Some(std::sync::Arc::new(weave_host::remotes::AsWritten));
     for (name, value) in [
         ("GIT_CONFIG_GLOBAL", "/dev/null"),
         ("GIT_CONFIG_NOSYSTEM", "1"),

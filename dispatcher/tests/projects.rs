@@ -1,20 +1,26 @@
 //! The person's Projects (ADR 0031, WVE-189), through the Dispatcher's socket and through a
 //! device paired with it over its loopback WebSocket: adding one, renaming it, adding a second
 //! Host's location, and removing it; names unique ignoring case, one location on each Host, a
-//! location only like the Project's, and a Host's removal taking its locations.
+//! location only like the Project's, and a Host's removal taking its locations; and clones made
+//! through an SSH host alias and through the plain host being one repository (WVE-213).
 
 #![allow(clippy::expect_used)]
 
 mod common;
 
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use weave_dispatcher::Dispatcher;
+use weave_dispatcher::Work;
 use weave_dispatcher::client::DispatcherConnection;
 use weave_dispatcher::socket;
+use weave_host::remotes::Hostname;
+use weave_host::remotes::SshHosts;
+use weave_host::remotes::SshTarget;
 use weave_host_client::Credentials;
 use weave_host_client::remote::DeviceKey;
 use weave_host_client::remote::connect_websocket_as;
@@ -31,13 +37,18 @@ use weave_host_protocol::dispatcher::ProjectLocation;
 use weave_host_protocol::dispatcher::RemoveHostRequest;
 use weave_host_protocol::dispatcher::RemoveProjectRequest;
 use weave_host_protocol::dispatcher::UpdateProjectRequest;
+use weave_host_protocol::worktrees::ListWorktreesRequest;
+use weave_host_protocol::worktrees::RESOLVED_REMOTES_FEATURE;
 use weave_remote::access::RemoteSettings;
 use weave_remote::access::Serve;
 
+use crate::common::ISOLATED_GIT;
+use crate::common::WAIT;
 use crate::common::World;
 use crate::common::ask;
 use crate::common::dispatcher_config;
 use crate::common::info;
+use crate::common::run;
 use crate::common::start;
 
 /// A Tailscale Serve that hands out `ws://` URLs to the listener itself.
@@ -63,6 +74,11 @@ struct Setup {
 
 impl Setup {
     async fn new() -> Self {
+        Self::with(World::new().await, World::new().await).await
+    }
+
+    /// Studio and mini as `studio` and `mini`.
+    async fn with(studio: World, mini: World) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = weave_dispatcher::DispatcherConfig {
             remote: Some(RemoteSettings::new(
@@ -75,8 +91,6 @@ impl Setup {
         let dispatcher = Dispatcher::open(config).expect("opened");
         let serving = dispatcher.clone();
         tokio::spawn(async move { serving.serve(listening.listener).await });
-        let studio = World::new().await;
-        let mini = World::new().await;
         studio.join(&dispatcher, dir.path(), "studio").await;
         mini.join(&dispatcher, dir.path(), "mini").await;
         Self {
@@ -416,4 +430,172 @@ async fn projects_outlive_a_restart() {
     assert_eq!(dispatcher.projects().expect("projects"), vec![added]);
     dispatcher.stop().await;
     serving.abort();
+}
+
+/// SSH's configuration as the person's has it: `github.com-kp` a `Host` alias for `github.com`,
+/// to pick an account's key, and every other host as written.
+struct Aliased;
+
+impl SshHosts for Aliased {
+    fn hostname<'a>(&'a self, target: &'a SshTarget) -> BoxFuture<'a, Hostname> {
+        let host = match target.host() {
+            "github.com-kp" => "github.com",
+            host => host,
+        }
+        .to_owned();
+        Box::pin(async move { Hostname::Is(host) })
+    }
+}
+
+/// A repository at `dir` whose `origin` is `remote`, with a commit, away from the configuration
+/// of whoever runs the tests.
+fn repository(dir: &Path, remote: &str) {
+    std::fs::create_dir_all(dir).expect("the repository's directory");
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["remote", "add", "origin", remote],
+        &["commit", "-q", "--allow-empty", "-m", "first"],
+    ] {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .envs(ISOLATED_GIT.iter().copied())
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// Where `world`'s Host says the repository at `dir` is, and its remote.
+async fn where_is(world: &World, dir: &Path) -> (std::path::PathBuf, Option<String>) {
+    let local = world.local().await;
+    assert!(
+        local
+            .hello()
+            .features
+            .iter()
+            .any(|feature| feature == RESOLVED_REMOTES_FEATURE),
+        "{:?}",
+        local.hello().features
+    );
+    let listed = local
+        .send(ListWorktreesRequest {
+            repo: dir.to_path_buf(),
+        })
+        .await
+        .expect("worktrees/list");
+    local.shutdown().await;
+    (listed.repo, listed.remote)
+}
+
+/// A clone made through an SSH host alias and one made through the plain host are one
+/// repository (WVE-213): their Hosts give one remote, and the second joins the first's Project.
+/// A Project recorded before Hosts resolved aliases, with the alias as written, takes the
+/// resolved remote once a Host that resolves it has a thread open in one of its locations, and
+/// keeps both.
+#[tokio::test(flavor = "multi_thread")]
+async fn clones_through_an_ssh_alias_and_the_plain_host_are_one_project() {
+    let setup = Setup::with(
+        World::with_ssh(Arc::new(Aliased)).await,
+        World::with_ssh(Arc::new(Aliased)).await,
+    )
+    .await;
+    let (studio, mini) = (setup.studio.host_id().await, setup.mini.host_id().await);
+    let resolved = "github.com/Keyphase-Technologies/odin";
+    let alias = "github.com-kp/Keyphase-Technologies/odin";
+    repository(
+        &setup.studio.home().join("odin"),
+        "git@github.com-kp:Keyphase-Technologies/odin.git",
+    );
+    repository(
+        &setup.mini.home().join("odin"),
+        "git@github.com:Keyphase-Technologies/odin.git",
+    );
+    let (studio_odin, studio_remote) =
+        where_is(&setup.studio, &setup.studio.home().join("odin")).await;
+    let (mini_odin, mini_remote) = where_is(&setup.mini, &setup.mini.home().join("odin")).await;
+    assert_eq!(studio_remote.as_deref(), Some(resolved));
+    assert_eq!(mini_remote.as_deref(), Some(resolved));
+    let studio_path = studio_odin.display().to_string();
+    let mini_path = mini_odin.display().to_string();
+
+    // Registered as the app and `weave projects add` do, from what each Host says.
+    let cli = ask(setup.dir.path()).await;
+    cli.send(AddProjectRequest {
+        name: "Odin".to_owned(),
+        location: git(&studio, &studio_path, resolved),
+    })
+    .await
+    .expect("projects/add");
+    let joined = cli
+        .send(UpdateProjectRequest {
+            project: "odin".to_owned(),
+            name: None,
+            remove_host: None,
+            add: Some(git(&mini, &mini_path, resolved)),
+        })
+        .await
+        .expect("mini's clone joined")
+        .project;
+    assert_eq!(joined.remote.as_deref(), Some(resolved));
+    assert_eq!(
+        located(&joined),
+        vec![
+            (studio.clone(), studio_path.clone()),
+            (mini.clone(), mini_path.clone()),
+        ]
+    );
+    cli.send(RemoveProjectRequest {
+        project: "odin".to_owned(),
+    })
+    .await
+    .expect("projects/remove");
+
+    // As WVE-189 recorded Odin, from Hosts that took the alias as written.
+    cli.send(AddProjectRequest {
+        name: "Odin".to_owned(),
+        location: git(&studio, &studio_path, alias),
+    })
+    .await
+    .expect("projects/add");
+    let recorded = cli
+        .send(UpdateProjectRequest {
+            project: "odin".to_owned(),
+            name: None,
+            remove_host: None,
+            add: Some(git(&mini, &mini_path, alias)),
+        })
+        .await
+        .expect("joined as recorded")
+        .project;
+    assert_eq!(recorded.remote.as_deref(), Some(alias));
+
+    // A thread opens in studio's clone.
+    let Work::Run(mut request) = run(&setup.studio, "hello") else {
+        panic!("a run");
+    };
+    request.cwd = setup.studio.home().join("odin");
+    let local = setup.studio.local().await;
+    local.send(request).await.expect("thread/run");
+    let healed = tokio::time::timeout(WAIT, async {
+        loop {
+            let project = setup.dispatcher.projects().expect("projects").remove(0);
+            if project.remote.as_deref() == Some(resolved) {
+                return project;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("Odin's remote resolved in time");
+    assert_eq!(healed.id, recorded.id);
+    assert_eq!(located(&healed), located(&recorded));
+    assert!(healed.updated_at >= recorded.updated_at);
+    local.shutdown().await;
+    cli.shutdown().await;
+    setup.dispatcher.stop().await;
 }

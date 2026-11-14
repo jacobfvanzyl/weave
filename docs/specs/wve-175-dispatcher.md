@@ -411,6 +411,22 @@ every Host; Hosts know nothing of them, and the Host protocol is unchanged.
   computer can read git there, and tells the Dispatcher the kind and remote with the path. A
   location joins a Project only of its kind, and a git one only with the Project's remote or
   none.
+- **A remote follows its Hosts** (WVE-213). A Host with `resolved_remotes` resolves SSH host
+  aliases and git's rewrites in `GitLocation.remote` (the Host protocol's [A repository's
+  remote](wve-85-host-protocol.md#a-repositorys-remote)), so a remote recorded before, from a
+  URL's host as written, such as `github.com-kp/owner/name`, wouldn't match the clones those
+  Hosts report. So the Dispatcher's link to such a Host passes on what it says about the
+  repositories its open threads are in, as `threads/watch` gives them (a thread that isn't open
+  has the remote as it was read while it was, perhaps by an older Host): each location keeps the
+  remote its Host last reported (`project_locations.remote`, the twelfth migration), and when a
+  location's Host reports one other than its git Project's, the Project takes it, unless another
+  of its locations' Hosts reported the one it has. The Project keeps its locations and id, and
+  its `updatedAt` moves. Hosts without `resolved_remotes` report nothing, so while some are
+  updated and some aren't, the Project takes the resolved remote from the first updated Host
+  with a thread open in it and keeps it; and two updated Hosts that disagree, as when only one
+  has the alias, leave it with the first's rather than taking turns. A location a client adds
+  must still have the Project's remote, so until the Project has taken the resolved one, a clone
+  an updated Host reports isn't offered to it, and `--to` is refused, saying both remotes.
 - **Hosts.** A location is only on a Host that joined. Removing a Host (`hosts/remove`) removes
   its locations, and a Project left with none stays, listed with none. A Host that leaves keeps
   them, as it keeps its row.
@@ -1160,8 +1176,12 @@ another's it said what to run there. The Bot's Host makes it now, wherever the C
   Project added, renamed, given a second Host's location and removed; a name taken ignoring
   case, a second location on one Host and a clone of another repository refused; a directory
   Project refusing a repository, and a Host that never joined; removing a Host drops its
-  locations, all of them leaving the Project with none; Projects outlive a restart. The store's
-  unit tests check moving a location and a git Project taking a remote. `containing`'s unit
+  locations, all of them leaving the Project with none; Projects outlive a restart; and
+  (WVE-213) a clone through an SSH alias on one Host and one through the plain host on another
+  giving one remote and joining one Project, and a Project recorded with the alias taking the
+  resolved remote, both locations kept, once a thread opens in its clone. The store's unit tests
+  check moving a location, a git Project taking a remote, and a recorded remote following what
+  Hosts report, from either Host first, without taking back what one that disagrees says. `containing`'s unit
   tests in `protocol/src/projects.rs`: a registered repository's worktrees, a Project in a
   subdirectory of another's, a directory outside any repository, and other Hosts. CLI
   `tests/dispatcher.rs`: `weave projects add --host` on another computer's Host and in a clone

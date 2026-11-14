@@ -52,7 +52,7 @@ use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 11] = [
+const MIGRATIONS: [&str; 12] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -278,6 +278,11 @@ const MIGRATIONS: [&str; 11] = [
     "
     ALTER TABLE bots ADD COLUMN emoji TEXT;
     ALTER TABLE bots ADD COLUMN color TEXT;
+",
+    // The remote a location's Host last reported for it, resolving SSH host aliases and git's
+    // rewrites (WVE-213), which a git Project's `remote` follows: none until one does.
+    "
+    ALTER TABLE project_locations ADD COLUMN remote TEXT;
 ",
 ];
 

@@ -177,6 +177,7 @@ impl World {
             home: None,
             retired: Vec::new(),
             dispatcher: None,
+            ssh: Some(Arc::new(weave_host::remotes::AsWritten)),
         })
     }
 

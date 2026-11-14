@@ -188,6 +188,7 @@ use weave_host_protocol::worktrees::InitRepositoryResponse;
 use weave_host_protocol::worktrees::ListWorktreesRequest;
 use weave_host_protocol::worktrees::ListWorktreesResponse;
 use weave_host_protocol::worktrees::REPOS_INIT_FEATURE;
+use weave_host_protocol::worktrees::RESOLVED_REMOTES_FEATURE;
 use weave_host_protocol::worktrees::ReleaseWorktreeRequest;
 use weave_host_protocol::worktrees::ReleaseWorktreeResponse;
 use weave_host_protocol::worktrees::RemoveWorktreeRequest;
@@ -1102,6 +1103,7 @@ impl Connection {
                 SERVICE_TOOLS_FEATURE.to_owned(),
                 WORKTREES_FEATURE.to_owned(),
                 REPOS_INIT_FEATURE.to_owned(),
+                RESOLVED_REMOTES_FEATURE.to_owned(),
                 QUEUE_FEATURE.to_owned(),
                 REQUEST_KEYS_FEATURE.to_owned(),
                 GET_FEATURE.to_owned(),
@@ -3036,10 +3038,12 @@ async fn place(shared: &Shared, cwd: PathBuf, remote: Option<&str>) -> Result<Pa
         ));
     }
     match shared.git.locate(&cwd).await {
+        // The named remote may be from a Host or a record that didn't resolve SSH host aliases
+        // (WVE-213), so it's resolved here too.
         Some(GitLocation {
             remote: Some(found),
             ..
-        }) if found.eq_ignore_ascii_case(remote) => Ok(cwd),
+        }) if shared.git.same_repository(&found, remote).await => Ok(cwd),
         Some(GitLocation {
             remote: Some(found),
             ..

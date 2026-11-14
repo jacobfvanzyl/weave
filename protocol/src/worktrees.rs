@@ -28,6 +28,12 @@ pub const FEATURE: &str = "worktrees";
 /// The Host offers [`InitRepositoryRequest`], in `features`.
 pub const REPOS_INIT_FEATURE: &str = "repos_init";
 
+/// The Host's remotes are the URL git would use, its `insteadOf` rewrites applied, with an SSH
+/// remote's host the one SSH's configuration connects to and every host lowercase, so one
+/// repository has one [`GitLocation::remote`] on every such Host whatever host alias a clone
+/// uses (WVE-213), in `features`. A Host from before it gives the host as the URL writes it.
+pub const RESOLVED_REMOTES_FEATURE: &str = "resolved_remotes";
+
 /// Where in a git repository a thread's directory is, as the Host last read it: when the
 /// thread opened, and again after each of its turns.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

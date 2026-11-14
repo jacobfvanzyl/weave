@@ -73,6 +73,7 @@ fn daemon(dir: &Path, owner: Option<Arc<dyn Owner>>) -> Daemon {
         },
         traces: dir.join("traces"),
         terminals: owner,
+        ssh: Some(Arc::new(weave_host::remotes::AsWritten)),
         ..DaemonConfig::in_process(None)
     })
 }

@@ -75,7 +75,18 @@ with the agents' environment, `GIT_OPTIONAL_LOCKS=0` and no prompts): a thread's
 (repository by primary worktree, worktree, branch, remote without credentials) is read alongside
 starting its agent, kept in its summary and `Registry::known` and the header of any journal it
 begins, and read again after each of its own turns (`Command::Located`, which sends
-`thread/changed`). `worktrees/*` list, make (beside the repository as worktrunk lays them out,
+`thread/changed`). A remote is known by one identity on every Host (WVE-213, `remotes.rs`, feature
+`resolved_remotes`): the URL `git remote get-url` gives, git's `insteadOf` rewrites applied, then
+for an SSH remote the `hostname` `ssh -G` prints for its host (`OpenSsh`, five seconds at most),
+unless it's an address or a name within the host written, as `ssh.github.com` (`standing_for`),
+looked up once per user, host and port and kept for the Host's life (`Remotes`), but for one that
+took too long, tried again after a minute; the host as written when ssh can't say, and a host
+that isn't a plain name (`SshTarget::new`) never reaches `ssh`. Hosts are lowercase. The lookups
+are a seam, `DaemonConfig.ssh` (`SshHosts`): every test gives one, `AsWritten` or its own
+aliases, so none reads the person's SSH configuration, which `ssh` finds through the account's
+home whatever `$HOME` says. `Git::same_repository` lets `client::place` take a `remote` whose
+host is an alias here, as one from a Host without `resolved_remotes` or an older Project record
+gives it. `worktrees/*` list, make (beside the repository as worktrunk lays them out,
 `git::worktree_path`) and remove worktrees; `Shared::release` refuses while a thread in one runs
 a turn or waits on a request, and otherwise closes them, for `worktrees/remove` and for
 `worktrees/release`, which worktrunk's `pre-remove` hook asks through `weave worktrees

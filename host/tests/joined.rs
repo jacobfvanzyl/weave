@@ -157,6 +157,7 @@ impl World {
                 websocket: RemoteConfig::default(),
                 ..DispatcherSettings::in_dir(&DaemonPaths::in_dir(self.dir.path().to_path_buf()))
             }),
+            ssh: Some(Arc::new(weave_host::remotes::AsWritten)),
         }
     }
 }

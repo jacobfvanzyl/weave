@@ -184,7 +184,9 @@ request with `unauthenticated`.
   `service/toolCall`, `service/toolCallCancelled` and `service/answerTool` (see
   [Service tools](#service-tools)), and `carry` (WVE-195): `dispatcher/carry` and the
   `dispatcher` auth (see [Connections the Dispatcher carries](#connections-the-dispatcher-carries)),
-  and `repos_init` (WVE-178): `repos/init` (see [A repository of its own](#a-repository-of-its-own)).
+  and `repos_init` (WVE-178): `repos/init` (see [A repository of its own](#a-repository-of-its-own)),
+  and `resolved_remotes` (WVE-213): `GitLocation.remote` with git's rewrites applied and an SSH
+  host resolved (see [A repository's remote](#a-repositorys-remote)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -796,7 +798,9 @@ origin as `openedBy`.
 `cwd` may be `~` or start with `~/` (feature `otherHosts`), under the Host's home, and with `remote`
 it has to be a checkout of that repository, by its remote as `GitLocation.remote` gives it, or
 the request fails saying what's there, as a call from another Host's agent asks for the
-directory it works in.
+directory it works in. A `remote` whose host is an SSH alias here, as a Host without
+`resolved_remotes` or a record from before gives it, is the repository its alias resolves to
+(see [A repository's remote](#a-repositorys-remote)).
 
 ### Turn ids
 
@@ -1414,7 +1418,9 @@ starts the agent, and records it in the header of any journal it begins, so list
 that aren't open give it. After each of the thread's own turns it reads it again,
 and an attached client hears of a change in `thread/changed`, a watcher in
 `threads/updated`. A thread outside a repository, and one from a journal from before, has
-no `git`. Paths in repositories are given and compared with symlinks resolved.
+no `git`. Paths in repositories are given and compared with symlinks resolved. `remote` is as
+[A repository's remote](#a-repositorys-remote) says; a listing of a thread that isn't open gives
+it as it was read while the thread was, perhaps by a Host from before `resolved_remotes`.
 
 Worktrees are the person's, beside threads rather than parts of them, so clients manage the
 two together or apart: make a worktree, then `thread/create` in it; or remove a worktree with
@@ -1462,6 +1468,26 @@ make: refused with `worktree_busy` while a thread in the worktree runs a turn or
 request; otherwise its open threads close and its Session ends. `weave worktrees pre-remove`
 asks it as a worktrunk `pre-remove` hook, so `wt remove`, `wt merge` and `wt step prune` stop
 while a thread needs the worktree.
+
+### A repository's remote
+
+`remote` is the repository's identity, the same on every Host whatever SSH host alias or git
+URL rewrite a clone uses (feature `resolved_remotes`, WVE-213): its host and path, with no user,
+credentials, port, scheme or `.git`, the host lowercase. The URL is the one git would use, its
+`url.<base>.insteadOf` rewrites applied (`git remote get-url`, which reads the configuration
+and never reaches the remote). An SSH remote's host, scp-style (`[user@]host:path`) or an
+`ssh://` URL, is then the `hostname` SSH's configuration gives it, as `ssh -G` prints it without
+connecting, honouring `Include` and `Match`, with the URL's user and port passed for `Match`; so
+`git@github.com-kp:owner/name`, where `github.com-kp` is a `Host` alias for `github.com`, is
+`github.com/owner/name`. A `hostname` that's an address, or a name within the host written, as
+`ssh.github.com` is for `github.com` where SSH reaches GitHub on port 443, leaves the host as
+written, since the same repository's HTTPS remote names that. An HTTPS remote's host is as
+written. The Host looks each host up once
+and keeps what it found while it runs, but for a lookup that took longer than five seconds,
+which it tries again after a minute; when `ssh` is missing, fails or takes too long, the host is
+as written. A host that isn't a plain name (letters, digits, `.`, `_` and `-`, beginning with a
+letter or digit), such as one beginning with `-`, is never passed to `ssh`. A Host without
+`resolved_remotes` gives the host as the URL writes it, its case kept.
 
 ### A repository of its own
 

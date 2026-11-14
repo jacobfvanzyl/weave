@@ -3,12 +3,15 @@
 //! out (`<repo>.<branch>`) and removes; and making a repository of its own with its first
 //! files committed (`repos/init`, [`crate::repos`]). Git runs with the agents' environment, so
 //! the person's configuration and hooks apply, never prompts, and reads without taking optional
-//! locks, so it doesn't get in the way of the person's own git.
+//! locks, so it doesn't get in the way of the person's own git. A repository is known by its
+//! remote's identity, the URL git would use, its rewrites applied, with an SSH host resolved
+//! as [`crate::remotes`] says (WVE-213).
 
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::Error;
@@ -18,6 +21,9 @@ use weave_host_protocol::worktrees::Divergence;
 use weave_host_protocol::worktrees::GitLocation;
 use weave_host_protocol::worktrees::Upstream;
 use weave_host_protocol::worktrees::Worktree;
+
+use crate::remotes::Remotes;
+use crate::remotes::SshHosts;
 
 /// How long git may take to read something.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -37,9 +43,11 @@ const REPOSITORY_VARIABLES: &[&str] = &[
     "GIT_PREFIX",
 ];
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct Git {
     environment: BTreeMap<String, String>,
+    /// Remotes' identities, with the SSH lookups kept for the Host's life.
+    remotes: Arc<Remotes>,
 }
 
 /// A repository, as `git worktree list` gives it.
@@ -78,9 +86,11 @@ struct Output {
 }
 
 impl Git {
-    pub(crate) fn new(environment: &BTreeMap<String, String>) -> Self {
+    /// Git with `environment`, resolving SSH remotes' hosts with `ssh`.
+    pub(crate) fn new(environment: &BTreeMap<String, String>, ssh: Arc<dyn SshHosts>) -> Self {
         Self {
             environment: environment.clone(),
+            remotes: Arc::new(Remotes::new(ssh)),
         }
     }
 
@@ -163,12 +173,39 @@ impl Git {
             .first()
             .map(|entry| entry.path.clone())
             .ok_or_else(|| errors::not_a_repository(dir))?;
+        // A repository without remotes has no `remote.*.url` to find.
+        let remote = match remotes.ok().as_deref().and_then(chosen_remote) {
+            Some((name, written)) => self
+                .remote_identity(dir, &name, &written)
+                .await
+                .map(|identity| (name, identity)),
+            None => None,
+        };
         Ok(Repository {
             primary,
-            // A repository without remotes has no `remote.*.url` to find.
-            remote: remotes.ok().as_deref().and_then(chosen_remote),
+            remote,
             entries,
         })
+    }
+
+    /// The identity of the remote `name`, whose URL is `written` in the configuration: the URL
+    /// git would use, its `url.<base>.insteadOf` rewrites applied, which `git remote get-url`
+    /// gives from the configuration alone, without reaching the remote; else as written.
+    async fn remote_identity(&self, dir: &Path, name: &str, written: &str) -> Option<String> {
+        let url = self.read(dir, &["remote", "get-url", "--", name]).await;
+        let url = match &url {
+            Ok(url) if !url.trim().is_empty() => url.trim(),
+            _ => written,
+        };
+        self.remotes.identity(url).await
+    }
+
+    /// Whether `found`, the identity of a checkout here, is the repository `named`, an identity
+    /// another Host or a Project gives: the same, or the same once its host is resolved here,
+    /// as an identity from a Host that didn't resolve SSH hosts may need.
+    pub(crate) async fn same_repository(&self, found: &str, named: &str) -> bool {
+        found.eq_ignore_ascii_case(named)
+            || found.eq_ignore_ascii_case(&self.remotes.resolved(named).await)
     }
 
     /// The branch new worktrees of `repository` start from: the remote's default branch, else
@@ -562,7 +599,7 @@ fn parse_worktrees(listed: &str) -> Vec<Entry> {
 }
 
 /// The remote a repository is known by, from `git config --get-regexp '^remote\..*\.url$'`:
-/// `origin`, else the first. Its name, and its identity.
+/// `origin`, else the first. Its name, and its URL as written.
 fn chosen_remote(urls: &str) -> Option<(String, String)> {
     let remotes: Vec<(&str, &str)> = urls
         .lines()
@@ -576,36 +613,7 @@ fn chosen_remote(urls: &str) -> Option<(String, String)> {
         .iter()
         .find(|(name, _)| *name == "origin")
         .or_else(|| remotes.first())?;
-    Some(((*name).to_owned(), identity(url)?))
-}
-
-/// A remote URL as a host and path, such as `github.com/owner/name`: no scheme, credentials,
-/// port or `.git`. None for a remote that's a path on this computer.
-pub(crate) fn identity(url: &str) -> Option<String> {
-    let url = url.trim();
-    let (authority, path) = match url.split_once("://") {
-        Some((scheme, _)) if scheme.eq_ignore_ascii_case("file") => return None,
-        Some((_, rest)) => rest.split_once('/')?,
-        None => {
-            // `[user@]host:path`, unless a slash comes first, as in a path.
-            let colon = url.find(':')?;
-            if url[..colon].contains('/') {
-                return None;
-            }
-            (&url[..colon], &url[colon + 1..])
-        }
-    };
-    let host = authority.rsplit('@').next()?;
-    let host = match host.rsplit_once(':') {
-        Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) => host,
-        _ => host,
-    };
-    let path = path.trim_matches('/');
-    let path = path
-        .strip_suffix(".git")
-        .unwrap_or(path)
-        .trim_end_matches('/');
-    (!host.is_empty() && !path.is_empty()).then(|| format!("{host}/{path}"))
+    Some(((*name).to_owned(), (*url).to_owned()))
 }
 
 /// `git status --porcelain=v2 --branch -z`: whether anything changed, and the upstream.
@@ -649,38 +657,109 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::remotes::AsWritten;
+    use crate::remotes::Hostname;
 
-    #[test]
-    fn remotes_are_known_by_host_and_path_without_credentials() {
-        let cases = [
-            (
-                "git@github.com:jacobfvanzyl/weave.git",
-                Some("github.com/jacobfvanzyl/weave"),
-            ),
-            (
-                "https://jaco:t0ken@github.com/jacobfvanzyl/weave.git",
-                Some("github.com/jacobfvanzyl/weave"),
-            ),
-            (
-                "ssh://git@gitlab.example.com:2222/group/sub/project",
-                Some("gitlab.example.com/group/sub/project"),
-            ),
-            (
-                "git@github.com-kp:Keyphase-Technologies/odin.git",
-                Some("github.com-kp/Keyphase-Technologies/odin"),
-            ),
-            (
-                "https://github.com/jacobfvanzyl/weave/",
-                Some("github.com/jacobfvanzyl/weave"),
-            ),
-            ("file:///srv/git/weave.git", None),
-            ("/srv/git/weave.git", None),
-            ("../weave", None),
-            ("./with:colon/repo", None),
-        ];
-        for (url, expected) in cases {
-            assert_eq!(identity(url).as_deref(), expected, "{url}");
+    /// SSH's configuration as a table of aliases.
+    struct Aliases(&'static [(&'static str, &'static str)]);
+
+    impl SshHosts for Aliases {
+        fn hostname<'a>(
+            &'a self,
+            target: &'a crate::remotes::SshTarget,
+        ) -> crate::remotes::BoxFuture<'a, Hostname> {
+            let found = self
+                .0
+                .iter()
+                .find(|(alias, _)| *alias == target.host())
+                .map_or_else(|| target.host().to_owned(), |(_, host)| (*host).to_owned());
+            Box::pin(async move { Hostname::Is(found) })
         }
+    }
+
+    /// Git away from the configuration of whoever runs the tests, `github.com-kp` an SSH alias
+    /// for `github.com`.
+    fn git() -> Git {
+        let environment = [
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .collect();
+        Git::new(
+            &environment,
+            Arc::new(Aliases(&[("github.com-kp", "github.com")])),
+        )
+    }
+
+    /// A repository at `dir` with an origin at `url` and `config`'s settings.
+    async fn repository(git: &Git, dir: &Path, url: &str, config: &[(&str, &str)]) {
+        std::fs::create_dir_all(dir).expect("its directory");
+        git.init(dir).await.expect("git init");
+        git.run(dir, &["remote", "add", "origin", url], READ_TIMEOUT)
+            .await
+            .expect("git remote add");
+        for (key, value) in config {
+            git.run(dir, &["config", key, value], READ_TIMEOUT)
+                .await
+                .expect("git config");
+        }
+    }
+
+    async fn remote_of(git: &Git, dir: &Path) -> Option<String> {
+        git.locate(dir).await.and_then(|location| location.remote)
+    }
+
+    #[tokio::test]
+    async fn clones_through_an_alias_a_rewrite_or_neither_are_one_repository() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let git = git();
+        let plain = dir.path().join("plain");
+        let alias = dir.path().join("alias");
+        let rewritten = dir.path().join("rewritten");
+        let https = dir.path().join("https");
+        repository(&git, &plain, "git@github.com:owner/name.git", &[]).await;
+        repository(&git, &alias, "git@github.com-kp:owner/name.git", &[]).await;
+        repository(
+            &git,
+            &rewritten,
+            "kp:owner/name",
+            &[("url.git@github.com-kp:.insteadOf", "kp:")],
+        )
+        .await;
+        repository(&git, &https, "https://github.com/owner/name", &[]).await;
+        for clone in [&plain, &alias, &rewritten, &https] {
+            assert_eq!(
+                remote_of(&git, clone).await.as_deref(),
+                Some("github.com/owner/name"),
+                "{}",
+                clone.display()
+            );
+        }
+        // Without the alias, a clone through it is known as it's written, as before.
+        let as_written = Git::new(&git.environment, Arc::new(AsWritten));
+        assert_eq!(
+            remote_of(&as_written, &alias).await.as_deref(),
+            Some("github.com-kp/owner/name")
+        );
+        assert_eq!(
+            remote_of(&as_written, &rewritten).await.as_deref(),
+            Some("github.com-kp/owner/name")
+        );
+        // A checkout here is the repository an identity from a Host that didn't resolve names.
+        assert!(
+            git.same_repository("github.com/owner/name", "github.com-kp/owner/name")
+                .await
+        );
+        assert!(
+            git.same_repository("github.com/owner/name", "GitHub.com/owner/name")
+                .await
+        );
+        assert!(
+            !git.same_repository("github.com/owner/name", "github.com/owner/fork")
+                .await
+        );
     }
 
     #[test]
@@ -691,12 +770,12 @@ mod tests {
             chosen_remote(urls),
             Some((
                 "origin".to_owned(),
-                "github.com/jacobfvanzyl/worktrunk".to_owned()
+                "git@github.com:jacobfvanzyl/worktrunk.git".to_owned()
             ))
         );
         assert_eq!(
             chosen_remote("remote.fork.url https://example.com/me/x.git\n"),
-            Some(("fork".to_owned(), "example.com/me/x".to_owned()))
+            Some(("fork".to_owned(), "https://example.com/me/x.git".to_owned()))
         );
         assert_eq!(chosen_remote(""), None);
     }

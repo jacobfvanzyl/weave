@@ -43,6 +43,8 @@ use weave_host::Launch;
 use weave_host::Launcher;
 use weave_host::RemoteConfig;
 use weave_host::Withheld;
+use weave_host::remotes::AsWritten;
+use weave_host::remotes::SshHosts;
 use weave_host::terminals::Incoming;
 use weave_host::terminals::Outgoing;
 use weave_host::terminals::Owner;
@@ -90,17 +92,24 @@ pub struct World {
     terminals: Option<Arc<dyn Owner>>,
     /// Its connections to the Dispatcher's pings and backlog.
     websocket: RemoteConfig,
+    /// Where its SSH remotes' hosts go: as written, unless a test gives aliases.
+    ssh: Arc<dyn SshHosts>,
 }
 
 impl World {
     pub async fn new() -> Self {
-        Self::with(false, None, RemoteConfig::default()).await
+        Self::with(false, None, RemoteConfig::default(), Arc::new(AsWritten)).await
+    }
+
+    /// A Host whose SSH remotes' hosts go where `ssh` says (WVE-213).
+    pub async fn with_ssh(ssh: Arc<dyn SshHosts>) -> Self {
+        Self::with(false, None, RemoteConfig::default(), ssh).await
     }
 
     /// A Host that keeps journals, whose restarts interrupt the turns it ran, and continue
     /// headless threads' (WVE-144).
     pub async fn with_journals() -> Self {
-        Self::with(true, None, RemoteConfig::default()).await
+        Self::with(true, None, RemoteConfig::default(), Arc::new(AsWritten)).await
     }
 
     /// A Host with terminals, which a fake owner keeps: each echoes what's typed into it.
@@ -109,6 +118,7 @@ impl World {
             false,
             Some(Arc::new(EchoingOwner::default())),
             RemoteConfig::default(),
+            Arc::new(AsWritten),
         )
         .await
     }
@@ -116,13 +126,14 @@ impl World {
     /// A Host whose connections to the Dispatcher, its own and those it carries, have
     /// `websocket`'s pings and backlog.
     pub async fn with_websocket(websocket: RemoteConfig) -> Self {
-        Self::with(false, None, websocket).await
+        Self::with(false, None, websocket, Arc::new(AsWritten)).await
     }
 
     async fn with(
         journals: bool,
         terminals: Option<Arc<dyn Owner>>,
         websocket: RemoteConfig,
+        ssh: Arc<dyn SshHosts>,
     ) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("config.toml"), CONFIG).expect("config");
@@ -133,6 +144,7 @@ impl World {
             journals,
             terminals.clone(),
             websocket.clone(),
+            Arc::clone(&ssh),
         ));
         Self {
             dir,
@@ -141,6 +153,7 @@ impl World {
             journals,
             terminals,
             websocket,
+            ssh,
         }
     }
 
@@ -149,6 +162,7 @@ impl World {
         journals: bool,
         terminals: Option<Arc<dyn Owner>>,
         websocket: RemoteConfig,
+        ssh: Arc<dyn SshHosts>,
     ) -> DaemonConfig {
         let mut config = config_with(dir.to_path_buf(), journals);
         if let Some(dispatcher) = config.dispatcher.as_mut() {
@@ -156,6 +170,7 @@ impl World {
         }
         DaemonConfig {
             terminals,
+            ssh: Some(ssh),
             ..config
         }
     }
@@ -247,6 +262,7 @@ impl World {
             self.journals,
             self.terminals.clone(),
             self.websocket.clone(),
+            Arc::clone(&self.ssh),
         ));
         self.relay.resume();
         self.daemon.resume_dispatcher();
@@ -311,6 +327,7 @@ pub fn config_with(dir: PathBuf, journals: bool) -> DaemonConfig {
             websocket: RemoteConfig::default(),
             ..DispatcherSettings::in_dir(&weave_host::DaemonPaths::in_dir(dir))
         }),
+        ssh: Some(Arc::new(AsWritten)),
     }
 }
 

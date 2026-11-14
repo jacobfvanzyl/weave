@@ -140,6 +140,25 @@ impl Store {
         Ok(project)
     }
 
+    /// Note that the Host `host_id`, which resolves remotes (WVE-213), reports `remote` for the
+    /// repository at `repo` there. A git Project located there takes it for its remote, unless
+    /// another of its locations' Hosts reported the remote it has: so a remote recorded from a
+    /// URL's host as written, before Hosts resolved SSH host aliases, becomes the resolved one
+    /// as the Hosts are updated, in any order, and two Hosts that disagree don't take turns.
+    /// The Project, when its remote changed.
+    pub(crate) fn reported_remote(
+        &self,
+        host_id: &str,
+        repo: &Path,
+        remote: &str,
+    ) -> Result<Option<Project>, String> {
+        let mut connection = self.lock();
+        let transaction = connection.transaction().map_err(failed)?;
+        let changed = reported(&transaction, host_id, repo, remote).map_err(failed)?;
+        transaction.commit().map_err(failed)?;
+        Ok(changed)
+    }
+
     /// Forget the Project `by` names, and its locations, giving what it was.
     pub(crate) fn remove_project(&self, by: &str) -> Result<Project, ProjectError> {
         let mut connection = self.lock();
@@ -153,6 +172,59 @@ impl Store {
 
 fn missing(by: &str) -> ProjectError {
     ProjectError::Refused(format!("there's no Project {by}"))
+}
+
+/// [`Store::reported_remote`] in `connection`'s transaction.
+fn reported(
+    connection: &Connection,
+    host_id: &str,
+    repo: &Path,
+    remote: &str,
+) -> rusqlite::Result<Option<Project>> {
+    let located: Option<(String, Option<String>)> = connection
+        .query_row(
+            "SELECT project_locations.project_id, project_locations.remote \
+             FROM project_locations JOIN projects ON projects.id = project_locations.project_id \
+             WHERE project_locations.host_id = ?1 AND project_locations.path = ?2 \
+             AND projects.kind = 'git'",
+            params![host_id, text(repo)],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((project_id, before)) = located else {
+        return Ok(None);
+    };
+    if before.as_deref() == Some(remote) {
+        return Ok(None);
+    }
+    connection.execute(
+        "UPDATE project_locations SET remote = ?3 WHERE project_id = ?1 AND host_id = ?2",
+        params![project_id, host_id, remote],
+    )?;
+    let Some(mut project) = find(connection, &project_id)? else {
+        return Ok(None);
+    };
+    let kept = match &project.remote {
+        Some(ours) if ours == remote => return Ok(None),
+        Some(ours) => connection.query_row(
+            "SELECT EXISTS (SELECT 1 FROM project_locations \
+             WHERE project_id = ?1 AND host_id != ?2 AND remote = ?3)",
+            params![project_id, host_id, ours],
+            |row| row.get(0),
+        )?,
+        None => false,
+    };
+    if kept {
+        return Ok(None);
+    }
+    let now = now_ms();
+    connection.execute(
+        "UPDATE projects SET remote = ?2, updated_at = ?3 WHERE id = ?1",
+        params![project_id, remote, to_sql(now)],
+    )?;
+    project.remote = Some(remote.to_owned());
+    project.updated_at = now;
+    Ok(Some(project))
 }
 
 /// Add `location` to `project`, whose kind and remote it must share: whether that changed it.
@@ -612,6 +684,95 @@ mod tests {
         )
         .expect("joined");
         assert_eq!(joined.remote.as_deref(), Some("github.com/j/scratch"));
+    }
+
+    /// Odin, recorded on 2026-11-09 from both of its clones' remotes as written, through an
+    /// SSH alias (WVE-213): it takes the resolved remote from whichever of its Hosts reports
+    /// first, keeps both locations, and doesn't take back what a Host not yet updated, or one
+    /// that disagrees, would say.
+    #[test]
+    fn a_remote_recorded_as_written_follows_what_resolving_hosts_report() {
+        let store = store();
+        let alias = "github.com-kp/Keyphase-Technologies/odin";
+        let resolved = "github.com/Keyphase-Technologies/odin";
+        let odin = store
+            .add_project("Odin", &git("h-mac", "/Users/jaco/odin", Some(alias)))
+            .expect("added");
+        store
+            .update_project(
+                "odin",
+                Change {
+                    add: Some(git("h-lab", "/home/jaco/odin", Some(alias))),
+                    ..Change::default()
+                },
+            )
+            .expect("joined");
+        // Another repository on the Host, and a directory Project, are left alone.
+        assert_eq!(
+            store
+                .reported_remote("h-mac", Path::new("/Users/jaco/other"), resolved)
+                .expect("noted"),
+            None
+        );
+        // homelab is updated first.
+        let healed = store
+            .reported_remote("h-lab", Path::new("/home/jaco/odin"), resolved)
+            .expect("noted")
+            .expect("changed");
+        assert_eq!(healed.remote.as_deref(), Some(resolved));
+        assert_eq!(healed.locations.len(), 2);
+        assert!(healed.updated_at >= odin.updated_at);
+        assert_eq!(store.project("odin").expect("found"), Some(healed));
+        // Reporting it again changes nothing.
+        assert_eq!(
+            store
+                .reported_remote("h-lab", Path::new("/home/jaco/odin"), resolved)
+                .expect("noted"),
+            None
+        );
+        // A Host that disagrees doesn't take it back while homelab says what it is; the Mac's
+        // clone then joins with the resolved remote.
+        assert_eq!(
+            store
+                .reported_remote("h-mac", Path::new("/Users/jaco/odin"), alias)
+                .expect("noted"),
+            None
+        );
+        assert_eq!(
+            store
+                .reported_remote("h-mac", Path::new("/Users/jaco/odin"), resolved)
+                .expect("noted"),
+            None
+        );
+        let odin = store.project("odin").expect("found").expect("there");
+        assert_eq!(odin.remote.as_deref(), Some(resolved));
+        let hosts: Vec<&str> = odin
+            .locations
+            .iter()
+            .map(|location| location.host_id.as_str())
+            .collect();
+        assert_eq!(hosts, ["h-mac", "h-lab"]);
+        // A clone made through the plain host joins it once it's moved.
+        let moved = store
+            .update_project(
+                "odin",
+                Change {
+                    remove_host: Some("mac".to_owned()),
+                    add: Some(git("h-mac", "/Users/jaco/code/odin", Some(resolved))),
+                    ..Change::default()
+                },
+            )
+            .expect("joined");
+        assert_eq!(moved.locations.len(), 2);
+        // A git Project without a remote takes the first a Host reports.
+        store
+            .add_project("scratch", &git("h-mac", "/code/scratch", None))
+            .expect("added");
+        let taken = store
+            .reported_remote("h-mac", Path::new("/code/scratch"), "github.com/j/scratch")
+            .expect("noted")
+            .expect("changed");
+        assert_eq!(taken.remote.as_deref(), Some("github.com/j/scratch"));
     }
 
     #[test]

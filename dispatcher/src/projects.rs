@@ -3,7 +3,11 @@
 //! repository by its primary worktree or a directory outside one. Clients find out where a
 //! directory lies in git from its Host and say so here; Hosts know nothing of Projects. Its own
 //! computer and paired devices may change them. Hosts' agents read them, with the Host tool
-//! `list_projects` ([`crate::calls`]), and name one to the thread tools; they change none.
+//! `list_projects` ([`crate::calls`]), and name one to the thread tools; they change none. A
+//! git Project's remote follows what a Host that resolves remotes reports for a location's
+//! repository through its open threads (WVE-213, [`crate::link`]).
+
+use std::path::Path;
 
 use agent_client_protocol::Error;
 use weave_host_protocol::dispatcher::AddProjectRequest;
@@ -15,6 +19,7 @@ use crate::internal;
 use crate::invalid;
 use crate::store::Change;
 use crate::store::ProjectError;
+use crate::store::StoredHost;
 
 impl Shared {
     pub(crate) fn projects(&self) -> Result<Vec<Project>, Error> {
@@ -50,6 +55,24 @@ impl Shared {
             .map_err(refused)?;
         tracing::info!(project = %project.name, "changed a Project");
         Ok(project)
+    }
+
+    /// Note the remote `host`, a Host that resolves remotes (WVE-213), reports for the
+    /// repository at `repo` there, which a git Project located there follows
+    /// ([`crate::store::Store::reported_remote`]).
+    pub(crate) fn reported_remote(&self, host: &StoredHost, repo: &Path, remote: &str) {
+        match self.store.reported_remote(&host.host_id, repo, remote) {
+            Ok(Some(project)) => tracing::info!(
+                project = %project.name,
+                host = %host.host_id,
+                remote,
+                "a Project's remote is now what a Host it's on reports"
+            ),
+            Ok(None) => {}
+            Err(why) => {
+                tracing::warn!(host = %host.host_id, %why, "noting a repository's remote failed")
+            }
+        }
     }
 
     pub(crate) fn remove_project(&self, by: &str) -> Result<(), Error> {

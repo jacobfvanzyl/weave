@@ -10,9 +10,12 @@
 //! ([`crate::bots`]); it declares the Dispatcher's own tools there, a Bot's, and answers their
 //! calls ([`crate::tools`]). As it connects, hears from the Host and goes, it
 //! has those watching the Bots told of any change to them (`Shared::bots_changed`). A Host
-//! that leaves isn't taken up again until it joins again.
+//! that leaves isn't taken up again until it joins again. What a Host that resolves remotes
+//! says its open threads' repositories' remotes are, git Projects located there follow
+//! (WVE-213, [`remotes`]).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -42,6 +45,8 @@ use weave_host_protocol::threads::WatchThreadsRequest;
 use weave_host_protocol::tools::DeclareToolsRequest;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
 use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
+use weave_host_protocol::worktrees::GitLocation;
+use weave_host_protocol::worktrees::RESOLVED_REMOTES_FEATURE;
 use weave_remote::websocket;
 
 use crate::Shared;
@@ -303,8 +308,20 @@ async fn follow(
         seen.connected_at = Some(now_ms());
         seen.handle = Some(handle.clone());
     }
+    // The repositories' remotes the Host reported over this connection, if it resolves them.
+    let mut reported = handle
+        .hello()
+        .features
+        .iter()
+        .any(|feature| feature == RESOLVED_REMOTES_FEATURE)
+        .then(HashMap::new);
     match connection.send(WatchThreadsRequest::default()).await {
         Ok(watched) => {
+            if let Some(reported) = reported.as_mut() {
+                for listing in &watched.threads {
+                    remotes(shared, host, reported, listing);
+                }
+            }
             lock(seen).threads = watched
                 .threads
                 .into_iter()
@@ -330,6 +347,9 @@ async fn follow(
                     let thread_id = listing.info.session_id.clone();
                     let idle = !matches!(listing.activity, Some(Activity::Running | Activity::Waiting));
                     let waiting = listing.activity == Some(Activity::Waiting);
+                    if let Some(reported) = reported.as_mut() {
+                        remotes(shared, host, reported, &listing);
+                    }
                     lock(seen).threads.insert(thread_id.clone(), listing);
                     if idle {
                         settle(shared, host, &connection, Some(&thread_id)).await;
@@ -380,6 +400,35 @@ async fn follow(
         None if closer.peer_closed() == Some(CLOSE_REVOKED) => Ended::Revoked,
         None => Ended::Lost,
     }
+}
+
+/// Pass on the remote of the repository `listing`'s thread is in, as a Host that resolves
+/// remotes reports it, for the git Project located there to follow (WVE-213): once a connection
+/// for each repository, and again if it changes. Only an open thread's counts, as this Host read
+/// it; another's is as the Host read it while the thread was open, perhaps before it resolved
+/// remotes.
+fn remotes(
+    shared: &Shared,
+    host: &StoredHost,
+    reported: &mut HashMap<PathBuf, String>,
+    listing: &ThreadListing,
+) {
+    if listing.state != ThreadStatus::Open {
+        return;
+    }
+    let Some(GitLocation {
+        repo,
+        remote: Some(remote),
+        ..
+    }) = &listing.git
+    else {
+        return;
+    };
+    if reported.get(repo) == Some(remote) {
+        return;
+    }
+    reported.insert(repo.clone(), remote.clone());
+    shared.reported_remote(host, repo, remote);
 }
 
 /// Send the Host the work written down for it, oldest first, until it's all taken or the

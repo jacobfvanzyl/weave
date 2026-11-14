@@ -27,7 +27,8 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
 - `store.rs`: its state in SQLite (`rusqlite`, bundled): `hosts` and `deliveries`, and in
   `store/calls.rs` the `calls` from Hosts' agents and the turns they began (`follows`). Migrations are
   numbered SQL in `MIGRATIONS`, applied in order and recorded in `PRAGMA user_version`; never
-  edit one once released, add the next. The eleventh (WVE-223) added a Bot's avatar, `emoji` and
+  edit one once released, add the next. The twelfth (WVE-213) added `remote` to
+  `project_locations`, the remote a location's Host last reported for it. The eleventh (WVE-223) added a Bot's avatar, `emoji` and
   `color` on `bots`, the colour by its name on the wire, and one it doesn't know read as none. The tenth (WVE-178) added `made_call` to `schedules`,
   the Host's id for the `add_schedule` call that added a Bot's own schedule, unique per Bot; the
   ninth (WVE-178), `created_by` on `bots`, the Bot that made one, by id and with no foreign key so
@@ -75,7 +76,14 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   per Host and path. Each change checks names (unique ignoring case, folded in Rust), kinds and
   remotes in the transaction that makes it (`ProjectError::Refused` is invalid params). The client
   says where a directory lies in git, from its Host; the Dispatcher never reads a Host's
-  directories, and Hosts' own connections never reach `projects/*` (WVE-208).
+  directories, and Hosts' own connections never reach `projects/*` (WVE-208). A git Project's
+  remote follows its Hosts (WVE-213): the link to a Host with `resolved_remotes` passes on the
+  `git.remote` of each repository its open threads are in, once a connection unless it changes
+  (`link::remotes`; a thread that isn't open has it as read then, perhaps by an older Host), and
+  `Store::reported_remote` keeps it on that location and gives it to the Project located there
+  unless another of its locations' Hosts reported the one it has, so a remote recorded from an
+  SSH alias as written heals as Hosts are updated, in any order, and two that disagree don't take
+  turns.
 - `bots.rs`, `store/bots.rs` (WVE-118, ADR 0028 as WVE-118 and WVE-178 settled it): the
   person's Bots, behind the `bots` feature. A Bot names one Host, a foreign key, so
   `remove_host` takes it, and a home there. `add_bot` (WVE-178, feature `bots_home`) checks the
@@ -217,7 +225,9 @@ what proves a device and what doesn't, what a device may ask, revoking, the Serv
 WebSocket's subprotocol and `Origin` checks, hello deadline and pings, which moved here from the
 Host's tests when the Host stopped listening (WVE-197).
 `tests/projects.rs` runs a Project's life through the socket and through a paired device, and
-checks a Host's removal and a restart. `tests/bots.rs` runs a Bot's life the same two ways, on a
+checks a Host's removal and a restart, and (WVE-213) two Hosts whose SSH aliases a test gives
+(`World::with_ssh`): clones through an alias and through the plain host joining one Project,
+and one recorded with the alias healing once a thread opens in its clone. `tests/bots.rs` runs a Bot's life the same two ways, on a
 clock the test moves (`TestClock`), with the fake agent: its first prompt starting its thread
 and the rest following it, its state, a new thread asked for and daily, across Dispatcher
 restarts at each step (the relay deafened to lose the Host's answers) and a Host restart,
