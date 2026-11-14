@@ -1,4 +1,4 @@
-//! Context compaction, an ACP Preview feature (`unstable_session_compaction`): the agent
+//! Context compaction, stable in ACP since schema 1.11: the agent
 //! reports when it compacts its context, and the summary it kept, as one entity per id that
 //! later updates and summary chunks patch in place.
 //!
