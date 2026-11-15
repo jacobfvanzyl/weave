@@ -111,6 +111,13 @@ impl DaemonPaths {
         self.socket.with_file_name("terminals.sock")
     }
 
+    /// Where the Neovim in each of the Host's terminals listens, `<id>.sock` (WVE-233): beside
+    /// the Host's socket, in the user's runtime directory where they have one, since a Unix
+    /// socket's path has at most 103 bytes on macOS (104 with its NUL), 107 on Linux.
+    pub fn nvim_sockets(&self) -> PathBuf {
+        self.socket.with_file_name("nvim")
+    }
+
     /// The holders of the Host's terminals: their records, sockets and Ghostty's resources.
     pub fn terminals(&self) -> PathBuf {
         self.dir.join("terminals")
@@ -172,5 +179,6 @@ mod tests {
         assert_eq!(paths.socket, PathBuf::from("/tmp/weave-dev/daemon.sock"));
         assert_eq!(paths.lock(), PathBuf::from("/tmp/weave-dev/daemon.lock"));
         assert_eq!(paths.journals(), PathBuf::from("/tmp/weave-dev/threads"));
+        assert_eq!(paths.nvim_sockets(), PathBuf::from("/tmp/weave-dev/nvim"));
     }
 }

@@ -241,6 +241,28 @@ as long as it stays) and `--log-file FILE` (diagnostics). Agents' stderr goes to
 daemon's log, `~/.local/state/weave/daemon/daemon.log`, or with `--no-daemon` to
 `--log-file`.
 
+### Neovim beside a thread
+
+An agent can show you a file in the Neovim you run in a terminal of its Session, at the line it's
+talking about, and see the file, cursor and selection you have there (the `nvim_open` and
+`nvim_state` Host tools, which `host_tools` chooses like the others). Each terminal's shell has
+`WEAVE_NVIM`, a socket path for its Neovim to listen on, and `WEAVE_TERMINAL`, the terminal's
+id. Neovim listens there with this line in your `init.lua`:
+
+```lua
+if vim.env.WEAVE_NVIM then os.remove(vim.env.WEAVE_NVIM); pcall(vim.fn.serverstart, vim.env.WEAVE_NVIM); vim.env.WEAVE_NVIM = nil end
+```
+
+Outside weave's terminals it does nothing. It removes a socket a Neovim that crashed left behind,
+which Neovim 0.12 does itself and 0.10 and 0.11 don't, so of two Neovims started in one shell,
+as with one suspended, the later has the socket. It unsets the variable for what Neovim runs, so
+a Neovim in its `:terminal` doesn't take the socket over. Or start Neovim with
+`nvim --listen "$WEAVE_NVIM"`; before 0.12 that fails over a left socket until you
+`rm "$WEAVE_NVIM"`. The tools need Neovim 0.10 or later, and a terminal a Host opened before it
+set these variables has neither. An agent opens a file only while you're in Normal mode, never
+while you type or select, and never drops unsaved changes: with `'hidden'` off, the file opens
+in a split.
+
 ## This repository
 
 `weave` is a Cargo workspace at the repository root, one crate per directory: the Host protocol

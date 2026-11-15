@@ -317,6 +317,7 @@ pub fn config_with(dir: PathBuf, journals: bool) -> DaemonConfig {
         mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
         former_serve: None,
         terminals: None,
+        nvim_sockets: None,
         home: Some(dir.join("home")),
         retired: Vec::new(),
         dispatcher: Some(DispatcherSettings {

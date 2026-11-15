@@ -58,6 +58,13 @@ use crate::devices::random_bytes;
 use crate::journal::now_ms;
 use crate::thread::lock;
 
+/// The variable a terminal's shell has its id in.
+pub const TERMINAL_VARIABLE: &str = "WEAVE_TERMINAL";
+
+/// What the Host does when a terminal is gone, given its id: removes what it kept for it
+/// outside the terminal, such as a socket for an editor there.
+pub(crate) type Gone = Box<dyn Fn(&str) + Send + Sync>;
+
 /// How long a request to a terminal's owner may take.
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// A terminal's size until a client gives it one.
@@ -85,6 +92,7 @@ pub(crate) struct Terminals {
     updated: broadcast::Sender<Terminal>,
     /// Who sets each terminal's size, among its streams.
     sizing: Mutex<HashMap<String, Sizing>>,
+    gone: Option<Gone>,
 }
 
 /// A terminal's streams' sizes, and which one last typed: the holder's policy, which the Host
@@ -124,7 +132,8 @@ pub(crate) struct Ticket {
 }
 
 impl Terminals {
-    pub(crate) fn new(owner: Arc<dyn Owner>) -> Arc<Self> {
+    /// Terminals `owner` keeps; `gone` is called with each one's id once it has ended.
+    pub(crate) fn new(owner: Arc<dyn Owner>, gone: Option<Gone>) -> Arc<Self> {
         Arc::new(Self {
             owner,
             state: Mutex::new(State::default()),
@@ -132,6 +141,7 @@ impl Terminals {
             tickets: Mutex::new(HashMap::new()),
             updated: broadcast::channel(64).0,
             sizing: Mutex::new(HashMap::new()),
+            gone,
         })
     }
 
@@ -146,6 +156,11 @@ impl Terminals {
                 }
             })
             .await;
+    }
+
+    /// Every terminal's id.
+    pub(crate) fn ids(&self) -> Vec<String> {
+        lock(&self.state).entries.keys().cloned().collect()
     }
 
     /// A scope's terminals, oldest first.
@@ -252,6 +267,9 @@ impl Terminals {
         }
         let removed = lock(&self.state).entries.remove(&id);
         lock(&self.sizing).remove(&id);
+        if let Some(forget) = &self.gone {
+            forget(&id);
+        }
         if let Some(entry) = removed {
             self.tell(&TerminalRemovedNotification {
                 id,

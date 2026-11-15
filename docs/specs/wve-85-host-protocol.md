@@ -1195,11 +1195,55 @@ answer as JSON text, or a tool error saying why the method failed.
   id and the person's other Hosts, each with whether the Dispatcher is connected to it now, or
   why not.
 - `list_projects {}`: the Dispatcher's Projects (see [Projects](#projects)).
+- `list_terminals {}`: `terminals/list` for the directory of the calling thread's Session,
+  `{scope, terminals}`, with only the terminals that are the Session's (see
+  [Sessions](#sessions)).
+- `read_terminal {id, history?}`: `terminals/format` with `format: "text"` and `trim`, answered
+  with the text itself rather than JSON.
+- `write_terminal {id, text}`: `terminals/write`. The text goes to the terminal as it is, so
+  `\r` is Enter, and whatever runs there, a shell or the program in its foreground, takes it as
+  typed. The thread's permission policy doesn't check what's typed: the Host passes it on as it
+  would a person's keys.
+- `nvim_open {path, line?, column?, terminal?}`: shows a file in the Neovim listening in a
+  terminal of the Session, at `line` and `column` (characters), both from 1, when given. `path`
+  is absolute, or relative to the calling thread's directory, and must exist. It answers
+  `{terminal, path, line, column, split}`: where the cursor ended up, short of a place past the
+  end, and whether the file opened in a split. Neovim must be in Normal mode; in any other mode
+  it does nothing and answers a tool error naming the mode, so the person's typing, selection or
+  command line is left as it is. The file goes to a window of the current tab page that shows it
+  already, else into the current window, as `:edit` would, else, when that window's buffer can't
+  be let go of (modified with `'hidden'` off, or `'winfixbuf'`), into a split, so no change is
+  ever lost. The jumplist keeps where the person was.
+- `nvim_state {terminal?}`: `{terminal, path?, bufferType?, filetype?, modified, mode, cursor:
+  {line, column}, selection?}` of that Neovim, `mode` by name (`Normal`, `Insert`, `Visual
+  Block`, …). `selection` is there only in Visual and Select modes, read live, never from the
+  `'<` and `'>` marks: `{kind: "characters" | "lines" | "block", start, end, text: string[]}`,
+  `start` and `end` without a column for lines.
 
-Every tool but `rename_thread`, `list_hosts` and `list_projects` takes `host`, another Host's id or name as
-`list_hosts` gives it, to act on that Host instead (see [Other Hosts](#other-hosts)); this
-Host's own id acts here. The tool list stays the same as Hosts come and go; a call naming one
-that can't be reached fails at once with a tool error.
+The terminal tools (WVE-233) reach only the terminals of the Session the calling thread is in:
+the Session at the thread's own directory, its worktree or the directory itself outside a
+repository, when that Session holds the thread. The Host works this out from what the Session
+holds, never from its layout. A thread in no Session gets a tool error saying so, and none of the
+terminals in its directory; an `id` that isn't one of its Session's terminals is a tool error
+too, whichever Session it's in.
+
+The Neovim tools reach the Neovim in one of those terminals over its MessagePack-RPC socket, the
+one the terminal's `WEAVE_NVIM` names (see [Terminals](#terminals)), which a Neovim listens on
+when the person's config or `--listen` says so. With `terminal`, that terminal's, which must be
+the Session's; without it, the one Neovim listening in the Session's terminals. None is a tool
+error that says how to set Neovim up, and several a tool error listing their terminals. They
+need Neovim 0.10 or later. They only move Neovim's view and read it: each runs a fixed Lua
+script with `nvim_exec_lua`, given the path and numbers as its arguments, so nothing a tool is
+given becomes an Ex command or Lua. Before it, the Host checks the version and that Neovim isn't
+waiting on a key to finish a command (`nvim_get_mode`'s `blocking`), with requests Neovim
+answers at once, so a busy Neovim gets a tool error rather than a request that waits. Connecting
+has 1 second and each request 5.
+
+Every tool but `rename_thread`, `list_hosts`, `list_projects`, the terminal tools and the Neovim
+tools takes `host`, another Host's id or name as `list_hosts` gives it, to act on that Host
+instead (see [Other Hosts](#other-hosts)); this Host's own id acts here. The tool list stays the
+same as Hosts come and go; a call naming one that can't be reached fails at once with a tool
+error.
 
 ### Projects
 
@@ -1758,7 +1802,17 @@ starts a shell:
 - with `TERM_PROGRAM=weave`, not `ghostty`, which would promise features the app doesn't draw,
   such as Kitty graphics;
 - with Ghostty's shell integration injected for zsh, bash, fish, elvish and nushell. Apple's
-  `/bin/bash` is left alone, since it is too old for it.
+  `/bin/bash` is left alone, since it is too old for it;
+- with `WEAVE_TERMINAL`, the terminal's id, and `WEAVE_NVIM`, a socket path for a Neovim in the
+  terminal to listen on, for the Neovim tools (WVE-233; see [Host tools](#host-tools)). The Host
+  makes both, since it makes the id, so every owner's terminals have them. The path is
+  `<id>.sock` in a directory of the Host's that only the person can read, `nvim/` beside its
+  socket: in the user's runtime directory where there is one (`/run/user/<uid>/weave/nvim/`),
+  else in the Host's own directory (`~/.local/state/weave/daemon/nvim/`, where the path after the
+  home directory is 54 bytes, so a home of up to 49 fits the 103 a Unix socket's path may have on
+  macOS). A path that would be too long isn't given. The Host removes a terminal's socket when the
+  terminal ends, and those of terminals that ended while it wasn't running when it next starts
+  one. Neovim reads neither variable itself.
 
 The terminal belongs to `directory`'s worktree. Its size is that of the first client to attach,
 80×24 until one does. Invalid params when `directory` isn't a directory.
@@ -1771,7 +1825,8 @@ Hangs up the shell's process group. The holder ends once the shell exits.
 
 **`terminals/write`** `{id, text}` → `{}`
 
-Text as if typed, for clients that don't attach.
+Text as if typed, passed on as it is, so `\r` is Enter: for clients that don't attach, and the
+`write_terminal` Host tool (see [Host tools](#host-tools)).
 
 **`terminals/format`** `{id, format: "text" | "vt", history?, trim?}` → `{content}`
 

@@ -8935,7 +8935,12 @@ export const HOST_PROTOCOL = {
     "steerThread": "steer_thread",
     "cancelThreadTurn": "cancel_thread_turn",
     "listAgents": "list_agents",
-    "listHosts": "list_hosts"
+    "listHosts": "list_hosts",
+    "listTerminals": "list_terminals",
+    "readTerminal": "read_terminal",
+    "writeTerminal": "write_terminal",
+    "nvimOpen": "nvim_open",
+    "nvimState": "nvim_state"
   }
 } as const;
 

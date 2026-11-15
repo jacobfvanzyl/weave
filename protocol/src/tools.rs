@@ -10,7 +10,9 @@
 //!   read and act on any thread on the Host (ADR 0023), and start delegated threads: threads
 //!   of their own that the calling thread starts. Given `host`, they act on another of the
 //!   person's Hosts instead (ADR 0029), through the service that reaches them, the Dispatcher,
-//!   as a `service/hostCall`.
+//!   as a `service/hostCall`. The terminal tools, and the Neovim tools, which reach the Neovim
+//!   in such a terminal, reach only the terminals of the Session the calling thread is in
+//!   (WVE-233), and only on its own Host.
 //! - Service tools, which a service declares and answers over its own connection (ADR 0027,
 //!   WVE-171): agents see them as `<service>__<tool>`, and a call is a `service/toolCall` for
 //!   the service that declared it, naming the calling thread.
@@ -75,6 +77,26 @@ pub const LIST_HOSTS: &str = "list_hosts";
 /// person's Hosts answers [`HostCall::ListProjects`].
 pub const LIST_PROJECTS: &str = "list_projects";
 
+/// The Host tool that lists the terminals of the calling thread's Session, as `terminals/list`
+/// does for its directory, less those that aren't the Session's.
+pub const LIST_TERMINALS: &str = "list_terminals";
+
+/// The Host tool that reads a terminal of the calling thread's Session as text, as
+/// `terminals/format` does.
+pub const READ_TERMINAL: &str = "read_terminal";
+
+/// The Host tool that types text into a terminal of the calling thread's Session, as
+/// `terminals/write` does.
+pub const WRITE_TERMINAL: &str = "write_terminal";
+
+/// The Host tool that shows a file, at a line and column when given, in the Neovim in a
+/// terminal of the calling thread's Session (WVE-233).
+pub const NVIM_OPEN: &str = "nvim_open";
+
+/// The Host tool that says what the Neovim in a terminal of the calling thread's Session has
+/// open, where its cursor is, its mode and what's selected (WVE-233).
+pub const NVIM_STATE: &str = "nvim_state";
+
 /// The tool kinds a permission policy names, for the tools that take one.
 const TOOL_KINDS: [&str; 10] = [
     "read",
@@ -137,6 +159,15 @@ pub fn host_catalog() -> Vec<Tool> {
         "type": "string",
         "description": "Optional: another of the person's weave Hosts, by the id or name \
                         list_hosts gives, to act there instead of on this thread's Host."
+    });
+    let terminal_id = json!({
+        "type": "string",
+        "description": "The terminal's id, as list_terminals gives it."
+    });
+    let nvim_terminal = json!({
+        "type": "string",
+        "description": "Optional: the terminal whose Neovim to use, by the id list_terminals \
+                        gives. When absent, the one Neovim listening in this Session's terminals."
     });
     let project = |what: &str| {
         json!({
@@ -350,6 +381,133 @@ pub fn host_catalog() -> Vec<Tool> {
                 "type": "object",
                 "properties": {"host": host, "threadId": thread_id},
                 "required": ["threadId"],
+                "additionalProperties": false
+            }),
+        },
+        Tool {
+            name: LIST_TERMINALS.to_owned(),
+            title: "List this Session's terminals".to_owned(),
+            description: "List the terminals of the Session this thread is in: the shells the \
+                          person keeps beside this thread in their weave app, oldest first. \
+                          Each has its id, the person's label for it, the title its program \
+                          set, the directory its shell is in (pwd), the process in its \
+                          foreground, and, where the shell reports it, whether a command is \
+                          running or how the last one ended. Use it to find a terminal for \
+                          read_terminal and write_terminal. A thread in no Session has no \
+                          terminals here, and terminals elsewhere in its directory aren't \
+                          listed. Answers with the Host's terminals/list result for the Session \
+                          as JSON."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        },
+        Tool {
+            name: READ_TERMINAL.to_owned(),
+            title: "Read a terminal".to_owned(),
+            description: "Read what a terminal of this thread's Session shows, as plain text \
+                          with trailing blank space trimmed: its screen, or with history the \
+                          scrollback above it too. Use it to see a command's output, a server's \
+                          log, or a program waiting for an answer, and after write_terminal to \
+                          see what the text did. Answers with the text."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": terminal_id,
+                    "history": {"type": "boolean", "description": "Optional: the scrollback \
+                        above the screen too, for output that has scrolled off it. The screen \
+                        alone when absent."}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            }),
+        },
+        Tool {
+            name: WRITE_TERMINAL.to_owned(),
+            title: "Type into a terminal".to_owned(),
+            description: "Type text into a terminal of this thread's Session, as if the person \
+                          typed it, into whatever runs there: the shell, or the program in its \
+                          foreground. Enter isn't added for you: end the text with a carriage \
+                          return, \\r, to press Enter and run a command. A newline, \\n, is \
+                          Ctrl-J, which shells usually take as Enter but other programs may not. \
+                          Control characters are keys: \\u0003 is Ctrl-C. What is typed isn't \
+                          checked against this thread's permission policy: the terminal is the \
+                          person's own shell, so type only what the work calls for. This \
+                          answers once the text is sent, not when a command finishes: use \
+                          read_terminal to see what it did."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": terminal_id,
+                    "text": {"type": "string", "description": "What to type, with \\r for \
+                        Enter."}
+                },
+                "required": ["id", "text"],
+                "additionalProperties": false
+            }),
+        },
+        Tool {
+            name: NVIM_OPEN.to_owned(),
+            title: "Show a file in Neovim".to_owned(),
+            description: "Show the person a file, and a place in it, in the Neovim they run in a \
+                          terminal of this Session, beside this thread: to point them at the \
+                          code you're talking about, the line an error names, or a change \
+                          you've made. The file opens in Neovim's current window, or in the \
+                          window that shows it already; the cursor goes to the line and \
+                          column, and the person can go back with CTRL-O. When the current \
+                          buffer has changes that Neovim can't hide ('hidden' off), the file \
+                          opens in a split instead, so nothing is lost. It only moves the view: \
+                          it doesn't edit, save or close anything. Answers with the file as \
+                          Neovim names it, where the cursor ended up (short of a line or \
+                          column past the end), and whether it split. It fails, and does \
+                          nothing, while the person is in a mode other than Normal (typing, \
+                          selecting, or in a command): try again later, or tell them where to \
+                          look. It fails too when no Neovim listens in the Session's \
+                          terminals, saying how the person sets that up, and when several do \
+                          and terminal doesn't say which."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "The file: absolute, or relative \
+                        to this thread's directory. It must exist."},
+                    "line": {"type": "integer", "minimum": 1, "description": "Optional: the \
+                        line to show, from 1. The cursor stays where it was in the file when \
+                        absent."},
+                    "column": {"type": "integer", "minimum": 1, "description": "Optional, with \
+                        line: the column, in characters from 1. The line's first when absent."},
+                    "terminal": nvim_terminal
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+        },
+        Tool {
+            name: NVIM_STATE.to_owned(),
+            title: "See what's in Neovim".to_owned(),
+            description: "See what the person is looking at in the Neovim they run in a \
+                          terminal of this Session: the current buffer's file, its filetype \
+                          and whether it has unsaved changes, the cursor's line and column, \
+                          the mode, and, while they're selecting in Visual mode, the \
+                          selection: whether it's characters, whole lines or a block, its \
+                          first and last line and column, and its text, a string per line. \
+                          Use it when the person refers to \"this\", \"here\" or \"what I've \
+                          selected\". Outside Visual mode there's no selection, whatever they \
+                          selected before. Lines and columns count from 1, columns in \
+                          characters. It reads only. It fails when no Neovim listens in the \
+                          Session's terminals, saying how the person sets that up, when \
+                          several do and terminal doesn't say which, and while Neovim waits \
+                          for the person to finish a command or answer a prompt."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "terminal": nvim_terminal
+                },
                 "additionalProperties": false
             }),
         },

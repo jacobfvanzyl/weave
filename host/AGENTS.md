@@ -180,6 +180,30 @@ with `journal::latest_turn`'s last message) or waits on a person (`waiting_text`
 `host_tools::tell`: a steer into the caller's running turn, or else `queue/add`, taking the
 caller up again first if it isn't open. A report's origin has `report: true`, and a report's
 turn reports to nobody, which is all that keeps two threads from trading reports. `rename_thread` sends `Command::Rename` as `thread/rename` does.
+The terminal tools (WVE-233) `list_terminals`, `read_terminal` and `write_terminal` are
+`terminals/list`, `terminals/format` (text, trimmed, answered as the text) and `terminals/write`
+through `client::list_terminals`, `format_terminal` and `write_terminal`, for the calling
+thread's Session only: `Shared::session_of` takes the Session at the thread's own directory
+(its `git.worktree`, else its directory) when the Session's record names the thread, and the
+Session's terminals from `session_contents`, reading no layout. A thread in no Session, or an
+id that isn't one of its Session's terminals, gets a tool error, and they take no `host`. What
+`write_terminal` types the thread's permission policy doesn't check.
+The Neovim tools (WVE-233) `nvim_open` and `nvim_state` reach the Neovim listening in one of
+those terminals, by the same resolution (`host_tools::session_nvim`): the terminal `terminal`
+names, or the one terminal of the Session's whose socket accepts a connection; none or several is
+a tool error, the first saying how to set Neovim up (`nvim::setup`). The `nvim` module does the
+rest: `nvim::rpc` is a MessagePack-RPC client of one Neovim, a request at a time, each with a
+deadline (connecting 1 s, each call 5 s), passing over notifications and answering Neovim's own
+requests with an error, over the codec in `nvim::msgpack` (hand-written, no dependency, public
+for the tests' fake Neovim). The tools know no MessagePack and the terminals know no Neovim.
+Each tool checks Neovim's version (0.10 or later, for `getregion()`) and that it isn't blocked
+on a key, with `nvim_get_api_info` and `nvim_get_mode`, which Neovim answers at once even then,
+and then runs a fixed Lua script (`open.lua`, `state.lua`) with `nvim_exec_lua`, the path and
+numbers as its arguments, so no argument becomes a command. `open.lua` acts only in Normal mode:
+it goes to a window of the tab page that shows the file already, else puts the buffer in the
+current window (`nvim_win_set_buf`, which fails rather than drop a modified buffer 'hidden' won't
+hide), else in a split; it marks the jumplist first. `state.lua` reads a selection live from
+`getpos('v')` and the cursor, and none outside Visual and Select modes.
 A rename journals `Entry::Renamed`, and
 the thread task keeps the title in `renamed`, leaving the agent's later titles out of the
 journal and summary. `journal::kept_title` reads it back for a suspended thread, and a closed
@@ -200,6 +224,14 @@ reader holds its owner back rather than the Host buffering.
 - **Starting holders:** `systemd-run --user` on Linux when the user's systemd answers, since the
   Host's `KillMode=mixed` unit would take a child with it; `weave-holder spawn` otherwise. The
   agents' environment goes in a 0600 env file the holder removes once read.
+- **A terminal's environment:** the agents', with `WEAVE_TERMINAL`, the terminal's id, and
+  `WEAVE_NVIM`, the socket its Neovim may listen on (`client::terminal_environment`, WVE-233).
+  The Host makes the id, so it sets both in `Start::env`, and every owner's terminals have them.
+  The sockets are `<id>.sock` in `DaemonPaths::nvim_sockets` (`nvim/` beside the Host's socket,
+  0700, made when a terminal starts; `DaemonConfig::nvim_sockets`), short enough for a Unix
+  socket's path, which `nvim::socket` checks. A socket goes with its terminal: `Terminals` calls
+  its `Gone` hook as one ends, which `nvim::forget`s it, and starting a terminal sweeps those of
+  terminals that ended while the Host was down (`nvim::sweep`).
 - **Finding them again:** `Owner::find` keeps the records whose socket answers and prunes the
   rest, the first time terminals are asked for (`Terminals::ready`).
 - **The service:** `Terminals` holds one control connection per terminal, subscribed to its
@@ -218,7 +250,10 @@ reader holds its owner back rather than the Host buffering.
   client's `{"resync": {}}` asks the owner for one (`resync`). The size follows the stream that
   last typed (`Terminals::typed`, `resized`), and clipboard writes go to it alone.
 - **Tests:** `tests/terminals.rs` drives it all through a real client, against a fake owner that
-  leaves out `command` and `opened_from`, and against real holders it builds with cargo.
+  leaves out `command` and `opened_from` (`tests/fake_owner`, which `tests/daemon.rs` shares for
+  the terminal tools), and against real holders it builds with cargo. `tests/daemon.rs` tests
+  the Neovim tools against a fake Neovim (`tests/fake_nvim`); `nvim/tests.rs` tests the scripts
+  against a real `nvim --headless --listen`, skipped when there's no `nvim` 0.10 or later on PATH.
 
 Sessions (ADR 0031, WVE-202, WVE-203, `sessions.rs`, spec section Sessions) are directories, known by a
 terminal's scope (`Shared::session_scope`), with the threads and terminals that are theirs and a

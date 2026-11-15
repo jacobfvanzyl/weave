@@ -25,6 +25,12 @@
 //! under the home there. Reach is one hop: a turn another Host's
 //! agent began here, and a thread one started here or anything that thread started, reaches
 //! no other Host.
+//!
+//! The terminal tools (WVE-233) reach only the terminals of the Session the calling thread is
+//! in, on this Host ([`Shared::session_of`]): none for a thread in no Session, and no other
+//! terminal by its id. What `write_terminal` types the thread's permission policy doesn't see.
+//! The Neovim tools reach the Neovim listening in one of those terminals ([`nvim`]), and only
+//! move its view or read it.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -50,6 +56,10 @@ use weave_host_protocol::projects::containing_directory;
 use weave_host_protocol::projects::inside;
 use weave_host_protocol::queue::AddQueuedRequest;
 use weave_host_protocol::reports::why;
+use weave_host_protocol::terminals::FormatTerminalRequest;
+use weave_host_protocol::terminals::ListTerminalsRequest;
+use weave_host_protocol::terminals::TerminalFormat;
+use weave_host_protocol::terminals::WriteTerminalRequest;
 use weave_host_protocol::threads::Activity;
 use weave_host_protocol::threads::GetThreadRequest;
 use weave_host_protocol::threads::ListThreadsRequest;
@@ -64,12 +74,17 @@ use weave_host_protocol::tools::HostCall;
 use weave_host_protocol::tools::LIST_AGENTS;
 use weave_host_protocol::tools::LIST_HOSTS;
 use weave_host_protocol::tools::LIST_PROJECTS;
+use weave_host_protocol::tools::LIST_TERMINALS;
 use weave_host_protocol::tools::LIST_THREADS;
+use weave_host_protocol::tools::NVIM_OPEN;
+use weave_host_protocol::tools::NVIM_STATE;
 use weave_host_protocol::tools::PROMPT_THREAD;
+use weave_host_protocol::tools::READ_TERMINAL;
 use weave_host_protocol::tools::READ_THREAD;
 use weave_host_protocol::tools::RENAME_THREAD;
 use weave_host_protocol::tools::START_THREAD;
 use weave_host_protocol::tools::STEER_THREAD;
+use weave_host_protocol::tools::WRITE_TERMINAL;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::SteerOutcome;
 use weave_host_protocol::turns::SteerTurnRequest;
@@ -77,6 +92,7 @@ use weave_host_protocol::turns::TurnId;
 
 use crate::Shared;
 use crate::client;
+use crate::nvim;
 use crate::service_tools;
 use crate::thread::Command;
 use crate::thread::Summary;
@@ -195,6 +211,11 @@ async fn here(
         PROMPT_THREAD => prompt(shared, caller, arguments).await,
         STEER_THREAD => steer(shared, caller, arguments).await,
         CANCEL_THREAD_TURN => cancel(shared, arguments),
+        LIST_TERMINALS => list_terminals(shared, caller).await,
+        READ_TERMINAL => read_terminal(shared, caller, arguments).await,
+        WRITE_TERMINAL => write_terminal(shared, caller, arguments).await,
+        NVIM_OPEN => nvim_open(shared, caller, arguments).await,
+        NVIM_STATE => nvim_state(shared, caller, arguments).await,
         _ => Err(format!("The Host doesn't answer {tool}.")),
     }
 }
@@ -353,7 +374,17 @@ async fn elsewhere(
     cancelled: impl Future<Output = ()>,
 ) -> Option<ClientToolResult> {
     let fail = |why: String| Some(ClientToolResult::error(why));
-    if matches!(tool, RENAME_THREAD | LIST_HOSTS | LIST_PROJECTS) {
+    if matches!(
+        tool,
+        RENAME_THREAD
+            | LIST_HOSTS
+            | LIST_PROJECTS
+            | LIST_TERMINALS
+            | READ_TERMINAL
+            | WRITE_TERMINAL
+            | NVIM_OPEN
+            | NVIM_STATE
+    ) {
         return fail(format!("{tool} acts on this Host, so it takes no host."));
     }
     let me = caller.summary();
@@ -795,6 +826,239 @@ async fn steer(
 fn cancel(shared: &Arc<Shared>, arguments: &Map<String, Value>) -> Result<String, String> {
     let request: CancelTurnRequest = parse(arguments)?;
     answer(client::cancel_turn(shared, request))
+}
+
+/// The calling thread's Session, by its directory, and the ids of its terminals; or why it has
+/// none.
+async fn session_terminals(
+    shared: &Arc<Shared>,
+    caller: &ThreadHandle,
+) -> Result<(PathBuf, Vec<String>), String> {
+    // Found first, so the Session's terminals are known.
+    client::host_terminals(shared)
+        .await
+        .map_err(|error| why(&error))?;
+    shared.session_of(&caller.summary()).ok_or_else(|| {
+        "This thread is in no Session, so it has no terminals: the terminal tools reach only \
+         the terminals of the Session a thread is in, those the person keeps beside it in \
+         their weave app."
+            .to_owned()
+    })
+}
+
+/// The terminal `id`, when it's one of the calling thread's Session's; or why not.
+async fn session_terminal(
+    shared: &Arc<Shared>,
+    caller: &ThreadHandle,
+    id: String,
+) -> Result<String, String> {
+    let (_, terminals) = session_terminals(shared, caller).await?;
+    if terminals.contains(&id) {
+        Ok(id)
+    } else {
+        Err(format!(
+            "The terminal {id} isn't one of this thread's Session's: list_terminals gives \
+             those."
+        ))
+    }
+}
+
+/// `list_terminals`: `terminals/list` for the calling thread's Session, less the terminals in
+/// its directory that aren't the Session's.
+async fn list_terminals(shared: &Arc<Shared>, caller: &ThreadHandle) -> Result<String, String> {
+    let (directory, own) = session_terminals(shared, caller).await?;
+    let mut listed = client::list_terminals(shared, ListTerminalsRequest { directory })
+        .await
+        .map_err(|error| why(&error))?;
+    listed
+        .terminals
+        .retain(|terminal| own.contains(&terminal.id));
+    to_text(&listed)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReadArguments {
+    id: String,
+    #[serde(default)]
+    history: bool,
+}
+
+/// `read_terminal`: `terminals/format` as text, trimmed, for a terminal of the calling thread's
+/// Session.
+async fn read_terminal(
+    shared: &Arc<Shared>,
+    caller: &ThreadHandle,
+    arguments: &Map<String, Value>,
+) -> Result<String, String> {
+    let arguments: ReadArguments = parse(arguments)?;
+    let request = FormatTerminalRequest {
+        id: session_terminal(shared, caller, arguments.id).await?,
+        format: TerminalFormat::Text,
+        history: arguments.history,
+        trim: true,
+    };
+    client::format_terminal(shared, request)
+        .await
+        .map(|formatted| formatted.content)
+        .map_err(|error| why(&error))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WriteArguments {
+    id: String,
+    text: String,
+}
+
+/// `write_terminal`: `terminals/write`, for a terminal of the calling thread's Session. The
+/// text goes as it is, so `\r` is Enter.
+async fn write_terminal(
+    shared: &Arc<Shared>,
+    caller: &ThreadHandle,
+    arguments: &Map<String, Value>,
+) -> Result<String, String> {
+    let arguments: WriteArguments = parse(arguments)?;
+    let request = WriteTerminalRequest {
+        id: session_terminal(shared, caller, arguments.id).await?,
+        text: arguments.text,
+    };
+    answer(client::write_terminal(shared, request).await)
+}
+
+/// The socket of the Neovim the Neovim tools use, in a terminal of the calling thread's
+/// Session: the one `terminal` names, or else the one Neovim listening in any of them; or why
+/// there's none.
+async fn session_nvim(
+    shared: &Arc<Shared>,
+    caller: &ThreadHandle,
+    terminal: Option<String>,
+) -> Result<(String, PathBuf), String> {
+    let Some(dir) = &shared.config.nvim_sockets else {
+        return Err(
+            "This Host gives its terminals no socket for Neovim to listen on, so the \
+                    Neovim tools can't reach one."
+                .to_owned(),
+        );
+    };
+    let socket = |id: &str| {
+        nvim::socket(dir, id).ok_or_else(|| {
+            format!(
+                "The Host's directory for Neovim sockets, {}, is too deep for a Unix socket's \
+                 path, so terminal {id} has none.",
+                dir.display()
+            )
+        })
+    };
+    if let Some(id) = terminal {
+        let id = session_terminal(shared, caller, id).await?;
+        let socket = socket(&id)?;
+        if !nvim::listening(&socket).await {
+            return Err(format!(
+                "No Neovim listens in terminal {id}. {}",
+                nvim::setup()
+            ));
+        }
+        return Ok((id, socket));
+    }
+    let (_, terminals) = session_terminals(shared, caller).await?;
+    let candidates: Vec<(String, PathBuf)> = terminals
+        .into_iter()
+        .filter_map(|id| socket(&id).ok().map(|socket| (id, socket)))
+        .collect();
+    let listening =
+        futures::future::join_all(candidates.iter().map(|(_, socket)| nvim::listening(socket)))
+            .await;
+    let mut found: Vec<(String, PathBuf)> = candidates
+        .into_iter()
+        .zip(listening)
+        .filter_map(|(candidate, listening)| listening.then_some(candidate))
+        .collect();
+    match found.len() {
+        0 => Err(format!(
+            "No Neovim listens in this Session's terminals. {}",
+            nvim::setup()
+        )),
+        1 => Ok(found.remove(0)),
+        _ => {
+            let ids: Vec<&str> = found.iter().map(|(id, _)| id.as_str()).collect();
+            Err(format!(
+                "A Neovim listens in each of the terminals {}: say which with terminal. \
+                 list_terminals tells them apart.",
+                ids.join(", ")
+            ))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NvimOpenArguments {
+    path: PathBuf,
+    line: Option<u64>,
+    column: Option<u64>,
+    terminal: Option<String>,
+}
+
+/// `nvim_open`: shows a file, at a place when given, in the Neovim in a terminal of the calling
+/// thread's Session. A relative path is the thread's directory's.
+async fn nvim_open(
+    shared: &Arc<Shared>,
+    caller: &ThreadHandle,
+    arguments: &Map<String, Value>,
+) -> Result<String, String> {
+    let arguments: NvimOpenArguments = parse(arguments)?;
+    if arguments.line == Some(0) || arguments.column == Some(0) {
+        return Err("line and column count from 1.".to_owned());
+    }
+    if arguments.column.is_some() && arguments.line.is_none() {
+        return Err("column needs line.".to_owned());
+    }
+    let path = caller.summary().cwd.join(&arguments.path);
+    let path = path
+        .canonicalize()
+        .map_err(|error| format!("There's no file at {}: {error}.", path.display()))?;
+    let (id, socket) = session_nvim(shared, caller, arguments.terminal).await?;
+    let open = nvim::Open {
+        path: &path,
+        line: arguments.line,
+        column: arguments.column,
+    };
+    let opened = nvim::open(&socket, &open)
+        .await
+        .map_err(|error| format!("The Neovim in terminal {id} {error}"))?;
+    to_text(&json!({
+        "terminal": id,
+        "path": opened.path,
+        "line": opened.line,
+        "column": opened.column,
+        "split": opened.split,
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NvimStateArguments {
+    terminal: Option<String>,
+}
+
+/// `nvim_state`: what the Neovim in a terminal of the calling thread's Session has open and
+/// selected.
+async fn nvim_state(
+    shared: &Arc<Shared>,
+    caller: &ThreadHandle,
+    arguments: &Map<String, Value>,
+) -> Result<String, String> {
+    let arguments: NvimStateArguments = parse(arguments)?;
+    let (id, socket) = session_nvim(shared, caller, arguments.terminal).await?;
+    let state = nvim::state(&socket)
+        .await
+        .map_err(|error| format!("The Neovim in terminal {id} {error}"))?;
+    let mut answer = serde_json::to_value(&state).map_err(|error| error.to_string())?;
+    if let Value::Object(object) = &mut answer {
+        object.insert("terminal".to_owned(), Value::String(id));
+    }
+    to_text(&answer)
 }
 
 /// The thread that started `thread_id`, or the one it belongs to as a subagent.

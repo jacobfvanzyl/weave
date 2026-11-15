@@ -41,6 +41,7 @@ mod instance;
 mod journal;
 pub mod mcp;
 mod modes;
+pub mod nvim;
 pub mod paths;
 mod queue;
 pub mod remotes;
@@ -182,6 +183,10 @@ pub struct DaemonConfig {
     /// What keeps terminals alive for clients (ADR 0022); none for a Host without terminals, as
     /// one inside a client, or one installed without `weave-holder`.
     pub terminals: Option<Arc<dyn terminals::Owner>>,
+    /// Where the Neovim in each terminal listens for the nvim tools (WVE-233): a socket per
+    /// terminal, named by its id, whose path its shell has in `WEAVE_NVIM`. None for a Host
+    /// whose terminals get no such variable.
+    pub nvim_sockets: Option<PathBuf>,
     /// The home directory `~/…` paths between Hosts are under (ADR 0029); `$HOME` when none.
     pub home: Option<PathBuf>,
     /// Files earlier Hosts left that this one removes when it starts: a peer Host's
@@ -226,6 +231,7 @@ impl DaemonConfig {
             mcp_bridge: bridge_command(),
             former_serve: None,
             terminals: None,
+            nvim_sockets: None,
             home: None,
             retired: Vec::new(),
             dispatcher: None,
@@ -245,6 +251,7 @@ impl DaemonConfig {
             mcp_socket: Some(paths.mcp_socket()),
             terminals: terminals::Holders::beside_this_program(paths.terminals())
                 .map(|holders| Arc::new(holders) as Arc<dyn terminals::Owner>),
+            nvim_sockets: Some(paths.nvim_sockets()),
             retired: paths.retired(),
             dispatcher: Some(DispatcherSettings::in_dir(paths)),
             ..Self::in_process(None)
@@ -927,6 +934,24 @@ impl Shared {
         );
     }
 
+    /// The Session the thread `summary` describes is in, by its directory, and the ids of that
+    /// Session's terminals still there, oldest first: the Session at the thread's own directory
+    /// (its worktree, or its directory outside a repository), when that Session names it as its
+    /// own. None when the thread is in no Session. Nothing else in the directory is the
+    /// Session's, and the Host reads no layout to find it (ADR 0031).
+    pub(crate) fn session_of(&self, summary: &Summary) -> Option<(PathBuf, Vec<String>)> {
+        let directory = match &summary.git {
+            Some(git) => git.worktree.clone(),
+            None => git::canonical(&summary.cwd),
+        };
+        let (threads, terminals) = self.sessions.members(&directory)?;
+        if !threads.contains(&summary.thread_id) {
+            return None;
+        }
+        let (_, terminals) = self.session_contents(&directory, &threads, &terminals);
+        Some((directory, terminals))
+    }
+
     /// The ids of the terminals in the Session at `directory`, oldest first; with `busy`, only
     /// those running a command.
     fn terminals_in_session(&self, directory: &Path, busy: bool) -> Vec<String> {
@@ -1238,7 +1263,13 @@ impl Daemon {
             config.journals.as_deref(),
             JOURNAL_RETENTION,
         ));
-        let terminals = config.terminals.clone().map(terminals::Terminals::new);
+        let nvim_sockets = config.nvim_sockets.clone();
+        let terminals = config.terminals.clone().map(|owner| {
+            // A terminal's Neovim's socket goes with it.
+            let gone = nvim_sockets
+                .map(|dir| Box::new(move |id: &str| nvim::forget(&dir, id)) as terminals::Gone);
+            terminals::Terminals::new(owner, gone)
+        });
         let config_sessions = config.sessions.clone();
         for retired in &config.retired {
             match std::fs::remove_file(retired) {

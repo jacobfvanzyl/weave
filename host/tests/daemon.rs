@@ -123,6 +123,12 @@ use weave_host_protocol::worktrees::RemoveWorktreeRequest;
 use weave_host_protocol::worktrees::RemoveWorktreeResponse;
 use weave_host_protocol::worktrees::Worktree;
 
+mod fake_nvim;
+mod fake_owner;
+
+use fake_nvim::FakeNvim;
+use fake_owner::FakeOwner;
+
 const WAIT: Duration = Duration::from_secs(10);
 
 /// Fake agents in-process, sharing `state` so threads outlive any one of them. The stdio
@@ -272,6 +278,30 @@ impl World {
         Daemon::new(config)
     }
 
+    /// A Host whose terminals a fake owner keeps, their Neovims' sockets in
+    /// [`Self::nvim_sockets`].
+    fn daemon_with_terminals(&self) -> Daemon {
+        let mut config = self.config(
+            false,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            false,
+        );
+        config.terminals = Some(Arc::new(FakeOwner::default()));
+        config.nvim_sockets = Some(self.nvim_sockets());
+        Daemon::new(config)
+    }
+
+    /// Where the Neovim in each terminal listens.
+    fn nvim_sockets(&self) -> PathBuf {
+        self.dir.path().join("nvim")
+    }
+
+    /// The socket the Neovim in the terminal `id` listens on.
+    fn nvim_socket(&self, id: &str) -> PathBuf {
+        self.nvim_sockets().join(format!("{id}.sock"))
+    }
+
     /// A Host with journals whose agents advertise nothing optional, deleting threads included.
     fn daemon_minimal(&self) -> Daemon {
         let mut config = self.config(
@@ -335,6 +365,7 @@ impl World {
             mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
             former_serve: None,
             terminals: None,
+            nvim_sockets: None,
             home: None,
             retired: Vec::new(),
             dispatcher: None,
@@ -6081,6 +6112,7 @@ mod repos {
 mod sessions {
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use weave_host::nvim::msgpack::Value;
     use weave_host_protocol::sessions::AddToSessionRequest;
     use weave_host_protocol::sessions::EndSessionRequest;
     use weave_host_protocol::sessions::FEATURE as SESSIONS_FEATURE;
@@ -6090,6 +6122,10 @@ mod sessions {
     use weave_host_protocol::sessions::SetSessionRequest;
     use weave_host_protocol::sessions::UnwatchSessionsRequest;
     use weave_host_protocol::sessions::WatchSessionsRequest;
+    use weave_host_protocol::terminals::FormatTerminalRequest;
+    use weave_host_protocol::terminals::NewTerminalRequest;
+    use weave_host_protocol::terminals::Terminal;
+    use weave_host_protocol::terminals::TerminalFormat;
 
     use super::*;
 
@@ -6175,6 +6211,374 @@ mod sessions {
                 .await
                 .map(|response| response.session)
         }
+
+        /// A terminal in `directory`, opened from `opened_from` when given.
+        async fn terminal(&self, directory: &Path, opened_from: Option<&ThreadId>) -> Terminal {
+            self.connection
+                .send(NewTerminalRequest {
+                    directory: directory.to_path_buf(),
+                    label: Some("server".to_owned()),
+                    opened_from: opened_from.cloned(),
+                    ..NewTerminalRequest::default()
+                })
+                .await
+                .expect("terminals/new")
+                .terminal
+        }
+
+        /// What a terminal shows, as a client reads it.
+        async fn screen(&self, id: &str) -> String {
+            self.connection
+                .send(FormatTerminalRequest {
+                    id: id.to_owned(),
+                    format: TerminalFormat::Text,
+                    history: true,
+                    trim: true,
+                })
+                .await
+                .expect("terminals/format")
+                .content
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sessions_thread_lists_reads_and_types_into_its_own_terminals_and_no_others() {
+        let world = World::new();
+        let dir = world.cwd().canonicalize().expect("canonical");
+        let other = dir.join("other");
+        std::fs::create_dir(&other).expect("a directory");
+        let daemon = world.daemon_with_terminals();
+        let mut client = world.client(&daemon).await;
+
+        // A thread in a Session, with a terminal opened from it, which is the Session's too, and
+        // one in its directory that no client added to it.
+        let caller = client.thread_in(&world, &dir).await.thread_id;
+        client
+            .connection
+            .send(add(&dir, &[&caller]))
+            .await
+            .expect("sessions/add");
+        let own = client.terminal(&dir, Some(&caller)).await;
+        let stray = client.terminal(&dir, None).await;
+        assert_eq!(
+            client.session(&dir).await.expect("sessions/get").terminals,
+            vec![own.id.clone()]
+        );
+        // Another Session's thread and terminal.
+        let neighbour = client.thread_in(&world, &other).await.thread_id;
+        client
+            .connection
+            .send(add(&other, &[&neighbour]))
+            .await
+            .expect("sessions/add");
+        let theirs = client.terminal(&other, Some(&neighbour)).await;
+
+        // It lists only its Session's terminal, as terminals/list gives it.
+        let said = client
+            .call_tool(&caller, "list_terminals", "{}")
+            .await
+            .agent;
+        let listed = tool_answer(&said, "list_terminals");
+        assert_eq!(listed["scope"], json!(dir));
+        assert_eq!(listed["terminals"], json!([own]));
+
+        // It types into it, as terminals/write does, and reads it back, as terminals/format.
+        let typed = json!({"id": own.id, "text": "echo hi\r"}).to_string();
+        let said = client
+            .call_tool(&caller, "write_terminal", &typed)
+            .await
+            .agent;
+        assert!(said.contains("write_terminal answered: {}"), "{said}");
+        assert_eq!(client.screen(&own.id).await, "echo hi\r");
+        let read = json!({"id": own.id, "history": true}).to_string();
+        let said = client
+            .call_tool(&caller, "read_terminal", &read)
+            .await
+            .agent;
+        assert!(said.contains("read_terminal answered: echo hi"), "{said}");
+
+        // A terminal that isn't its Session's is refused by id, whichever Session it's in.
+        for id in [&stray.id, &theirs.id] {
+            let typed = json!({"id": id, "text": "ls\r"}).to_string();
+            let said = client
+                .call_tool(&caller, "write_terminal", &typed)
+                .await
+                .agent;
+            assert!(
+                said.contains(&format!(
+                    "write_terminal failed: The terminal {id} isn't one of this thread's \
+                     Session's"
+                )),
+                "{said}"
+            );
+            let read = json!({"id": id}).to_string();
+            let said = client
+                .call_tool(&caller, "read_terminal", &read)
+                .await
+                .agent;
+            assert!(
+                said.contains("read_terminal failed: The terminal"),
+                "{said}"
+            );
+            assert_eq!(client.screen(id).await, "");
+        }
+
+        // A thread in no Session has no terminals, though its directory has some.
+        let loose = client.thread_in(&world, &dir).await.thread_id;
+        for (tool, arguments) in [
+            ("list_terminals", "{}".to_owned()),
+            ("read_terminal", json!({"id": own.id}).to_string()),
+            (
+                "write_terminal",
+                json!({"id": own.id, "text": "x"}).to_string(),
+            ),
+        ] {
+            let said = client.call_tool(&loose, tool, &arguments).await.agent;
+            assert!(
+                said.contains(&format!("{tool} failed: This thread is in no Session")),
+                "{said}"
+            );
+        }
+        assert_eq!(client.screen(&own.id).await, "echo hi\r");
+
+        // Left out of host_tools, a terminal tool isn't offered.
+        let config = world.dir.path().join("config.toml");
+        let text = std::fs::read_to_string(&config).expect("config");
+        std::fs::write(
+            &config,
+            format!("host_tools = [\"list_terminals\"]\n{text}"),
+        )
+        .expect("config");
+        let limited = client.thread_in(&world, &dir).await.thread_id;
+        client
+            .connection
+            .send(add(&dir, &[&limited]))
+            .await
+            .expect("sessions/add");
+        let said = client
+            .call_tool(&limited, "list_terminals", "{}")
+            .await
+            .agent;
+        assert_eq!(
+            tool_answer(&said, "list_terminals")["terminals"],
+            json!([own])
+        );
+        let typed = json!({"id": own.id, "text": "x"}).to_string();
+        let said = client
+            .call_tool(&limited, "write_terminal", &typed)
+            .await
+            .agent;
+        assert!(
+            said.starts_with("write_terminal couldn't be called")
+                && said.contains("unknown tool: write_terminal"),
+            "{said}"
+        );
+        assert_eq!(client.screen(&own.id).await, "echo hi\r");
+    }
+
+    #[tokio::test]
+    async fn a_sessions_thread_shows_and_reads_the_neovim_in_its_own_terminals() {
+        let world = World::new();
+        let dir = world.cwd().canonicalize().expect("canonical");
+        let other = dir.join("other");
+        std::fs::create_dir(&other).expect("a directory");
+        std::fs::create_dir(dir.join("src")).expect("a directory");
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").expect("a file");
+        let daemon = world.daemon_with_terminals();
+        let mut client = world.client(&daemon).await;
+
+        let caller = client.thread_in(&world, &dir).await.thread_id;
+        client
+            .connection
+            .send(add(&dir, &[&caller]))
+            .await
+            .expect("sessions/add");
+        let own = client.terminal(&dir, Some(&caller)).await;
+        let neighbour = client.thread_in(&world, &other).await.thread_id;
+        client
+            .connection
+            .send(add(&other, &[&neighbour]))
+            .await
+            .expect("sessions/add");
+        let theirs = client.terminal(&other, Some(&neighbour)).await;
+        let stray = client.terminal(&dir, None).await;
+
+        // No Neovim listens, not even over a socket file one left: the error says how to set
+        // one up.
+        std::fs::create_dir_all(world.nvim_sockets()).expect("the directory");
+        let left = world.nvim_socket(&own.id);
+        drop(std::os::unix::net::UnixListener::bind(&left).expect("a socket"));
+        // Another test's child may hold the listener between its fork and exec.
+        let deadline = tokio::time::Instant::now() + WAIT;
+        while std::os::unix::net::UnixStream::connect(&left).is_ok() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the socket still answers"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let said = client.call_tool(&caller, "nvim_state", "{}").await.agent;
+        assert!(
+            said.contains("nvim_state failed: No Neovim listens in this Session's terminals.")
+                && said.contains("WEAVE_NVIM")
+                && said.contains("vim.fn.serverstart"),
+            "{said}"
+        );
+        std::fs::remove_file(world.nvim_socket(&own.id)).expect("removed");
+
+        // One does, and another in a terminal of another Session's and one of no Session's.
+        let nvim = FakeNvim::listen(&world.nvim_socket(&own.id));
+        let other_nvims = [
+            FakeNvim::listen(&world.nvim_socket(&theirs.id)),
+            FakeNvim::listen(&world.nvim_socket(&stray.id)),
+        ];
+
+        // A relative path is the thread's directory's, and goes to Neovim as an argument of the
+        // fixed script, with the line and column.
+        let opening = json!({"path": "src/main.rs", "line": 3, "column": 4}).to_string();
+        let said = client.call_tool(&caller, "nvim_open", &opening).await.agent;
+        let main = dir.join("src/main.rs");
+        assert_eq!(
+            tool_answer(&said, "nvim_open"),
+            json!({
+                "terminal": own.id,
+                "path": main,
+                "line": 3,
+                "column": 4,
+                "split": false,
+            })
+        );
+        let scripts = nvim.scripts();
+        assert_eq!(scripts.len(), 1);
+        assert!(scripts[0].0.starts_with("-- nvim_open"), "{}", scripts[0].0);
+        assert!(!scripts[0].0.contains("main.rs"));
+        assert_eq!(
+            scripts[0].1,
+            vec![
+                Value::str(main.display().to_string()),
+                Value::Int(3),
+                Value::Int(4),
+            ]
+        );
+
+        let said = client.call_tool(&caller, "nvim_state", "{}").await.agent;
+        assert_eq!(
+            tool_answer(&said, "nvim_state"),
+            json!({
+                "terminal": own.id,
+                "path": "/src/app/main.rs",
+                "filetype": "rust",
+                "modified": true,
+                "mode": "Visual",
+                "cursor": {"line": 3, "column": 5},
+                "selection": {
+                    "kind": "characters",
+                    "start": {"line": 2, "column": 1},
+                    "end": {"line": 3, "column": 5},
+                    "text": ["fn main() {", "    x"],
+                },
+            })
+        );
+        for nvim in &other_nvims {
+            assert!(nvim.scripts().is_empty());
+        }
+
+        // A file that isn't there is refused before Neovim is asked.
+        let missing = json!({"path": "src/gone.rs"}).to_string();
+        let said = client.call_tool(&caller, "nvim_open", &missing).await.agent;
+        assert!(
+            said.contains("nvim_open failed: There's no file at"),
+            "{said}"
+        );
+        assert_eq!(nvim.scripts().len(), 2);
+
+        // A terminal that isn't this Session's is refused by id, Neovim or not.
+        for id in [&theirs.id, &stray.id] {
+            let named = json!({"terminal": id}).to_string();
+            let said = client.call_tool(&caller, "nvim_state", &named).await.agent;
+            assert!(
+                said.contains(&format!(
+                    "nvim_state failed: The terminal {id} isn't one of this thread's Session's"
+                )),
+                "{said}"
+            );
+        }
+        for nvim in &other_nvims {
+            assert!(nvim.scripts().is_empty());
+        }
+
+        // Two of its own terminals with a Neovim: it's told to choose, and then the one named.
+        let second = client.terminal(&dir, Some(&caller)).await;
+        let second_nvim = FakeNvim::listen(&world.nvim_socket(&second.id));
+        let said = client.call_tool(&caller, "nvim_state", "{}").await.agent;
+        assert!(
+            said.contains("nvim_state failed: A Neovim listens in each of the terminals")
+                && said.contains(&own.id)
+                && said.contains(&second.id)
+                && !said.contains(&theirs.id),
+            "{said}"
+        );
+        let named = json!({"path": main, "terminal": second.id}).to_string();
+        let said = client.call_tool(&caller, "nvim_open", &named).await.agent;
+        assert_eq!(
+            tool_answer(&said, "nvim_open")["terminal"],
+            json!(second.id)
+        );
+        assert_eq!(second_nvim.scripts().len(), 1);
+        let named = json!({"terminal": stray.id, "path": main}).to_string();
+        let said = client.call_tool(&caller, "nvim_open", &named).await.agent;
+        assert!(said.contains("nvim_open failed: The terminal"), "{said}");
+
+        // A thread in no Session reaches no Neovim, though its directory's terminals have some.
+        let loose = client.thread_in(&world, &dir).await.thread_id;
+        for (tool, arguments) in [
+            ("nvim_state", "{}".to_owned()),
+            ("nvim_open", json!({"path": main}).to_string()),
+        ] {
+            let said = client.call_tool(&loose, tool, &arguments).await.agent;
+            assert!(
+                said.contains(&format!("{tool} failed: This thread is in no Session")),
+                "{said}"
+            );
+        }
+
+        // Left out of host_tools, a Neovim tool isn't offered.
+        let config = world.dir.path().join("config.toml");
+        let text = std::fs::read_to_string(&config).expect("config");
+        std::fs::write(&config, format!("host_tools = [\"nvim_state\"]\n{text}")).expect("config");
+        let limited = client.thread_in(&world, &dir).await.thread_id;
+        client
+            .connection
+            .send(add(&dir, &[&limited]))
+            .await
+            .expect("sessions/add");
+        let named = json!({"terminal": own.id}).to_string();
+        let said = client.call_tool(&limited, "nvim_state", &named).await.agent;
+        assert_eq!(tool_answer(&said, "nvim_state")["mode"], json!("Visual"));
+        let opening = json!({"path": main, "terminal": own.id}).to_string();
+        let said = client
+            .call_tool(&limited, "nvim_open", &opening)
+            .await
+            .agent;
+        assert!(
+            said.starts_with("nvim_open couldn't be called")
+                && said.contains("unknown tool: nvim_open"),
+            "{said}"
+        );
+        assert_eq!(nvim.scripts().len(), 3);
+
+        // Its socket goes when its terminal does.
+        client
+            .connection
+            .send(weave_host_protocol::terminals::CloseTerminalRequest { id: own.id.clone() })
+            .await
+            .expect("terminals/close");
+        let deadline = tokio::time::Instant::now() + WAIT;
+        while world.nvim_socket(&own.id).exists() {
+            assert!(tokio::time::Instant::now() < deadline, "the socket stayed");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(world.nvim_socket(&second.id).exists());
     }
 
     #[tokio::test]

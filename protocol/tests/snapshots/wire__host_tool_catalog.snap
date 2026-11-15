@@ -277,5 +277,107 @@ expression: round_trip(&host_catalog())
       ],
       "additionalProperties": false
     }
+  },
+  {
+    "name": "list_terminals",
+    "title": "List this Session's terminals",
+    "description": "List the terminals of the Session this thread is in: the shells the person keeps beside this thread in their weave app, oldest first. Each has its id, the person's label for it, the title its program set, the directory its shell is in (pwd), the process in its foreground, and, where the shell reports it, whether a command is running or how the last one ended. Use it to find a terminal for read_terminal and write_terminal. A thread in no Session has no terminals here, and terminals elsewhere in its directory aren't listed. Answers with the Host's terminals/list result for the Session as JSON.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "read_terminal",
+    "title": "Read a terminal",
+    "description": "Read what a terminal of this thread's Session shows, as plain text with trailing blank space trimmed: its screen, or with history the scrollback above it too. Use it to see a command's output, a server's log, or a program waiting for an answer, and after write_terminal to see what the text did. Answers with the text.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The terminal's id, as list_terminals gives it."
+        },
+        "history": {
+          "type": "boolean",
+          "description": "Optional: the scrollback above the screen too, for output that has scrolled off it. The screen alone when absent."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "write_terminal",
+    "title": "Type into a terminal",
+    "description": "Type text into a terminal of this thread's Session, as if the person typed it, into whatever runs there: the shell, or the program in its foreground. Enter isn't added for you: end the text with a carriage return, \\r, to press Enter and run a command. A newline, \\n, is Ctrl-J, which shells usually take as Enter but other programs may not. Control characters are keys: \\u0003 is Ctrl-C. What is typed isn't checked against this thread's permission policy: the terminal is the person's own shell, so type only what the work calls for. This answers once the text is sent, not when a command finishes: use read_terminal to see what it did.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The terminal's id, as list_terminals gives it."
+        },
+        "text": {
+          "type": "string",
+          "description": "What to type, with \\r for Enter."
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "nvim_open",
+    "title": "Show a file in Neovim",
+    "description": "Show the person a file, and a place in it, in the Neovim they run in a terminal of this Session, beside this thread: to point them at the code you're talking about, the line an error names, or a change you've made. The file opens in Neovim's current window, or in the window that shows it already; the cursor goes to the line and column, and the person can go back with CTRL-O. When the current buffer has changes that Neovim can't hide ('hidden' off), the file opens in a split instead, so nothing is lost. It only moves the view: it doesn't edit, save or close anything. Answers with the file as Neovim names it, where the cursor ended up (short of a line or column past the end), and whether it split. It fails, and does nothing, while the person is in a mode other than Normal (typing, selecting, or in a command): try again later, or tell them where to look. It fails too when no Neovim listens in the Session's terminals, saying how the person sets that up, and when several do and terminal doesn't say which.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The file: absolute, or relative to this thread's directory. It must exist."
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional: the line to show, from 1. The cursor stays where it was in the file when absent."
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional, with line: the column, in characters from 1. The line's first when absent."
+        },
+        "terminal": {
+          "type": "string",
+          "description": "Optional: the terminal whose Neovim to use, by the id list_terminals gives. When absent, the one Neovim listening in this Session's terminals."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "nvim_state",
+    "title": "See what's in Neovim",
+    "description": "See what the person is looking at in the Neovim they run in a terminal of this Session: the current buffer's file, its filetype and whether it has unsaved changes, the cursor's line and column, the mode, and, while they're selecting in Visual mode, the selection: whether it's characters, whole lines or a block, its first and last line and column, and its text, a string per line. Use it when the person refers to \"this\", \"here\" or \"what I've selected\". Outside Visual mode there's no selection, whatever they selected before. Lines and columns count from 1, columns in characters. It reads only. It fails when no Neovim listens in the Session's terminals, saying how the person sets that up, when several do and terminal doesn't say which, and while Neovim waits for the person to finish a command or answer a prompt.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "terminal": {
+          "type": "string",
+          "description": "Optional: the terminal whose Neovim to use, by the id list_terminals gives. When absent, the one Neovim listening in this Session's terminals."
+        }
+      },
+      "additionalProperties": false
+    }
   }
 ]

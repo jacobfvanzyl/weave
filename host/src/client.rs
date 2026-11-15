@@ -5,6 +5,7 @@
 //! thread (`agents/get`, sign-in, listing, deleting) use an open thread's agent or a spare
 //! one, which the next thread for that agent and directory takes.
 
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::path::Path;
@@ -212,6 +213,7 @@ use crate::journal::Usage;
 use crate::journal::now_ms;
 use crate::mcp::Servers;
 use crate::modes;
+use crate::nvim;
 use crate::queue::Queue;
 use crate::repos;
 use crate::service_tools;
@@ -1567,31 +1569,15 @@ impl Connection {
     /// The Host's terminals, found, for a client that said hello.
     async fn terminals(&self) -> Result<Arc<Terminals>, Error> {
         self.hello_info()?;
-        let terminals = self.shared.terminals.clone().ok_or_else(|| {
-            errors::terminal_unavailable(
-                "this Host has no terminals: weave-holder isn't installed beside it",
-            )
-        })?;
-        terminals.ready().await;
-        Ok(terminals)
-    }
-
-    /// The scope a directory's terminals belong to: the deepest worktree it's in, or the
-    /// directory itself outside a repository, with symlinks resolved.
-    async fn scope_of(&self, directory: &Path) -> Result<PathBuf, Error> {
-        Ok(self.shared.session_scope(directory).await?.0)
+        host_terminals(&self.shared).await
     }
 
     async fn list_terminals(
         &self,
         request: ListTerminalsRequest,
     ) -> Result<TerminalsResponse, Error> {
-        let terminals = self.terminals().await?;
-        let scope = self.scope_of(&request.directory).await?;
-        Ok(TerminalsResponse {
-            terminals: terminals.list(&scope),
-            scope,
-        })
+        self.hello_info()?;
+        list_terminals(&self.shared, request).await
     }
 
     async fn watch_terminals(
@@ -1599,7 +1585,7 @@ impl Connection {
         request: WatchTerminalsRequest,
     ) -> Result<(Arc<Terminals>, PathBuf), Error> {
         let terminals = self.terminals().await?;
-        let scope = self.scope_of(&request.directory).await?;
+        let (scope, _) = self.shared.session_scope(&request.directory).await?;
         Ok((terminals, scope))
     }
 
@@ -1612,17 +1598,21 @@ impl Connection {
         let terminals = self.terminals().await?;
         let (scope, _) = self.shared.session_scope(&request.directory).await?;
         let opened_from = request.opened_from.clone();
+        let id = terminals::new_id();
         let start = terminals::Start {
-            id: terminals::new_id(),
+            env: terminal_environment(&self.shared, &id),
+            id,
             directory: request.directory,
             scope: scope.clone(),
             label: request.label,
             opened_from: request.opened_from,
             command: request.command.filter(|command| !command.is_empty()),
             size: request.size.unwrap_or(terminals::DEFAULT_SIZE),
-            env: self.shared.config.environment.vars.clone(),
         };
         let terminal = terminals.start(start).await?;
+        if let Some(dir) = &self.shared.config.nvim_sockets {
+            nvim::sweep(dir, &terminals.ids());
+        }
         // One opened from a Session's thread is that Session's (WVE-203).
         if let Some(by) = &opened_from {
             self.shared
@@ -1650,23 +1640,16 @@ impl Connection {
     }
 
     async fn write_terminal(&self, request: WriteTerminalRequest) -> Result<Empty, Error> {
-        self.terminals()
-            .await?
-            .write(&request.id, &request.text)
-            .await?;
-        Ok(Empty {})
+        self.hello_info()?;
+        write_terminal(&self.shared, request).await
     }
 
     async fn format_terminal(
         &self,
         request: FormatTerminalRequest,
     ) -> Result<FormatTerminalResponse, Error> {
-        let content = self
-            .terminals()
-            .await?
-            .format(&request.id, request.format, request.history, request.trim)
-            .await?;
-        Ok(FormatTerminalResponse { content })
+        self.hello_info()?;
+        format_terminal(&self.shared, request).await
     }
 
     /// A ticket for the terminal's stream, to the device this client proved, if any.
@@ -2495,6 +2478,79 @@ pub(crate) fn cancel_turn(
         thread_id: request.thread_id,
     })?;
     Ok(Empty {})
+}
+
+/// The environment of the terminal `id`'s program: the agents' (WVE-141), with the terminal's
+/// id in `WEAVE_TERMINAL` and, where the Host has a place for it, the socket its Neovim may
+/// listen on in `WEAVE_NVIM` (WVE-233). Made here, where the id is, so every owner's terminals
+/// have them.
+fn terminal_environment(shared: &Shared, id: &str) -> BTreeMap<String, String> {
+    let mut env = shared.config.environment.vars.clone();
+    env.insert(terminals::TERMINAL_VARIABLE.to_owned(), id.to_owned());
+    if let Some(dir) = &shared.config.nvim_sockets {
+        match (nvim::prepare(dir), nvim::socket(dir, id)) {
+            (Ok(()), Some(socket)) => {
+                env.insert(nvim::VARIABLE.to_owned(), socket.display().to_string());
+            }
+            (Ok(()), None) => {
+                tracing::warn!(dir = %dir.display(), "the path of a Neovim socket there would be too long for a Unix socket");
+            }
+            (Err(error), _) => {
+                tracing::warn!(dir = %dir.display(), %error, "couldn't make the directory for terminals' Neovim sockets");
+            }
+        }
+    }
+    env
+}
+
+/// The Host's terminals, found, for a client or a Host tool.
+pub(crate) async fn host_terminals(shared: &Shared) -> Result<Arc<Terminals>, Error> {
+    let terminals = shared.terminals.clone().ok_or_else(|| {
+        errors::terminal_unavailable(
+            "this Host has no terminals: weave-holder isn't installed beside it",
+        )
+    })?;
+    terminals.ready().await;
+    Ok(terminals)
+}
+
+/// `terminals/list`, for a client or a Host tool: the terminals of the scope the directory is
+/// in, the deepest worktree it's in or the directory itself outside a repository, with
+/// symlinks resolved.
+pub(crate) async fn list_terminals(
+    shared: &Shared,
+    request: ListTerminalsRequest,
+) -> Result<TerminalsResponse, Error> {
+    let terminals = host_terminals(shared).await?;
+    let (scope, _) = shared.session_scope(&request.directory).await?;
+    Ok(TerminalsResponse {
+        terminals: terminals.list(&scope),
+        scope,
+    })
+}
+
+/// `terminals/write`, for a client or a Host tool: the text as if typed, as it is.
+pub(crate) async fn write_terminal(
+    shared: &Shared,
+    request: WriteTerminalRequest,
+) -> Result<Empty, Error> {
+    host_terminals(shared)
+        .await?
+        .write(&request.id, &request.text)
+        .await?;
+    Ok(Empty {})
+}
+
+/// `terminals/format`, for a client or a Host tool.
+pub(crate) async fn format_terminal(
+    shared: &Shared,
+    request: FormatTerminalRequest,
+) -> Result<FormatTerminalResponse, Error> {
+    let content = host_terminals(shared)
+        .await?
+        .format(&request.id, request.format, request.history, request.trim)
+        .await?;
+    Ok(FormatTerminalResponse { content })
 }
 
 /// The open thread `thread_id` is, or belongs to as a subagent.

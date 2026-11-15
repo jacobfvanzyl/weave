@@ -174,6 +174,7 @@ impl World {
             mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
             former_serve: None,
             terminals: None,
+            nvim_sockets: None,
             home: None,
             retired: Vec::new(),
             dispatcher: None,
