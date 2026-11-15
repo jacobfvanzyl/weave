@@ -3,7 +3,7 @@ import { type ShownItem, transcriptItems } from './transcript-runs';
 import { shownItemKey, TurnFoldView } from './turn-fold-view';
 import { WorkRunView } from './work-run-view';
 import { softKeyboard } from '@/app/use-soft-keyboard';
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { PromptImage, QueuedPrompt } from '@/app/app-controller';
 import type {
   CreateElicitationResponse,
@@ -29,6 +29,7 @@ import type {
   TranscriptEntry,
   TranscriptMessage,
 } from './acp-transcript';
+import { isPrompt } from './acp-transcript';
 import { ContentBlocksView } from './content-block-view';
 import { ElicitationView } from './elicitation-view';
 import { requestEndText, sentenceStart } from './pending-request';
@@ -78,6 +79,7 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
+  useMessageScroller,
 } from '@/components/ui/message-scroller';
 import { Context, ContextContent, ContextTrigger } from '@/components/ai-elements/context';
 import { cn } from '@/lib/utils';
@@ -769,6 +771,27 @@ function Composer({
 const isScrollAnchor = (entry: TranscriptEntry) =>
   entry.kind === 'message' && entry.role === 'user' && !entry.replayed;
 
+/**
+ * As a turn ends it folds to its prompt, a "Worked for" row and its answer (WVE-218), and its
+ * prompt comes back to the top of the view, as it showed when it was sent, rather than leaving
+ * the answer where it was and everything above it to fall by what folded (WVE-235). Only while
+ * the turn is on screen: a reader up in older history stays where they are. A turn that failed
+ * doesn't fold, so nothing moves for it.
+ */
+function TurnEndHold({ model, running }: { model: AcpTranscript; running: boolean }) {
+  const { anchorMessage } = useMessageScroller();
+  const wasRunning = useRef(running);
+  useLayoutEffect(() => {
+    const ended = wasRunning.current && !running;
+    wasRunning.current = running;
+    if (!ended) return;
+    const prompt = [...model.entries].reverse().find(isPrompt);
+    if (!prompt || model.turnEnds[prompt.id]?.end === 'failed') return;
+    anchorMessage(prompt.id);
+  }, [anchorMessage, model, running]);
+  return null;
+}
+
 export function ChatPane({
   model,
   actions,
@@ -846,7 +869,7 @@ export function ChatPane({
               <MessageScrollerContent className="mx-auto w-full max-w-4xl gap-4 px-3 py-5">
                 {items.map((item) => item.kind === 'fold'
                   ? (
-                    <MessageScrollerItem key={item.id}>
+                    <MessageScrollerItem key={item.id} messageId={item.id}>
                       <TurnFoldView
                         fold={item}
                         open={openFolds?.has(item.id) ?? false}
@@ -856,7 +879,7 @@ export function ChatPane({
                     </MessageScrollerItem>
                   )
                   : (
-                    <MessageScrollerItem key={shownItemKey(item)} scrollAnchor={item.kind === 'entry' && isScrollAnchor(item.entry)}>
+                    <MessageScrollerItem key={shownItemKey(item)} messageId={shownItemKey(item)} scrollAnchor={item.kind === 'entry' && isScrollAnchor(item.entry)}>
                       {renderItem(item)}
                     </MessageScrollerItem>
                   ))}
@@ -870,6 +893,7 @@ export function ChatPane({
               </MessageScrollerContent>
             </MessageScrollerViewport>
             <MessageScrollerButton />
+            <TurnEndHold model={model} running={running} />
           </MessageScroller>
         </MessageScrollerProvider>}
         {!readOnly && <Composer
