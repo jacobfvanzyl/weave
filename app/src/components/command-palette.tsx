@@ -55,14 +55,14 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         <ul id='command-palette-list' role='listbox' aria-label='Commands' className='grid max-h-[50dvh] gap-0.5 overflow-y-auto'>
           {matching.map((command, index) => (
             <li key={command.id} id={`command-${command.id}`} role='option' aria-selected={index === picked}
-              className={cn('flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-xs', index === picked && 'bg-muted')}
+              className={cn('flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-meta', index === picked && 'bg-muted')}
               onPointerMove={() => setPicked(index)} onClick={() => run(command.id)}>
-              <span className='w-14 shrink-0 text-[0.6875rem] text-muted-foreground'>{command.group}</span>
+              <span className='w-14 shrink-0 text-meta text-muted-foreground'>{command.group}</span>
               <span className='min-w-0 flex-1 truncate'>{command.title}</span>
-              {command.keys && <kbd className='shrink-0 font-sans text-[0.6875rem] text-muted-foreground'>{keysLabel(command.keys)}</kbd>}
+              {command.keys && <kbd className='shrink-0 font-sans text-meta text-muted-foreground'>{keysLabel(command.keys)}</kbd>}
             </li>
           ))}
-          {matching.length === 0 && <li className='px-2 py-3 text-center text-xs text-muted-foreground'>No command matches.</li>}
+          {matching.length === 0 && <li className='px-2 py-3 text-center text-meta text-muted-foreground'>No command matches.</li>}
         </ul>
       </DialogContent>
     </Dialog>

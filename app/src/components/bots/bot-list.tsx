@@ -46,7 +46,7 @@ function BotRow({ bot, unread, selected, onOpen }: { bot: BotSummary; unread: Re
         </BotAvatar>
         <span className='flex min-w-0 flex-1 flex-col gap-0.5'>
           <span className={cn('truncate text-sidebar-foreground', state === 'unread' || state === 'needsYou' ? 'font-semibold' : 'font-medium')}>{bot.name}</span>
-          <span className={cn('truncate text-[0.6875rem]', state === 'needsYou' ? 'text-warning' : 'text-muted-foreground')}>{detail}</span>
+          <span className={cn('truncate text-meta', state === 'needsYou' ? 'text-warning' : 'text-muted-foreground')}>{detail}</span>
         </span>
       </SidebarMenuButton>
     </SidebarMenuItem>
@@ -76,7 +76,7 @@ export function BotList({ bots, unread, canAdd, canStart, query, selected, onOpe
   return (
     <SidebarGroup role='group' aria-label='Bots' data-slot='bot-list' className='py-1.5'>
       {/* A section's title, as Projects' is (WVE-223). */}
-      <SidebarGroupLabel className='h-8 px-2 text-[0.6875rem] font-medium tracking-wide text-muted-foreground'>
+      <SidebarGroupLabel className='h-8 px-2 text-meta font-medium tracking-wide text-muted-foreground'>
         <span className='min-w-0 truncate'>Bots</span>
       </SidebarGroupLabel>
       {canAdd && (
@@ -88,7 +88,7 @@ export function BotList({ bots, unread, canAdd, canStart, query, selected, onOpe
         {shown.map((bot) => <BotRow key={bot.id} bot={bot} unread={unread} selected={bot.id === selected} onOpen={() => onOpen(bot.id)} />)}
       </SidebarMenu>
       {bots.length === 0 && (
-        <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>
+        <p className='px-2 pb-1 text-meta text-muted-foreground'>
           {canAdd ? 'No Bots yet. A Bot is an assistant you come back to by name, with a home on one of your Hosts.' : 'No Bots yet.'}
         </p>
       )}

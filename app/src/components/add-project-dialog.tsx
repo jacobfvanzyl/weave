@@ -173,11 +173,11 @@ export function AddProjectDialog({ controller, target, onClose, onAdded }: {
                     value={directory} onChange={(event) => setDirectory(event.target.value)} />
                 )}
             {located?.kind === 'git' && located.path !== cwd && (
-              <p className='text-[0.6875rem] text-muted-foreground'>In the repository at {located.path}, which is the Project.</p>
+              <p className='text-meta text-muted-foreground'>In the repository at {located.path}, which is the Project.</p>
             )}
           </div>
           {existing && (
-            <p role='status' className='text-xs text-muted-foreground'>{existing.name} has this {located?.kind === 'git' ? 'repository' : 'directory'} on {hostName} already.</p>
+            <p role='status' className='text-meta text-muted-foreground'>{existing.name} has this {located?.kind === 'git' ? 'repository' : 'directory'} on {hostName} already.</p>
           )}
           {clones.length > 0 && (
             <div className='grid gap-1.5'>
@@ -186,7 +186,7 @@ export function AddProjectDialog({ controller, target, onClose, onAdded }: {
                 {clones.map((project) => <option key={project.id} value={project.id}>Add this clone to {project.name}</option>)}
                 <option value={OWN}>A Project of its own</option>
               </NativeSelect>
-              {joined && <p className='text-[0.6875rem] text-muted-foreground'>{joined.name} has this repository on {hostsOf(joined)}.</p>}
+              {joined && <p className='text-meta text-muted-foreground'>{joined.name} has this repository on {hostsOf(joined)}.</p>}
             </div>
           )}
           {!joined && !existing && (

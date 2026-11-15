@@ -68,12 +68,12 @@ function EmbeddedResourceView({ block }: { block: Extract<ContentBlock, { type: 
   if ('text' in resource) {
     return (
       <div className="overflow-hidden rounded-md border bg-card">
-        <div className="flex items-center gap-2 border-b px-2 py-1 text-[0.625rem] text-muted-foreground">
+        <div className="flex items-center gap-2 border-b px-2 py-1 text-meta text-muted-foreground">
           <HugeiconsIcon icon={AiFile01Icon} strokeWidth={1.75} className="size-3" />
           <span className="truncate">{fileName(resource.uri)}</span>
           {resource.mimeType && <span className="ml-auto">{resource.mimeType}</span>}
         </div>
-        <pre className="overflow-x-auto p-2 text-xs/relaxed whitespace-pre-wrap">
+        <pre className="overflow-x-auto p-2 text-body whitespace-pre-wrap">
           {resource.text}
         </pre>
       </div>

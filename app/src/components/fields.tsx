@@ -10,7 +10,7 @@ export function NativeSelect({ className, ...props }: React.ComponentProps<'sele
   return (
     <select
       className={cn(
-        'h-7 w-full min-w-0 rounded-md border border-input bg-input-background px-2 text-base outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 md:text-xs/relaxed',
+        'h-7 w-full min-w-0 rounded-md border border-input bg-input-background px-2 text-body outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30',
         className,
       )}
       {...props}
@@ -33,7 +33,7 @@ export function PickerField({ id, icon, iconClassName, title, onOpen, children }
       id={id}
       type='button'
       title={title}
-      className='flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md border border-input bg-input-background px-2 text-left text-base outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 md:text-xs/relaxed'
+      className='flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md border border-input bg-input-background px-2 text-left text-body outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30'
       onClick={onOpen}
     >
       <HugeiconsIcon icon={icon} strokeWidth={1.75} className={cn('size-3.5 shrink-0', iconClassName ?? 'text-muted-foreground')} aria-hidden />

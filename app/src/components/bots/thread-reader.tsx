@@ -40,7 +40,7 @@ export function ThreadReader({ controller, threadKey, title, description, onClos
             ? <ChatPane key={open.key} model={open.transcript} loading={open.loading} readOnly
                 actions={{ send: noop, cancelTurn: noop, respondToPermission: noop, respondToElicitation: noop, setMode: noop, setConfigOption: noop }} />
             : (
-              <div className='flex flex-1 items-center justify-center text-xs text-muted-foreground'>
+              <div className='flex flex-1 items-center justify-center text-meta text-muted-foreground'>
                 <Spinner className='mr-1.5 size-3' />Opening the thread…
               </div>
             )}

@@ -160,9 +160,9 @@ export const mermaidPlugin: DiagramPlugin = {
 export function MermaidSource({ chart }: MermaidErrorComponentProps) {
   const arriving = useIsCodeFenceIncomplete();
   return (
-    <div className="grid gap-1 p-3 text-xs" data-slot="mermaid-source">
+    <div className="grid gap-1 p-3 text-meta" data-slot="mermaid-source">
       {!arriving && <p className="text-muted-foreground">Mermaid couldn't draw this diagram.</p>}
-      <pre className="overflow-x-auto font-mono whitespace-pre">{chart}</pre>
+      <pre className="overflow-x-auto font-mono text-body whitespace-pre">{chart}</pre>
     </div>
   );
 }

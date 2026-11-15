@@ -73,10 +73,10 @@ function Tile({ name, label, title, activity, unread, state, at, selected, onOpe
         <span className='flex min-w-0 items-center gap-2'>
           <span className='truncate font-medium text-sidebar-foreground'>{name}</span>
           <ActivityIndicator activity={activity} unread={unread} className='size-2 shrink-0' />
-          <span className='ml-auto shrink-0 text-[0.6875rem] text-muted-foreground'>{sinceLabel(at)}</span>
+          <span className='ml-auto shrink-0 text-meta text-muted-foreground'>{sinceLabel(at)}</span>
         </span>
         {label !== undefined && (
-          <span className='flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground'>
+          <span className='flex min-w-0 items-center gap-1.5 text-meta text-muted-foreground'>
             <span className='truncate' title={title}>{label}</span>
             {state && <span className='shrink-0'>· {state}</span>}
           </span>
@@ -161,7 +161,7 @@ function HostHeading({ host, fold, onNewSession }: { host: HostSummary; fold?: G
   return (
     <>
       <GroupHeading name={host.name} icon={LaptopIcon} iconClassName='text-peach' fold={fold} title={host.error}>
-        {status && <span className='shrink-0 text-[0.6875rem] font-normal text-muted-foreground'>· {status}</span>}
+        {status && <span className='shrink-0 text-meta font-normal text-muted-foreground'>· {status}</span>}
       </GroupHeading>
       <SidebarGroupAction aria-label={`New Session on ${host.name}`} title={`New Session on ${host.name}`}
         className='top-3.5 right-2.5' disabled={host.status !== 'connected'} onClick={onNewSession}>
@@ -187,7 +187,7 @@ function DispatcherBanner({ dispatcher, actions, onOpenHosts }: {
       ? `The Dispatcher on ${dispatcher.name} needs another version of the app`
       : `The Dispatcher on ${dispatcher.name} refused this device`;
   return (
-    <div role='alert' data-slot='dispatcher-banner' className='mx-2 mt-2 grid gap-1.5 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-[0.6875rem]'>
+    <div role='alert' data-slot='dispatcher-banner' className='mx-2 mt-2 grid gap-1.5 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-meta'>
       <p className='font-medium text-sidebar-foreground'>{title}</p>
       <p className='text-muted-foreground'>
         {unreachable ? 'Your Hosts are shown as it last listed them, until it can be reached. ' : ''}
@@ -240,7 +240,7 @@ function ViewToggle({ view, onChange }: { view: SidebarViewName; onChange(view: 
       {VIEWS.map(({ name, label }) => (
         <button key={name} type='button' role='tab' aria-selected={view === name}
           className={cn(
-            'min-w-0 flex-1 cursor-default truncate rounded-full border border-transparent px-3 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50',
+            'min-w-0 flex-1 cursor-default truncate rounded-full border border-transparent px-3 text-meta text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50',
             view === name && 'border-foreground/10 bg-muted text-foreground',
           )}
           onClick={() => onChange(name)}>
@@ -375,7 +375,7 @@ export function SessionList({ controller, sessions, selected, selectedBot, front
 
       <SidebarContent {...pull.handlers}>
         {pull.state !== 'idle' && (
-          <p role='status' className='py-2 text-center text-[0.6875rem] text-muted-foreground'>
+          <p role='status' className='py-2 text-center text-meta text-muted-foreground'>
             {pull.state === 'pulled' ? 'Release to refresh' : 'Refreshing…'}
           </p>
         )}
@@ -383,7 +383,7 @@ export function SessionList({ controller, sessions, selected, selectedBot, front
           <DispatcherBanner dispatcher={dispatcher} actions={actions} onOpenHosts={onOpenHosts} />
         )}
         {model.error && !selected && (
-          <p role='alert' className='px-3 py-2 text-[0.6875rem] text-destructive'>{model.error}</p>
+          <p role='alert' className='px-3 py-2 text-meta text-destructive'>{model.error}</p>
         )}
         {dispatcher && model.hosts.length === 0 && (
           <Empty className='p-6'>
@@ -409,7 +409,7 @@ export function SessionList({ controller, sessions, selected, selectedBot, front
         {model.bots && !query && model.hosts.length > 0 && <SidebarSeparator className='my-1' />}
         {!threadsView && projectsHeading && (
           <div data-slot='projects-heading' className='relative flex h-8 items-center px-4 pt-1'>
-            <h2 className='text-[0.6875rem] font-medium tracking-wide text-muted-foreground'>Projects</h2>
+            <h2 className='text-meta font-medium tracking-wide text-muted-foreground'>Projects</h2>
             {canAddProject && (
               <Button size='icon' variant='ghost' aria-label='Add Project' title='Add Project' className='absolute top-1 right-2.5 size-7 text-muted-foreground'
                 disabled={!canStart} onClick={() => onAddProject?.()}>
@@ -426,13 +426,13 @@ export function SessionList({ controller, sessions, selected, selectedBot, front
                 onNewSession={startable(project) ? () => onNewSession({ projectId: project.id }) : undefined}
                 onAddLocation={onAddProject ? () => onAddProject({ to: project }) : undefined} />
               {folded.open && <SidebarMenu className='gap-0.5'>{under.map((listedSession) => row(listedSession, true))}</SidebarMenu>}
-              {folded.open && under.length === 0 && <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>No Sessions yet</p>}
+              {folded.open && under.length === 0 && <p className='px-2 pb-1 text-meta text-muted-foreground'>No Sessions yet</p>}
             </SidebarGroup>
           );
         })}
         {!threadsView && view.hosts.length > 0 && (
           <div data-slot='hosts-heading' className='flex h-8 items-center px-4 pt-1'>
-            <h2 className='text-[0.6875rem] font-medium tracking-wide text-muted-foreground'>Hosts</h2>
+            <h2 className='text-meta font-medium tracking-wide text-muted-foreground'>Hosts</h2>
           </div>
         )}
         {!threadsView && view.hosts.map(({ host, sessions: under }) => {
@@ -443,7 +443,7 @@ export function SessionList({ controller, sessions, selected, selectedBot, front
               className={cn('py-1.5', hostAway(host) && 'opacity-60')}>
               <HostHeading host={host} fold={folded} onNewSession={() => onNewSession({ hostId: host.id })} />
               {!hostAway(host) && host.status !== 'connected' && host.error && (
-                <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>{host.error}</p>
+                <p className='px-2 pb-1 text-meta text-muted-foreground'>{host.error}</p>
               )}
               {folded?.open && <SidebarMenu className='gap-0.5'>{under.map((session) => row({ session, host }, false))}</SidebarMenu>}
             </SidebarGroup>
@@ -452,7 +452,7 @@ export function SessionList({ controller, sessions, selected, selectedBot, front
         {threadsView && listed && (
           <SidebarGroup role='group' aria-label='Threads' className='py-1.5'>
             <div data-slot='threads-heading' className='flex h-8 items-center px-2 pt-1'>
-              <h2 className='text-[0.6875rem] font-medium tracking-wide text-muted-foreground'>Threads</h2>
+              <h2 className='text-meta font-medium tracking-wide text-muted-foreground'>Threads</h2>
             </div>
             <SidebarMenu className='gap-0.5'>
               {tabs.map((tab) => {

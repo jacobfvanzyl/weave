@@ -49,12 +49,12 @@ export function WorktreePicker({ repository, selected, create, onChoose, onCance
           return (
             <li key={worktree.path}>
               <button type='button' aria-current={current ? 'true' : undefined} title={worktree.path}
-                className='flex min-h-10 w-full min-w-0 items-center gap-2 px-2.5 text-left text-xs hover:bg-muted aria-[current]:bg-muted'
+                className='flex min-h-10 w-full min-w-0 items-center gap-2 px-2.5 text-left text-meta hover:bg-muted aria-[current]:bg-muted'
                 onClick={() => onChoose(worktree.path)}>
                 <HugeiconsIcon icon={GitBranchIcon} strokeWidth={1.75} className='size-4 shrink-0 text-muted-foreground' />
                 <span className='flex min-w-0 flex-1 flex-col'>
                   <span className='truncate font-medium'>{worktree.branch ?? 'detached HEAD'}</span>
-                  <span className='truncate text-[0.6875rem] text-muted-foreground'>
+                  <span className='truncate text-meta text-muted-foreground'>
                     {[
                       directoryName(worktree.path),
                       worktree.changes && 'changed',
@@ -75,7 +75,7 @@ export function WorktreePicker({ repository, selected, create, onChoose, onCance
         <Input aria-label='Start from' autoCapitalize='off' autoCorrect='off'
           placeholder={repository.defaultBranch ? `Start from ${repository.defaultBranch}` : 'Start from the checkout’s commit'}
           value={base} onChange={(event) => setBase(event.target.value)} />
-        <p className='text-[0.6875rem] text-muted-foreground'>
+        <p className='text-meta text-muted-foreground'>
           Beside {directoryName(repository.repo)}, on a new branch, or on the one named if it exists.
         </p>
       </div>

@@ -576,8 +576,8 @@ export function SessionView({ controller, session, members, leading, phone = fal
   // the keys, the menu bar and the palette open it.
   const empty = (
     <div data-slot='empty-tab' className='flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center'>
-      <p className='text-sm font-medium'>Nothing in this tab</p>
-      <p className='max-w-xs text-xs text-muted-foreground'>
+      <p className='text-heading-3'>Nothing in this tab</p>
+      <p className='max-w-xs text-meta text-muted-foreground'>
         A Block shows a thread or a terminal: a new one, or one of this Session's that isn't shown{notShown > 0 ? `, of which there ${notShown === 1 ? 'is 1' : `are ${notShown}`}` : ''}.
       </p>
       <Button aria-label='New Block' onClick={(event) => setAdding({ target: here(), anchor: { element: event.currentTarget } })}>
@@ -609,7 +609,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
   const phoneTabRail = (
     <>
       <div data-slot='tab-picker' className='flex h-9 min-w-0 flex-1 items-stretch rounded-full bg-muted/50 p-1'>
-        <div className={cn('flex min-w-0 flex-1 items-center gap-1.5 rounded-full border border-foreground/10 bg-muted pr-0.5 pl-1 text-xs text-foreground', !tabIcon(tab) && 'pl-3')}>
+        <div className={cn('flex min-w-0 flex-1 items-center gap-1.5 rounded-full border border-foreground/10 bg-muted pr-0.5 pl-1 text-meta text-foreground', !tabIcon(tab) && 'pl-3')}>
           {renaming === tab.id
             ? (
               <>
@@ -673,7 +673,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
             <div key={listed.id} role='tab' tabIndex={0} aria-selected={selected} aria-label={name} data-tab-drop={listed.id} title={name}
               {...tabDrag.tabProps(listed.id)}
               className={cn(
-                'flex max-w-56 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-full border border-transparent pr-0.5 pl-1 text-xs text-muted-foreground outline-none select-none [-webkit-touch-callout:none] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50',
+                'flex max-w-56 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-full border border-transparent pr-0.5 pl-1 text-meta text-muted-foreground outline-none select-none [-webkit-touch-callout:none] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50',
                 !icon && 'pl-3',
                 selected && 'border-foreground/10 bg-muted text-foreground',
                 tabDrag.dragging === listed.id && 'relative z-10 border-foreground/20 bg-muted text-foreground shadow-md',
@@ -723,7 +723,7 @@ export function SessionView({ controller, session, members, leading, phone = fal
         {bot ? <BotHeading bot={bot} unread={model.unread} onOpen={onOpenBot} /> : phone ? phoneTabRail : tabRail}
       </ThreadHeader>
       {bot?.startingThread && (
-        <p role='status' data-slot='bot-starting' className='shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground'>
+        <p role='status' data-slot='bot-starting' className='shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-meta text-muted-foreground'>
           Starting a new thread: the current one saves its notes first, then the new one takes over here.
         </p>
       )}

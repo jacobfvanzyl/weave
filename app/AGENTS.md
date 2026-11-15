@@ -282,6 +282,12 @@ dev Dispatcher takes it off the person's: use a simulator.
 ## Conventions
 
 - Tests run in Vitest with happy-dom and Testing Library; query by role and accessible name.
+- Text is sized by the type scale's roles alone (WVE-235, `src/styles.css`, named for `cn` in
+  `src/lib/type-scale.ts`): `text-body` (14px) for what's read or typed as content, a thread's
+  transcript, its code and every text field; `text-meta` (12px) for chrome and a transcript's rows
+  and secondary text; `text-heading-1` to `text-heading-3` for Markdown's headings and titles.
+  Tailwind's own sizes are cleared, so `text-xs` and a library's like it size nothing; no `leading-*`,
+  and bold is 600. `src/type-scale.test.tsx` fails on anything else.
 - Agent text fetches nothing without consent. Markdown images become links that ask first, and the
   built app runs under a Content Security Policy (`src/content-security-policy.ts`, added to the
   page at build time only) that loads nothing from another address but the Dispatcher's

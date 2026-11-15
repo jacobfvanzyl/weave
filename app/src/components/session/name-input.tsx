@@ -39,7 +39,7 @@ export function NameInput({ label, name, placeholder, maxLength = 80, className,
     <>
       <input aria-label={label} aria-invalid={failed ? true : undefined} title={failed?.message} autoFocus maxLength={maxLength} value={value} placeholder={placeholder}
         className={cn(
-          'h-6 w-36 min-w-0 rounded-sm border border-border bg-background px-1.5 text-xs text-foreground outline-none focus-visible:border-primary',
+          'h-6 w-36 min-w-0 rounded-sm border border-border bg-background px-1.5 text-meta text-foreground outline-none focus-visible:border-primary',
           failed && 'border-destructive focus-visible:border-destructive',
           className,
         )}

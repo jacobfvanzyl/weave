@@ -111,7 +111,7 @@ function MessageEntryView({
   return (
     <Message align={isUser ? 'end' : 'start'}>
       <MessageContent>
-        {note && <span className="text-[0.625rem] text-muted-foreground" data-slot="message-origin">{note}</span>}
+        {note && <span className="text-meta text-muted-foreground" data-slot="message-origin">{note}</span>}
         <BubbleGroup className={cn(isUser && 'w-full')}>
           {message.chunks.map((chunk, index) => {
             if (chunk.kind === 'thought') {
@@ -145,7 +145,7 @@ function MessageEntryView({
           })}
         </BubbleGroup>
         {message.optimistic && (
-          <span className="text-[0.625rem] text-muted-foreground">Sending…</span>
+          <span className="text-meta text-muted-foreground">Sending…</span>
         )}
       </MessageContent>
     </Message>
@@ -456,7 +456,7 @@ function QueuedPrompts({
   return (
     <ol aria-label="Queued messages" className="flex flex-col gap-1 px-3 pt-2" data-slot="queued-prompts">
       {paused && (
-        <li className="flex min-w-0 items-center gap-2 py-0.5 pl-2.5 pr-1 text-xs text-muted-foreground">
+        <li className="flex min-w-0 items-center gap-2 py-0.5 pl-2.5 pr-1 text-meta text-muted-foreground">
           <span className="min-w-0 flex-1">The queue is paused. Sending a message starts it again.</span>
           {onResume && (
             <Button type="button" size="xs" variant="ghost" onClick={onResume}>
@@ -466,7 +466,7 @@ function QueuedPrompts({
         </li>
       )}
       {queued.map((prompt) => (
-        <li key={prompt.id} className="flex min-w-0 items-center gap-2 rounded-md bg-muted/50 py-1 pl-2.5 pr-1 text-xs text-muted-foreground">
+        <li key={prompt.id} className="flex min-w-0 items-center gap-2 rounded-md bg-muted/50 py-1 pl-2.5 pr-1 text-meta text-muted-foreground">
           <span className="shrink-0">{prompt.steering ? 'Steering' : 'Queued'}</span>
           <span className="min-w-0 flex-1 truncate text-foreground">{promptSummary(prompt)}</span>
           {prompt.origin && <span className="shrink-0">from {prompt.origin}</span>}
@@ -499,7 +499,7 @@ function CommandSuggestions({ model, text, onPick }: { model: AcpTranscript; tex
   const matches = commandMatches(model, text);
   if (matches.length === 0) return null;
   return (
-    <ul aria-label="Agent commands" className="mx-3 mt-2 max-h-48 overflow-y-auto rounded-md border bg-popover py-1 text-xs shadow-sm" data-slot="command-suggestions">
+    <ul aria-label="Agent commands" className="mx-3 mt-2 max-h-48 overflow-y-auto rounded-md border bg-popover py-1 text-meta shadow-sm" data-slot="command-suggestions">
       {matches.map((command) => (
         <li key={command.name}>
           <button
@@ -679,7 +679,7 @@ function Composer({
         }}
       />
       <AttachedImages images={images} onRemove={(index) => setImages((current) => current.filter((_, at) => at !== index))} />
-      {imageError && <p role="alert" className="px-3 pt-2 text-xs text-destructive">{imageError}</p>}
+      {imageError && <p role="alert" className="px-3 pt-2 text-meta text-destructive">{imageError}</p>}
       <PromptInput
         aria-label="Message composer"
         className="w-full bg-composer-background"
@@ -696,7 +696,7 @@ function Composer({
                 ref={textareaRef}
                 id="composer-message"
                 aria-label="Message agent"
-                className="field-sizing-fixed min-h-0 resize-none overflow-y-auto px-4 pb-1 pt-3 text-xs/relaxed"
+                className="field-sizing-fixed min-h-0 resize-none overflow-y-auto px-4 pb-1 pt-3 text-body"
                 placeholder={model.availableCommands.length > 0 ? 'Message agent — / for commands' : 'Message agent'}
                 rows={composerRows(text)}
                 variant="frameless"

@@ -68,7 +68,7 @@ export function DirectoryPicker({ list, start, recent = [], onChoose, onCancel }
         <ul aria-label='Recent directories' className='rounded-md border'>
           {recent.slice(0, RECENT).map((path) => (
             <li key={path}>
-              <button type='button' title={path} className='flex min-h-10 w-full min-w-0 items-center gap-2 px-2.5 text-left text-xs hover:bg-muted'
+              <button type='button' title={path} className='flex min-h-10 w-full min-w-0 items-center gap-2 px-2.5 text-left text-meta hover:bg-muted'
                 onClick={() => onChoose(path)}>
                 <HugeiconsIcon icon={Clock01Icon} strokeWidth={1.75} className='size-4 shrink-0 text-muted-foreground' />
                 <span className='shrink-0 font-medium'>{directoryName(path)}</span>
@@ -83,7 +83,7 @@ export function DirectoryPicker({ list, start, recent = [], onChoose, onCancel }
           onClick={() => listing?.parent && void go(listing.parent)}>
           <HugeiconsIcon icon={ArrowUp01Icon} strokeWidth={2} />
         </Button>
-        <p className='min-w-0 flex-1 truncate font-mono text-xs' aria-live='polite' title={listing?.path}>
+        <p className='min-w-0 flex-1 truncate font-mono text-meta' aria-live='polite' title={listing?.path}>
           {listing ? homePath(listing.path, listing.home) : 'Listing…'}
         </p>
         <Button type='button' size='icon' variant='ghost' aria-label='Home' disabled={loading} onClick={() => void go(undefined)}>
@@ -94,7 +94,7 @@ export function DirectoryPicker({ list, start, recent = [], onChoose, onCancel }
       <ul aria-label='Directories' aria-busy={loading} className='max-h-[min(45vh,20rem)] overflow-y-auto rounded-md border'>
         {listing?.directories.map((name) => (
           <li key={name}>
-            <button type='button' className='flex min-h-10 w-full min-w-0 items-center gap-2 px-2.5 text-left text-xs hover:bg-muted'
+            <button type='button' className='flex min-h-10 w-full min-w-0 items-center gap-2 px-2.5 text-left text-meta hover:bg-muted'
               onClick={() => void go(join(listing.path, name))}>
               <HugeiconsIcon icon={Folder01Icon} strokeWidth={1.75} className='size-4 shrink-0 text-muted-foreground' />
               <span className='min-w-0 flex-1 truncate'>{name}</span>
@@ -103,16 +103,16 @@ export function DirectoryPicker({ list, start, recent = [], onChoose, onCancel }
           </li>
         ))}
         {listing && listing.directories.length === 0 && (
-          <li className='px-2.5 py-2.5 text-xs text-muted-foreground'>No directories in here.</li>
+          <li className='px-2.5 py-2.5 text-meta text-muted-foreground'>No directories in here.</li>
         )}
       </ul>
-      {listing?.truncated && <p className='text-[0.6875rem] text-muted-foreground'>The Host listed only part of this directory.</p>}
+      {listing?.truncated && <p className='text-meta text-muted-foreground'>The Host listed only part of this directory.</p>}
       <div className='flex items-center gap-2'>
         <Checkbox id='directory-picker-hidden' checked={hidden} onCheckedChange={(checked) => {
           setHidden(checked);
           void go(listing?.path, checked);
         }} />
-        <Label htmlFor='directory-picker-hidden' className='text-xs font-normal'>Show hidden directories</Label>
+        <Label htmlFor='directory-picker-hidden' className='text-meta font-normal'>Show hidden directories</Label>
       </div>
       <div className='flex justify-end gap-1.5'>
         <Button type='button' variant='ghost' onClick={onCancel}>Back</Button>

@@ -48,7 +48,7 @@ function LinkConfirmation({ isOpen, onClose, onConfirm, url }: LinkSafetyModalPr
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Open a link to {hostOf(url)}?</AlertDialogTitle>
-          <AlertDialogDescription className='break-all font-mono text-xs'>{url}</AlertDialogDescription>
+          <AlertDialogDescription className='break-all font-mono text-meta'>{url}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel autoFocus>Don't open</AlertDialogCancel>
@@ -102,7 +102,22 @@ const ALERTS: Record<AlertKind, { label: string; className: string }> = {
   caution: { label: 'Caution', className: 'border-destructive [&>[data-slot=alert-label]]:text-destructive' },
 };
 
+/**
+ * Headings on the type scale (WVE-235): `#` and `##` a step or two above the text, the rest the
+ * text's size in bold, where Streamdown's own went up to twice and a half the text.
+ */
+const heading = (Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6', role: string, level: number) =>
+  ({ node: _node, className, ...props }: Rendered<typeof Tag>) => (
+    <Tag className={cn('mt-6 mb-2', role, className)} data-streamdown={`heading-${level}`} {...props} />
+  );
+
 const markdownComponents: StreamdownProps['components'] = {
+  h1: heading('h1', 'text-heading-1', 1),
+  h2: heading('h2', 'text-heading-2', 2),
+  h3: heading('h3', 'text-heading-3', 3),
+  h4: heading('h4', 'text-heading-3', 4),
+  h5: heading('h5', 'text-heading-3', 5),
+  h6: heading('h6', 'text-heading-3', 6),
   // A link within the message, such as a footnote's, scrolls to its target; every other link
   // asks before it opens.
   a: ({ node, href, ...props }: Rendered<'a'>) => href?.startsWith('#')
@@ -153,7 +168,7 @@ export const MessageResponse = memo(
     return (
       <Streamdown
         className={cn(
-          'min-w-0 max-w-full text-xs/relaxed [overflow-wrap:break-word] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
+          'min-w-0 max-w-full text-body [overflow-wrap:break-word] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
           className,
         )}
         data-slot="message-response"

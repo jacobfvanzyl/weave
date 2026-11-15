@@ -507,7 +507,7 @@ function Outcome({ entry }: { entry: TranscriptElicitation }) {
     : entry.status === 'answered'
       ? elicitationAnswerText(entry.response, Boolean(urlRequest(entry.request)))
       : requestEndText[entry.status];
-  return <p className="text-[0.6875rem] text-muted-foreground" data-slot="elicitation-outcome">{text}</p>;
+  return <p className="text-meta text-muted-foreground" data-slot="elicitation-outcome">{text}</p>;
 }
 
 const without = <T,>(record: Partial<Record<string, T>>, names: (string | undefined)[]) => {
@@ -594,7 +594,7 @@ function ElicitationForm({
       }}
     >
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium">{form.message}</span>
+        <span className="text-body font-medium">{form.message}</span>
         {waiting && <Badge className="ml-auto" variant="outline">Input requested</Badge>}
       </div>
       <fieldset disabled={!waiting} className="contents">
@@ -701,10 +701,10 @@ function UrlElicitation({
   return (
     <Alert>
       <HugeiconsIcon icon={InformationCircleIcon} strokeWidth={1.75} />
-      <AlertTitle>{url.message}</AlertTitle>
+      <AlertTitle className="text-body">{url.message}</AlertTitle>
       <AlertDescription className="grid gap-1.5">
         <span>{host ? <>It wants to open a page on <strong className="text-foreground">{host}</strong> in your browser:</> : 'It wants to open:'}</span>
-        <code className="break-all text-[0.6875rem]" data-slot="elicitation-url">{url.url}</code>
+        <code className="break-all text-body" data-slot="elicitation-url">{url.url}</code>
         {warnings.length > 0 && (
           <ul className="grid gap-0.5 text-warning">
             {warnings.map((warning) => <li key={warning}>{warning}</li>)}

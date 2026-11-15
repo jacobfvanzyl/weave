@@ -23,7 +23,7 @@ export type ConfirmationTitleProps = ComponentProps<typeof AlertTitle>;
 export function ConfirmationTitle({ className, ...props }: ConfirmationTitleProps) {
   return (
     <AlertTitle
-      className={cn('mr-auto text-[0.6875rem] font-normal text-warning', className)}
+      className={cn('mr-auto text-meta font-normal text-warning', className)}
       data-slot="confirmation-title"
       {...props}
     />

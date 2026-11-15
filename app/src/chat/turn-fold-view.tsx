@@ -32,7 +32,7 @@ export function TurnFoldView({
         aria-expanded={open}
         aria-controls={rowsId}
         onClick={() => onOpenChange(!open)}
-        className="flex min-h-8 w-full min-w-0 items-center gap-1.5 rounded-md text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&_svg]:size-3.5 [&_svg]:shrink-0"
+        className="flex min-h-8 w-full min-w-0 items-center gap-1.5 rounded-md text-left text-meta text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&_svg]:size-3.5 [&_svg]:shrink-0"
       >
         <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className={cn('transition-transform motion-reduce:transition-none', open && 'rotate-90')} />
         <span className="min-w-0 truncate">{foldLabel(fold)}</span>

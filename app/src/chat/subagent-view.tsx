@@ -31,14 +31,14 @@ function Card({ verb, label, subagentId }: { verb: string; label: string; subage
   const canOpen = Boolean(openSubagent && root && findSubagent(root, subagentId));
   return (
     <div
-      className='flex min-h-8 min-w-0 items-center gap-2 rounded-md border bg-work-background px-3 py-1.5 text-xs [&>svg]:size-3.5 [&>svg]:shrink-0 [&>svg]:text-muted-foreground'
+      className='flex min-h-8 min-w-0 items-center gap-2 rounded-md border bg-work-background px-3 py-1.5 text-meta [&>svg]:size-3.5 [&>svg]:shrink-0 [&>svg]:text-muted-foreground'
       data-slot='subagent-row'
     >
       <HugeiconsIcon icon={BotIcon} strokeWidth={1.75} />
       <span className='shrink-0 font-medium'>{verb}</span>
       {canOpen
         ? (
-          <Button type='button' size='sm' variant='link' className='h-auto min-w-0 shrink p-0 text-xs font-medium'
+          <Button type='button' size='sm' variant='link' className='h-auto min-w-0 shrink p-0 text-meta font-medium'
             aria-label={`Show ${label}'s work`} onClick={() => openSubagent?.(subagentId)}>
             <span className='truncate'>{label}</span>
             <HugeiconsIcon data-icon='inline-end' icon={ArrowRight01Icon} strokeWidth={2} />
@@ -52,7 +52,7 @@ function Card({ verb, label, subagentId }: { verb: string; label: string; subage
 /** A message with this thread's parent, as a subagent's own transcript shows it: who, and what it said. */
 function Row({ verb, label, detail }: { verb: string; label: string; detail?: string }) {
   return (
-    <div className='flex min-w-0 flex-col gap-0.5 text-xs' data-slot='subagent-row'>
+    <div className='flex min-w-0 flex-col gap-0.5 text-meta' data-slot='subagent-row'>
       <div className='flex min-w-0 items-center gap-1.5'>
         <span aria-hidden='true' className='text-muted-foreground'>•</span>
         <span className='font-semibold'>{verb}</span>

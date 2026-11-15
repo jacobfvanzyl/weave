@@ -51,7 +51,7 @@ export type BlockType = {
 };
 
 const Notice = ({ children, action }: { children: ReactNode; action?: ReactNode }) => (
-  <div className='flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-xs text-muted-foreground'>
+  <div className='flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-meta text-muted-foreground'>
     <p>{children}</p>
     {action}
   </div>
@@ -166,7 +166,7 @@ function TerminalStatus({ state, notice, retry }: { state: SurfaceState; notice?
   if (!status) return null;
   return (
     <p role='status' data-slot='terminal-status'
-      className='flex shrink-0 items-center gap-1.5 border-b border-border bg-muted/40 px-3 py-1 text-[0.6875rem] text-muted-foreground'>
+      className='flex shrink-0 items-center gap-1.5 border-b border-border bg-muted/40 px-3 py-1 text-meta text-muted-foreground'>
       {status}
       {state.kind === 'failed' && <Button size='xs' variant='outline' className='ml-auto' onClick={retry}>Try again</Button>}
     </p>
@@ -206,7 +206,7 @@ function TerminalKeyBar({ control, press }: { control: boolean; press(key: strin
     };
     repeating.current = setTimeout(again, REPEAT.after);
   };
-  const button = 'h-9 min-w-0 flex-1 rounded-md bg-secondary text-sm text-secondary-foreground select-none touch-manipulation active:bg-accent aria-pressed:bg-primary aria-pressed:text-primary-foreground';
+  const button = 'h-9 min-w-0 flex-1 rounded-md bg-secondary text-body text-secondary-foreground select-none touch-manipulation active:bg-accent aria-pressed:bg-primary aria-pressed:text-primary-foreground';
   return (
     <div role='toolbar' aria-label='Terminal keys' data-slot='terminal-key-bar' className='flex shrink-0 gap-1.5 bg-background p-1.5'
       // The terminal keeps the keyboard: a tap here mustn't move it. WebKit moves it on the mouse
@@ -259,8 +259,8 @@ function PageTerminal({ terminal, attach, focused }: DrawnProps) {
 function TerminalText({ terminal }: { terminal: TerminalSummary }) {
   const state = terminalState(terminal);
   return (
-    <div data-slot='terminal-text' className='flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 p-4 text-center text-xs text-muted-foreground'>
-      <p className='font-mono text-sm text-foreground'>{terminalName(terminal)}</p>
+    <div data-slot='terminal-text' className='flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 p-4 text-center text-meta text-muted-foreground'>
+      <p className='font-mono text-body text-foreground'>{terminalName(terminal)}</p>
       {terminal.pwd && <PathLabel path={terminal.pwd} />}
       <p>{state.kind === 'idle' ? (terminal.process ? `Running ${terminal.process}.` : 'Nothing is running in it.') : `${state.text}.`}</p>
       <p className='max-w-xs'>A browser doesn't draw terminals, so it shows what this one is doing. It runs on, and draws in the app on the Mac, the iPad and the iPhone.</p>
@@ -306,10 +306,10 @@ const unknown: BlockType = {
   title: (block) => block.type,
   Body({ block }) {
     return (
-      <div data-slot='unknown-block' className='min-h-0 flex-1 overflow-auto p-3 text-xs'>
+      <div data-slot='unknown-block' className='min-h-0 flex-1 overflow-auto p-3 text-meta'>
         <p className='text-muted-foreground'>This app has no Block of this type, so here is what it holds.</p>
         <p className='mt-2 font-mono text-foreground'>{block.type}</p>
-        <pre className='mt-1 whitespace-pre-wrap break-words font-mono text-[0.6875rem] text-muted-foreground'>{JSON.stringify(block.props ?? {}, null, 2)}</pre>
+        <pre className='mt-1 whitespace-pre-wrap break-words font-mono text-meta text-muted-foreground'>{JSON.stringify(block.props ?? {}, null, 2)}</pre>
       </div>
     );
   },

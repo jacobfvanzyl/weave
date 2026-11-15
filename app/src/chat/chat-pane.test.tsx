@@ -294,14 +294,12 @@ describe('ChatPane', () => {
     expect(screen.getByRole('textbox', { name: 'Message agent' })
       .closest('[data-slot="field"]')).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Message agent' }))
-      .toHaveClass('text-xs/relaxed');
-    expect(screen.getByRole('textbox', { name: 'Message agent' }))
-      .not.toHaveClass('text-base');
+      .toHaveClass('text-body');
 
     const settings = screen.getByRole('button', {
       name: 'Composer settings: GPT · Fast',
     });
-    expect(settings).toHaveClass('text-xs/relaxed');
+    expect(settings).toHaveClass('text-meta');
     expect(settings).toHaveTextContent('GPT · Fast');
     expect(screen.queryByRole('combobox', { name: 'Model' })).not.toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: 'Fast mode' })).not.toBeInTheDocument();

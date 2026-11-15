@@ -29,7 +29,7 @@ export function GroupHeading({ name, icon, iconClassName, fold, title, children 
   return (
     <SidebarGroupLabel title={title}
       {...(fold ? { render: <button type='button' />, 'aria-expanded': fold.open, onClick: fold.onToggle } : {})}
-      className='h-9 w-full cursor-default gap-2 pr-9 text-left text-sm font-medium text-sidebar-foreground [&>svg]:size-4.5'>
+      className='h-9 w-full cursor-default gap-2 pr-9 text-left text-heading-3 text-sidebar-foreground [&>svg]:size-4.5'>
       <HugeiconsIcon icon={icon} strokeWidth={1.75} className={iconClassName} aria-hidden />
       <span className='min-w-0 truncate'>{name}</span>
       {children}

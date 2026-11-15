@@ -188,7 +188,7 @@ function useBlockDrag(move: BlockActions['move'], allows?: TabProps['allows']) {
         <div data-slot='drop-frame' aria-hidden='true' className='pointer-events-none fixed z-50 rounded-md border-2 border-primary bg-primary/15'
           style={{ left: drag.drop.rect.left, top: drag.drop.rect.top, width: drag.drop.rect.width, height: drag.drop.rect.height }} />
       )}
-      <div aria-hidden='true' className='pointer-events-none fixed z-50 max-w-48 truncate rounded-md border border-border bg-popover px-2 py-1 text-xs shadow-md'
+      <div aria-hidden='true' className='pointer-events-none fixed z-50 max-w-48 truncate rounded-md border border-border bg-popover px-2 py-1 text-meta shadow-md'
         style={{ left: drag.x + 12, top: drag.y + 12 }}>
         {drag.title}
       </div>
@@ -332,7 +332,7 @@ export function BlockRail({ block, among, floating = false, drag, onHandle, ...p
 
   if (among) {
     return (
-      <div data-slot='block-rail' className={cn('flex h-9 shrink-0 items-stretch gap-px pr-1 text-xs', surface(block), handle && 'cursor-grab touch-none')}
+      <div data-slot='block-rail' className={cn('flex h-9 shrink-0 items-stretch gap-px pr-1 text-meta', surface(block), handle && 'cursor-grab touch-none')}
         onPointerDown={(event) => {
           if (renaming || pinned) return;
           if (onHandle) onHandle(event);
@@ -374,7 +374,7 @@ export function BlockRail({ block, among, floating = false, drag, onHandle, ...p
   const pills = (
     <>
       <div data-slot='block-title' title={name}
-        className={cn(PILL, 'relative min-w-0 max-w-80 gap-1.5 pr-3 pl-2 text-xs text-foreground', handle && !hovers && 'cursor-grab touch-none')}
+        className={cn(PILL, 'relative min-w-0 max-w-80 gap-1.5 pr-3 pl-2 text-meta text-foreground', handle && !hovers && 'cursor-grab touch-none')}
         onPointerDown={hovers ? undefined : grab}>
         {typeIcon && <HugeiconsIcon icon={typeIcon} strokeWidth={2} aria-hidden='true' className='size-3.5 shrink-0 text-muted-foreground' />}
         {mark(block)}
@@ -565,7 +565,7 @@ function MinimizedBlocks({ blocks, ...props }: TabProps & { blocks: SessionBlock
         const name = props.title(block);
         return (
           <button key={block.id} type='button' data-slot='minimized-block' aria-label={`Maximize ${name}`} title='Maximize'
-            className='flex h-7 max-w-full items-center gap-1.5 rounded-md border border-border bg-popover pr-1.5 pl-2 text-xs text-foreground shadow-md outline-none hover:bg-accent focus-visible:bg-accent'
+            className='flex h-7 max-w-full items-center gap-1.5 rounded-md border border-border bg-popover pr-1.5 pl-2 text-meta text-foreground shadow-md outline-none hover:bg-accent focus-visible:bg-accent'
             onClick={() => props.actions.minimize(block, false)}>
             {props.mark(block)}
             <span className='truncate'>{name}</span>

@@ -143,7 +143,7 @@ export function HostsDialog({ controller, open, onOpenChange, offer }: {
         {dispatcher && dispatcher.status !== 'revoked' && <DispatcherRow dispatcher={dispatcher} actions={actions} />}
         {dispatcher && dispatcher.status !== 'revoked' && (
           <section aria-labelledby={hostsHeading} className='grid gap-2 border-t border-border pt-3'>
-            <h3 id={hostsHeading} className='text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase'>Hosts</h3>
+            <h3 id={hostsHeading} className='text-meta font-medium tracking-wide text-muted-foreground uppercase'>Hosts</h3>
             {model.hosts.length > 0 && (
               <ul aria-labelledby={hostsHeading} className='grid gap-2'>
                 {model.hosts.map((host) => <HostRow key={host.id} host={host} away={away} actions={actions} />)}

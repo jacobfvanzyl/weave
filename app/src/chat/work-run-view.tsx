@@ -42,7 +42,7 @@ export function WorkRunView({ run, renderEntry }: { run: WorkRun; renderEntry(en
     >
       <CollapsibleTrigger
         disabled={run.entries.length === 0}
-        className="flex min-h-8 w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left text-xs [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-muted-foreground"
+        className="flex min-h-8 w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left text-meta [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-muted-foreground"
       >
         {run.working
           ? <HugeiconsIcon icon={Loading03Icon} strokeWidth={2} className="animate-spin motion-reduce:animate-none" />

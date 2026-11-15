@@ -49,12 +49,12 @@ function FirstPrompt({ controller, bot, leading, onOpenBot }: { controller: AppC
         <BotHeading bot={bot} unread={model.unread} onOpen={onOpenBot} />
       </ThreadHeader>
       {!bot.connected && (
-        <p role='status' className='shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground'>
+        <p role='status' className='shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-meta text-muted-foreground'>
           {bot.hostName} isn't connected to the Dispatcher: what you send waits for it.
         </p>
       )}
       {error && <Alert variant='destructive' className='m-2 w-auto'><AlertDescription>{error}</AlertDescription></Alert>}
-      <p role='status' data-slot='bot-no-thread' className='shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground'>
+      <p role='status' data-slot='bot-no-thread' className='shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-meta text-muted-foreground'>
         {transcript.entries.length === 0
           ? `${bot.name} has no thread yet. Your first message starts one, in its home on ${bot.hostName}.`
           : `Starting ${bot.name}'s first thread…`}

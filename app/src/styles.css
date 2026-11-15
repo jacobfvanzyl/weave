@@ -178,6 +178,33 @@
   color-scheme: dark;
 }
 
+/* The type scale (WVE-235): the only sizes the app's text has, by role. Tailwind's own sizes are
+   cleared, so `text-xs` and the like, ours or a library's such as Streamdown's, size nothing and
+   the text takes its role from what holds it. `src/lib/type-scale.ts` names the roles for `cn`,
+   and `src/type-scale.test.ts` keeps every other size out of the app.
+   - body: what's read or typed as content: a thread's transcript, its Markdown, inline code and
+     code blocks the same size as the prose around them, and every text field.
+   - meta: the app's chrome and what's secondary in a transcript: the list, rails, tabs, menus,
+     buttons, badges, labels, dialogs' text, and a transcript's rows, such as a tool call's.
+   - heading-1 to heading-3: Markdown's headings (`#`, `##`, then the rest), and titles, which
+     are heading-3: a dialog's, a sheet's, a Project's in the list. */
+@theme {
+  --text-*: initial;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.375rem;
+  --text-meta: 0.75rem;
+  --text-meta--line-height: 1.125rem;
+  --text-heading-1: 1.125rem;
+  --text-heading-1--line-height: 1.625rem;
+  --text-heading-1--font-weight: 600;
+  --text-heading-2: 1rem;
+  --text-heading-2--line-height: 1.5rem;
+  --text-heading-2--font-weight: 600;
+  --text-heading-3: 0.875rem;
+  --text-heading-3--line-height: 1.375rem;
+  --text-heading-3--font-weight: 600;
+}
+
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: "JetBrains Mono Nerd Font", ui-monospace, "SFMono-Regular", Menlo, monospace;
@@ -268,8 +295,15 @@
   }
 
   body {
-    @apply fixed inset-0 m-0 bg-background font-sans text-foreground antialiased;
+    @apply fixed inset-0 m-0 bg-background font-sans text-meta text-foreground antialiased;
     overscroll-behavior: none;
+  }
+
+  /* One bold, the headings' (WVE-235): a browser's own is 700. */
+  b,
+  strong,
+  th {
+    font-weight: 600;
   }
 
   ::selection {
@@ -281,6 +315,11 @@
     cursor: pointer;
   }
 }
+
+/* Typeset math is the size of the text around it, not KaTeX's 1.21em (WVE-235). */
+.katex { font-size: 1em; }
+/* Streamdown's code block names its language in the block's header, which is chrome. */
+[data-streamdown="code-block-header"] { @apply text-meta; }
 
 /* Touch-sized rows and actions on the phone. */
 html[data-device-idiom="phone"] [data-sidebar="menu-button"],

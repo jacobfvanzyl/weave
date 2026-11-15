@@ -122,7 +122,7 @@ export function PairingScreen({ controller, offer }: { controller: AppController
   return (
     <main className='flex h-(--app-height) min-h-0 justify-center overflow-y-auto bg-background px-4 pt-[calc(env(safe-area-inset-top)+min(14vh,7rem))] pb-[calc(env(safe-area-inset-bottom)+2rem)]'>
       <div className='grid w-full max-w-sm content-start gap-4'>
-        <h1 className='text-lg font-semibold'>{revoked ? 'Pair this device again' : 'Pair with your Dispatcher'}</h1>
+        <h1 className='text-heading-1'>{revoked ? 'Pair this device again' : 'Pair with your Dispatcher'}</h1>
         {revoked?.error && <p className='text-muted-foreground'>{revoked.error}</p>}
         <PairDispatcherForm controller={controller} offer={offer} />
       </div>

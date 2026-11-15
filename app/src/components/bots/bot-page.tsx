@@ -51,7 +51,7 @@ function Part({ title, action, children }: { title: string; action?: ReactNode; 
   return (
     <section aria-label={title} className='grid gap-2 border-t border-border px-4 py-3'>
       <div className='flex items-center gap-2'>
-        <h3 className='text-xs font-semibold'>{title}</h3>
+        <h3 className='text-meta font-semibold'>{title}</h3>
         <span className='ml-auto'>{action}</span>
       </div>
       {children}
@@ -69,7 +69,7 @@ function Fact({ name, children }: { name: string; children: ReactNode }) {
   );
 }
 
-const row = 'flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted focus-visible:bg-muted outline-none';
+const row = 'flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-meta hover:bg-muted focus-visible:bg-muted outline-none';
 
 /** What it is, and what can be changed of it: its name, mode, daily new thread and how long a request may wait. */
 function Settings({ controller, bot }: { controller: AppController; bot: BotSummary }) {
@@ -129,7 +129,7 @@ function Settings({ controller, bot }: { controller: AppController; bot: BotSumm
         {modes.length > 0
           ? (
             <select id='bot-mode' value={mode} onChange={(event) => setMode(event.target.value)}
-              className='h-7 w-full min-w-0 rounded-md border border-input bg-input-background px-2 text-base outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 md:text-xs/relaxed'>
+              className='h-7 w-full min-w-0 rounded-md border border-input bg-input-background px-2 text-body outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30'>
               <option value=''>The agent's own</option>
               {modes.map(({ id, name: modeName }) => <option key={id} value={id}>{modeName}</option>)}
               {mode && !modes.some(({ id }) => id === mode) && <option value={mode}>{mode}</option>}
@@ -150,22 +150,22 @@ function Settings({ controller, bot }: { controller: AppController; bot: BotSumm
           <Input id='bot-zone' autoComplete='off' autoCapitalize='off' value={zone} onChange={(event) => setZone(event.target.value)} />
         </div>
       </div>
-      <p className='-mt-1.5 text-[0.6875rem] text-muted-foreground'>
+      <p className='-mt-1.5 text-meta text-muted-foreground'>
         {daily ? `Each day at ${daily}, once its thread has had a turn, it saves its notes and a new thread takes over.` : 'No new thread daily: one starts when you ask for it.'}
       </p>
       <div className={field}>
         <Label htmlFor='bot-pause'>Pause its schedules after a request waits (hours)</Label>
         <Input id='bot-pause' type='number' inputMode='decimal' min={0.25} step={0.25} value={hours} onChange={(event) => setHours(event.target.value)} />
-        <p className='text-[0.6875rem] text-muted-foreground'>Now {durationLabel(bot.pauseAfter)}.</p>
+        <p className='text-meta text-muted-foreground'>Now {durationLabel(bot.pauseAfter)}.</p>
       </div>
       <div className={field}>
-        <span className='text-xs font-medium'>Permissions</span>
-        <p className='text-xs text-muted-foreground'>{policyLabel(bot.policy)} Changed with <code>weave bots</code> for now.</p>
+        <span className='text-meta font-medium'>Permissions</span>
+        <p className='text-meta text-muted-foreground'>{policyLabel(bot.policy)} Changed with <code>weave bots</code> for now.</p>
       </div>
       {error && <Alert variant='destructive'><AlertDescription>{error}</AlertDescription></Alert>}
       <div className='flex items-center gap-2'>
         <Button type='submit' size='sm' disabled={!changed || saving}>{saving ? 'Saving…' : 'Save'}</Button>
-        {saved && !changed && <span role='status' className='text-[0.6875rem] text-muted-foreground'>Saved. New threads start this way.</span>}
+        {saved && !changed && <span role='status' className='text-meta text-muted-foreground'>Saved. New threads start this way.</span>}
       </div>
     </form>
   );
@@ -225,11 +225,11 @@ function Schedules({ controller, bot }: { controller: AppController; bot: BotSum
             <div className='flex min-w-0 items-center gap-1.5'>
               <HugeiconsIcon icon={Clock01Icon} strokeWidth={2} className='size-3.5 shrink-0 text-icon-muted' aria-hidden />
               <span className='min-w-0 truncate font-medium'>{schedule.wakeUp ? 'Wake-up' : schedule.name}</span>
-              <span className={cn('ml-auto shrink-0 text-[0.6875rem]', schedule.paused ? 'text-warning' : 'text-muted-foreground')}>{whenLabel(schedule)}</span>
+              <span className={cn('ml-auto shrink-0 text-meta', schedule.paused ? 'text-warning' : 'text-muted-foreground')}>{whenLabel(schedule)}</span>
             </div>
-            {schedule.prompt && <p className='line-clamp-2 text-[0.6875rem] text-muted-foreground'>{schedule.prompt}</p>}
-            {schedule.paused && <p className='text-[0.6875rem] text-muted-foreground'>Paused: {schedule.paused}</p>}
-            {schedule.last?.why && <p className='text-[0.6875rem] text-muted-foreground'>Last time: {schedule.last.why}</p>}
+            {schedule.prompt && <p className='line-clamp-2 text-meta text-muted-foreground'>{schedule.prompt}</p>}
+            {schedule.paused && <p className='text-meta text-muted-foreground'>Paused: {schedule.paused}</p>}
+            {schedule.last?.why && <p className='text-meta text-muted-foreground'>Last time: {schedule.last.why}</p>}
             <div className='flex flex-wrap gap-1'>
               {schedule.paused
                 ? <Button size='xs' variant='outline' disabled={busy === schedule.id} aria-label={`Resume ${schedule.name}`} onClick={() => void act(schedule, 'resume')}>Resume</Button>
@@ -266,7 +266,7 @@ function ThreadRow({ thread, detail, onOpen }: { thread?: ThreadSummary; detail:
     <button type='button' className={row} onClick={onOpen}>
       <HugeiconsIcon icon={BubbleChatIcon} strokeWidth={2} className='size-3.5 shrink-0 text-icon-muted' aria-hidden />
       <span className='min-w-0 flex-1 truncate'>{thread?.title || 'Untitled thread'}</span>
-      <span className='shrink-0 text-[0.6875rem] text-muted-foreground'>{detail}</span>
+      <span className='shrink-0 text-meta text-muted-foreground'>{detail}</span>
     </button>
   );
 }
@@ -328,7 +328,7 @@ export function BotPage({ controller, bot, open, onOpenChange, phone = false, on
                 )
                 : <BotAvatar bot={bot} size='lg' className='border-border bg-muted text-foreground/80' />}
               <div className='grid min-w-0 gap-1'>
-                <SheetTitle className='flex items-center gap-2 text-base'>
+                <SheetTitle className='flex items-center gap-2'>
                   <span className='min-w-0 truncate'>{bot.name}</span>
                   <BotStateDot state={state} />
                 </SheetTitle>
@@ -350,13 +350,13 @@ export function BotPage({ controller, bot, open, onOpenChange, phone = false, on
                 <span className='inline-flex items-center gap-1'>
                   <HugeiconsIcon icon={LaptopIcon} strokeWidth={2} className='size-3.5 text-peach' aria-hidden />
                   {bot.hostName}
-                  <span className={cn('text-[0.6875rem]', bot.connected ? 'text-muted-foreground' : 'text-warning')}>· {bot.connected ? 'connected' : 'away'}</span>
+                  <span className={cn('text-meta', bot.connected ? 'text-muted-foreground' : 'text-warning')}>· {bot.connected ? 'connected' : 'away'}</span>
                 </span>
               </Fact>
               <Fact name='Home'>
                 <span className='inline-flex min-w-0 items-center gap-1' title={bot.home}>
                   <HugeiconsIcon icon={Folder01Icon} strokeWidth={2} className='size-3.5 shrink-0 text-icon-muted' aria-hidden />
-                  <span className='truncate font-mono text-[0.6875rem]'>{bot.home}</span>
+                  <span className='truncate font-mono text-meta'>{bot.home}</span>
                 </span>
               </Fact>
               {bot.createdBy && <Fact name='Made by'>{bot.createdByName ?? 'a Bot that has since been removed'}</Fact>}
@@ -392,13 +392,13 @@ export function BotPage({ controller, bot, open, onOpenChange, phone = false, on
             {startedCount === 0 && <p className='text-muted-foreground'>Threads {bot.name} starts in your Projects show here.</p>}
             {started?.projects.map(({ project, threads }) => (
               <div key={project.id} role='group' aria-label={project.name} className='grid gap-0.5'>
-                <p className='px-2 text-[0.6875rem] font-medium text-muted-foreground'>{project.name}</p>
+                <p className='px-2 text-meta font-medium text-muted-foreground'>{project.name}</p>
                 {threads.map((thread) => <ThreadRow key={thread.key} thread={thread} detail={activity(thread)} onOpen={() => onBringIn(thread)} />)}
               </div>
             ))}
             {started?.hosts.map(({ hostId, host, threads }) => (
               <div key={hostId} role='group' aria-label={host?.name ?? hostId} className='grid gap-0.5'>
-                <p className='px-2 text-[0.6875rem] font-medium text-muted-foreground'>{host?.name ?? 'Another Host'}</p>
+                <p className='px-2 text-meta font-medium text-muted-foreground'>{host?.name ?? 'Another Host'}</p>
                 {threads.map((thread) => <ThreadRow key={thread.key} thread={thread} detail={activity(thread)} onOpen={() => onBringIn(thread)} />)}
               </div>
             ))}

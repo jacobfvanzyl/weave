@@ -20,8 +20,8 @@ export function BotHeading({ bot, unread, onOpen }: { bot: BotSummary; unread: R
         <BotStateDot state={state} className='absolute -top-0.5 -right-0.5 size-2 ring-2 ring-title-bar' />
       </BotAvatar>
       {/* The name keeps its room; what it's doing gives way first. */}
-      <span className='max-w-[65%] shrink-0 truncate text-sm font-semibold'>{bot.name}</span>
-      <span className='min-w-0 truncate text-[0.6875rem] text-muted-foreground'>· {label}</span>
+      <span className='max-w-[65%] shrink-0 truncate text-heading-3'>{bot.name}</span>
+      <span className='min-w-0 truncate text-meta text-muted-foreground'>· {label}</span>
       <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className='size-3.5 shrink-0 text-icon-muted' aria-hidden />
     </button>
   );

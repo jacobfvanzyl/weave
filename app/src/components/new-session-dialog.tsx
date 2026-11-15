@@ -187,7 +187,7 @@ export function NewSessionDialog({ controller, sessions, target, onClose, onCrea
             <ul id='new-session-projects' role='listbox' aria-label='Projects' className='grid max-h-[50dvh] gap-0.5 overflow-y-auto'>
               {rows.map((row, index) => (
                 <li key={row.id} id={`new-session-row-${row.id}`} role='option' aria-selected={index === picked}
-                  className={cn('flex min-h-8 cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-xs', index === picked && 'bg-muted',
+                  className={cn('flex min-h-8 cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-meta', index === picked && 'bg-muted',
                     // After the Projects, apart from them.
                     row.kind !== 'project' && rows[index - 1]?.kind === 'project' && 'mt-1')}
                   onPointerMove={() => setPicked(index)} onClick={() => pick(row)}>
@@ -197,7 +197,7 @@ export function NewSessionDialog({ controller, sessions, target, onClose, onCrea
                     ? (
                       <>
                         <span className='min-w-0 truncate font-medium'>{row.project.name}</span>
-                        <span className={cn('ml-auto min-w-0 shrink-0 truncate text-[0.6875rem] text-muted-foreground')}>
+                        <span className={cn('ml-auto min-w-0 shrink-0 truncate text-meta text-muted-foreground')}>
                           {row.project.locations.some((there) => isConnected(there.hostId)) ? hostNames(row.project) : `${hostNames(row.project) || 'no Host'}, not connected`}
                         </span>
                       </>

@@ -57,7 +57,7 @@ export function ReasoningTrigger({ className, ...props }: ReasoningTriggerProps)
   return (
     <CollapsibleTrigger
       className={cn(
-        'flex items-center gap-2 text-[0.6875rem] text-muted-foreground transition-colors hover:text-foreground motion-reduce:transition-none [&_svg]:size-3.5',
+        'flex items-center gap-2 text-meta text-muted-foreground transition-colors hover:text-foreground motion-reduce:transition-none [&_svg]:size-3.5',
         className,
       )}
       data-streaming={state.isStreaming || undefined}

@@ -80,7 +80,7 @@ export function NewBlockMenu({ open, onOpenChange, anchor, agents, threads, clos
     <DropdownMenuItem key={row.id} onClick={row.run}>
       <HugeiconsIcon icon={row.icon} strokeWidth={2} className='text-icon-muted' aria-hidden />
       <span className='min-w-0 flex-1 truncate'>{row.label}</span>
-      {row.detail && <span className='shrink-0 text-[0.6875rem] text-muted-foreground'>{row.detail}</span>}
+      {row.detail && <span className='shrink-0 text-meta text-muted-foreground'>{row.detail}</span>}
       {row.mark}
     </DropdownMenuItem>
   );

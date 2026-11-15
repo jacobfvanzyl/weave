@@ -52,7 +52,7 @@ function ProgressIndicator({
 function ProgressLabel({ className, ...props }: ProgressPrimitive.Label.Props) {
   return (
     <ProgressPrimitive.Label
-      className={cn("text-xs/relaxed font-medium", className)}
+      className={cn("text-meta font-medium", className)}
       data-slot="progress-label"
       {...props}
     />
@@ -63,7 +63,7 @@ function ProgressValue({ className, ...props }: ProgressPrimitive.Value.Props) {
   return (
     <ProgressPrimitive.Value
       className={cn(
-        "ml-auto text-xs/relaxed text-muted-foreground tabular-nums",
+        "ml-auto text-meta text-muted-foreground tabular-nums",
         className
       )}
       data-slot="progress-value"
@@ -85,7 +85,7 @@ function CircularProgress({
     <ProgressPrimitive.Root
       value={value}
       data-slot="circular-progress"
-      className={cn("relative size-5 shrink-0", className)}
+      className={cn("relative size-5 shrink-0 text-meta", className)}
       {...props}
     >
       <svg aria-hidden="true" className="size-full -rotate-90" viewBox="0 0 24 24">

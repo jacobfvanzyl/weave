@@ -245,7 +245,7 @@ function ConnectionNotice({ host, dispatcher }: { host: HostSummary; dispatcher?
         ? `Reconnecting to ${host.name}…`
         : `${host.name} isn't connected.${host.error ? ` ${host.error}` : ''}`;
   return (
-    <p role='status' data-slot='connection-notice' className='shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground'>
+    <p role='status' data-slot='connection-notice' className='shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-meta text-muted-foreground'>
       {text}
     </p>
   );
@@ -319,9 +319,9 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, chrome = 
           ? (
             <ThreadHeader leading={leading}>
               <div className='min-w-0 flex-1 py-1.5'>
-                <h2 className='truncate text-sm font-semibold'>{summary?.title || 'New thread'}</h2>
+                <h2 className='truncate text-heading-3'>{summary?.title || 'New thread'}</h2>
                 {summary && (
-                  <p className='flex min-w-0 items-center gap-1 text-[0.6875rem] text-muted-foreground'>
+                  <p className='flex min-w-0 items-center gap-1 text-meta text-muted-foreground'>
                     <span className='shrink-0'>{summary.agentName}</span>
                     <span aria-hidden='true'>·</span>
                     <PathLabel path={summary.cwd} />
@@ -407,7 +407,7 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, chrome = 
           {subagent
             ? (
               <>
-                <div data-slot='subagent-bar' className='flex min-h-9 shrink-0 items-center gap-2 border-b bg-muted/40 px-2 text-xs'>
+                <div data-slot='subagent-bar' className='flex min-h-9 shrink-0 items-center gap-2 border-b bg-muted/40 px-2 text-meta'>
                   <Button size='sm' variant='ghost' onClick={() => setWatching(undefined)}>
                     <HugeiconsIcon data-icon='inline-start' icon={ArrowLeft01Icon} strokeWidth={2} />
                     Main

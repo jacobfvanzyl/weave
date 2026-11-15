@@ -56,8 +56,8 @@ export function WaitingBanner({ controller, onOpen }: { controller: AppControlle
             else actions.selectThread(banner.key);
             dismiss();
           }}>
-          <span className='block truncate text-xs font-medium'>{banner.title || 'New thread'} needs you</span>
-          <span className='block truncate text-[0.6875rem] text-muted-foreground'>{banner.waitingOn ?? `${banner.agentName} is waiting`}</span>
+          <span className='block truncate text-meta font-medium'>{banner.title || 'New thread'} needs you</span>
+          <span className='block truncate text-meta text-muted-foreground'>{banner.waitingOn ?? `${banner.agentName} is waiting`}</span>
         </button>
         <Button size='icon' variant='ghost' aria-label='Dismiss' onClick={dismiss}>
           <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
