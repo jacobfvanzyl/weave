@@ -56,7 +56,8 @@ Lives seen: Claude's access token is issued for about 8 hours, and Codex's for a
 
 ## Still to find out
 
-- **How the Dispatcher makes each vendor's program renew when asked.** Neither has a command for it. Claude Code renews through ordinary use near expiry, which homelab's own file shows. Codex did not renew on an ordinary turn with eight days gone and two left, so what makes it renew isn't known.
+- **How the Dispatcher makes Claude Code renew when asked.** It has no command for it, and renews through ordinary use near expiry, which homelab's own file shows.
+- **Codex renews only at the end.** Its source (`codex-rs/login/src/auth/manager.rs`, `main` on 2026-11-21) renews when the access token is within five minutes of expiry, or when the server answers 401, and on a 401 it first reads its sign-in file again in case something newer was written there. So the Dispatcher can't renew Codex early: it runs Codex in those last minutes or once a Host reports its copy refused, and a Host that writes the newer copy to disk is picked up by a Codex already running. The 401 path is from the source and untested. Its `CODEX_ACCESS_TOKEN` variable is not a way in: Codex 0.171.0 refused a ChatGPT access token given there.
 - **What a turn in progress does when its access token dies**, and what the Host tells the person.
 - **Whether several Hosts on one access token at once draws a limit** from either vendor. Neither states one.
 - **Whether the vendors' terms mind.** The person's own subscription, on the person's own machines, in the vendors' unmodified programs, is the reading taken here; neither vendor's terms were read in full.
