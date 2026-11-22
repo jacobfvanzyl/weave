@@ -292,3 +292,9 @@ TUI's diagnostics; agent stderr goes to the Host's log (to `--log-file` with
 through the shared Host, `--trace` has the Host write it in its `traces/` and say where. With
 `smoke`, `RUST_LOG=agent_stderr=debug` shows agent stderr. Traces contain prompts and
 agent output, so keep them out of the repository.
+
+Built with `--features weave-cli/machines` (WVE-238, a spike, off by default), `weave hosts`
+gains `launch --name <name>`, `machines` and `destroy <machine>` (`commands/hosts/machines.rs`):
+a Host on a Fly Machine, from nothing to joined, and gone again. They read the provider's token,
+the app, the image and a Tailscale OAuth client from the environment, which the file's head
+lists; `scripts/host-image/build` builds and pushes the image.

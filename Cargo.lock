@@ -4676,6 +4676,7 @@ dependencies = [
  "jiff",
  "libc",
  "pretty_assertions",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

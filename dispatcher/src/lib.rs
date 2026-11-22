@@ -37,6 +37,8 @@ mod devices;
 mod follows;
 mod joins;
 mod link;
+#[cfg(feature = "machines")]
+pub mod machines;
 pub mod paths;
 mod projects;
 mod scheduler;

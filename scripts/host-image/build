@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Build the image a machine `weave hosts launch` makes boots (WVE-238), from this working tree,
+# and push it to the Fly app's registry.
+#
+#   DOCKER_CONTEXT=<context> scripts/host-image/build <fly-app> [tag]
+#
+# It builds for linux/amd64 on the Docker context named, which must be given: there is no
+# local engine to assume. The working tree, less the app and the trackpad, is the build's
+# context. Pushing needs a `fly` that is signed in, whose token it logs Docker in to Fly's
+# registry with (`fly auth docker` alone left the push refused, "app repository not found"),
+# and the app to exist (`fly apps create <fly-app> --org <org>`). Prints the image's name, which
+# is $WEAVE_HOST_IMAGE for `weave hosts launch`.
+
+set -euo pipefail
+
+app="${1:?usage: scripts/host-image/build <fly-app> [tag]}"
+tag="${2:-$(git rev-parse --short HEAD)}"
+: "${DOCKER_CONTEXT:?name the Docker context to build on}"
+image="registry.fly.io/$app:$tag"
+repo="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$repo"
+
+git ls-files -z -co --exclude-standard -- . ':!app' ':!trackpad' ':!research_notes' ':!reports' \
+  | COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --null -T - -czf - \
+  | docker --context "$DOCKER_CONTEXT" build --platform linux/amd64 \
+      -f scripts/host-image/Dockerfile -t "$image" -
+
+fly auth token | docker --context "$DOCKER_CONTEXT" login registry.fly.io -u x --password-stdin
+docker --context "$DOCKER_CONTEXT" push "$image"
+echo "$image"

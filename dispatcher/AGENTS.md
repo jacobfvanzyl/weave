@@ -246,3 +246,14 @@ answers at its address, a terminal's stream through a fake owner that echoes
 many times a Host's backlog limit (`World::with_websocket`) reaching a device whole. `tests/dispatcher.rs` drives the Dispatcher through
 its socket across Host and Dispatcher restarts. `tests/joins.rs` checks joining: a code once,
 keys both ways, removal, a Host paired before Hosts joined, and one joining over the WebSocket.
+- `machines.rs`, `machines/` (WVE-238, a spike behind the `machines` cargo feature, off by
+  default): computers for Hosts, made in the cloud. `Machines` is a provider of them, which knows
+  nothing of Hosts (`machines/fly.rs`, Fly's Machines API; one app, a volume per machine at
+  `/data`, and only machines whose metadata says weave made them are listed or destroyed).
+  `Joining` is what a launch asks of the Dispatcher, a code and the Hosts that joined, answered
+  by `Dispatcher` in its own process and by `DispatcherConnection` over the API, which is how
+  the CLI launches one: the Dispatcher's own process is unchanged and has no wire methods for
+  this yet. `launch` asks for a code, makes a machine whose image joins with it
+  (`scripts/host-image`), waits for a Host of that name to connect, and destroys a machine whose
+  Host never does. `machines/tailscale.rs` mints the key a machine joins the tailnet with, once
+  and ephemeral, from an OAuth client of the person's. The Dispatcher still runs no agents.
