@@ -218,6 +218,16 @@ _Avoid_: question, dialog, prompt
 The rules a thread answers permission requests by without asking anyone.
 _Avoid_: auto-approve, allowlist
 
+### Credentials
+
+**Credential**:
+Something of the person's that lets an agent or git act as them with an outside service, which the Dispatcher keeps and gives Hosts copies of.
+_Avoid_: secret, token, key (a Host's and a device's keys are their own)
+
+**Sign-in**:
+A credential a vendor's own program made when the person signed in to it, which only the Dispatcher renews; a Host's copy of one can't be renewed.
+_Avoid_: login, session, auth
+
 ### Records
 
 **Journal**:
