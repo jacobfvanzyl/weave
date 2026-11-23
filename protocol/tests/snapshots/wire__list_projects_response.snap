@@ -1,6 +1,6 @@
 ---
 source: protocol/tests/wire.rs
-expression: "round_trip(&ListProjectsResponse\n{\n    projects:\n    vec![odin.clone(), Project\n    {\n        id: \"p-0a1b2c3d4e5f60718293\".to_owned(), name: \"notes\".to_owned(),\n        kind: ProjectKind::Directory, remote: None, locations: Vec::new(),\n        created_at: 1_760_180_000_000, updated_at: 1_760_180_000_000,\n    },],\n})"
+expression: "round_trip(&ListProjectsResponse\n{\n    projects:\n    vec![odin.clone(), Project\n    {\n        id: \"p-0a1b2c3d4e5f60718293\".to_owned(), name: \"notes\".to_owned(),\n        kind: ProjectKind::Directory, remote: None, git_credential: None,\n        locations: Vec::new(), created_at: 1_760_180_000_000, updated_at:\n        1_760_180_000_000,\n    },],\n})"
 ---
 {
   "projects": [
@@ -9,6 +9,7 @@ expression: "round_trip(&ListProjectsResponse\n{\n    projects:\n    vec![odin.c
       "name": "Odin",
       "kind": "git",
       "remote": "github.com/jacobfvanzyl/odin",
+      "gitCredential": "personal-git",
       "locations": [
         {
           "hostId": "8ZpX3kqW1m0aLr9TQv2cYw",

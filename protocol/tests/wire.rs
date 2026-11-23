@@ -2257,6 +2257,7 @@ fn projects() {
         name: "Odin".to_owned(),
         kind: ProjectKind::Git,
         remote: Some("github.com/jacobfvanzyl/odin".to_owned()),
+        git_credential: Some("personal-git".to_owned()),
         locations: vec![
             ProjectLocation {
                 host_id: "8ZpX3kqW1m0aLr9TQv2cYw".to_owned(),
@@ -2281,6 +2282,7 @@ fn projects() {
                     name: "notes".to_owned(),
                     kind: ProjectKind::Directory,
                     remote: None,
+                    git_credential: None,
                     locations: Vec::new(),
                     created_at: 1_760_180_000_000,
                     updated_at: 1_760_180_000_000,
@@ -2308,6 +2310,7 @@ fn projects() {
                 kind: ProjectKind::Git,
                 remote: Some("github.com/jacobfvanzyl/odin".to_owned()),
             },
+            git_credential: None,
         })
     );
     insta::assert_json_snapshot!(
@@ -2322,6 +2325,7 @@ fn projects() {
                 kind: ProjectKind::Git,
                 remote: Some("github.com/jacobfvanzyl/odin".to_owned()),
             }),
+            git_credential: None,
         })
     );
     insta::assert_json_snapshot!(
@@ -2331,8 +2335,21 @@ fn projects() {
             name: Some("odin-engine".to_owned()),
             remove_host: Some("homelab".to_owned()),
             add: None,
+            git_credential: None,
         })
     );
+    // Clearing gitCredential sends explicit null and round-trips as Some(None); omitting stays None.
+    let cleared: UpdateProjectRequest = serde_json::from_value(json!({
+        "project": "odin",
+        "gitCredential": null
+    }))
+    .expect("clears gitCredential");
+    assert_eq!(cleared.git_credential, Some(None));
+    let untouched: UpdateProjectRequest = serde_json::from_value(json!({
+        "project": "odin"
+    }))
+    .expect("omitted gitCredential");
+    assert_eq!(untouched.git_credential, None);
     insta::assert_json_snapshot!(
         "remove_project_request",
         message(&RemoveProjectRequest {
@@ -3183,6 +3200,15 @@ fn credentials_wire_shapes() {
                     },
                     value: "{}".to_owned(),
                     expires_at: None,
+                },
+                weave_host_protocol::credentials::HeldCredential {
+                    name: "git:p-3f9c2e7d0a1b4c5d6e7f:personal-git".to_owned(),
+                    used: weave_host_protocol::credentials::CredentialUse::Git {
+                        remote: "github.com/jacobfvanzyl/odin".to_owned(),
+                        username: "x-access-token".to_owned(),
+                    },
+                    value: "a git token".to_owned(),
+                    expires_at: Some(1_795_900_000_000),
                 },
             ],
         })

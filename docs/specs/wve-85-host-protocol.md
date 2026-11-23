@@ -1584,10 +1584,16 @@ says how the Host gives it to what needs it.
   only, replacing the file whole; removed when the credential is dropped. `path` is made of
   plain names: one that is whole, empty, or leaves the home is invalid params, and then none of
   the set is taken.
+- `{type: "git", remote, username}`: a git HTTPS token scoped to `remote` (`host/owner/repo`),
+  never written to git config or process environments. The Host serves `git-credentials.sock`
+  (`0600`, peer-UID checked) beside its own socket and configures agents' and terminals' git via
+  `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/`GIT_CONFIG_VALUE_*` and `WEAVE_GIT_CREDENTIAL_SOCKET`
+  to invoke `weave git-credential`, answering only for HTTPS requests whose normalized host and
+  path match a non-expired entry.
 
-A credential past its `expiresAt` is no longer added to an agent's environment. The Host keeps
-the set sealed beside its record of the Dispatcher, so agents start while the Dispatcher is
-away. Nothing answers a value back.
+A credential past its `expiresAt` is no longer added to an agent's environment or answered by the
+git credential helper. The Host keeps the set sealed beside its record of the Dispatcher, so
+agents start while the Dispatcher is away. Nothing answers a value back.
 
 ## Sessions
 

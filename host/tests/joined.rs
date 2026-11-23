@@ -159,6 +159,8 @@ impl World {
                 ..DispatcherSettings::in_dir(&DaemonPaths::in_dir(self.dir.path().to_path_buf()))
             }),
             ssh: Some(Arc::new(weave_host::remotes::AsWritten)),
+            git_credentials_socket: None,
+            git_credential_helper: None,
         }
     }
 }

@@ -329,6 +329,8 @@ pub fn config_with(dir: PathBuf, journals: bool) -> DaemonConfig {
             ..DispatcherSettings::in_dir(&weave_host::DaemonPaths::in_dir(dir))
         }),
         ssh: Some(Arc::new(AsWritten)),
+        git_credentials_socket: None,
+        git_credential_helper: None,
     }
 }
 

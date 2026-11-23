@@ -8,6 +8,7 @@ expression: "round_trip(&ProjectResponse { project: odin })"
     "name": "Odin",
     "kind": "git",
     "remote": "github.com/jacobfvanzyl/odin",
+    "gitCredential": "personal-git",
     "locations": [
       {
         "hostId": "8ZpX3kqW1m0aLr9TQv2cYw",

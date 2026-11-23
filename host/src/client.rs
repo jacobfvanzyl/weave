@@ -2525,6 +2525,13 @@ fn terminal_environment(shared: &Shared, id: &str) -> BTreeMap<String, String> {
             }
         }
     }
+    if let (Some(socket), Some(helper)) = (
+        &shared.config.git_credentials_socket,
+        &shared.config.git_credential_helper,
+    ) {
+        let remotes = shared.credentials.git_remotes(journal::now_ms());
+        crate::git_credentials::apply_environment(&mut env, socket, helper, &remotes);
+    }
     env
 }
 

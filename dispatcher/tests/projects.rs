@@ -171,6 +171,7 @@ async fn a_project_goes_through_its_life(cli: &DispatcherConnection, studio: &st
         .send(AddProjectRequest {
             name: "Odin".to_owned(),
             location: git(studio, "/code/odin", "github.com/j/odin"),
+            git_credential: None,
         })
         .await
         .expect("projects/add")
@@ -187,6 +188,7 @@ async fn a_project_goes_through_its_life(cli: &DispatcherConnection, studio: &st
         .send(AddProjectRequest {
             name: "ODIN".to_owned(),
             location: git(studio, "/code/other", "github.com/j/other"),
+            git_credential: None,
         })
         .await
         .expect_err("a name taken");
@@ -198,6 +200,7 @@ async fn a_project_goes_through_its_life(cli: &DispatcherConnection, studio: &st
             name: Some("odin-engine".to_owned()),
             remove_host: None,
             add: None,
+            git_credential: None,
         })
         .await
         .expect("renamed")
@@ -214,6 +217,7 @@ async fn a_project_goes_through_its_life(cli: &DispatcherConnection, studio: &st
             name: None,
             remove_host: None,
             add: Some(git(studio, "/code/odin-2", "github.com/j/odin")),
+            git_credential: None,
         })
         .await
         .expect_err("a second location on studio");
@@ -229,6 +233,7 @@ async fn a_project_goes_through_its_life(cli: &DispatcherConnection, studio: &st
             name: None,
             remove_host: None,
             add: Some(git(mini, "/home/me/odin", "github.com/someone/odin")),
+            git_credential: None,
         })
         .await
         .expect_err("another repository");
@@ -242,6 +247,7 @@ async fn a_project_goes_through_its_life(cli: &DispatcherConnection, studio: &st
             name: None,
             remove_host: None,
             add: Some(git(mini, "/home/me/odin", "github.com/j/odin")),
+            git_credential: None,
         })
         .await
         .expect("mini's clone joined")
@@ -275,6 +281,7 @@ async fn a_project_goes_through_its_life(cli: &DispatcherConnection, studio: &st
             name: None,
             remove_host: Some("mini".to_owned()),
             add: None,
+            git_credential: None,
         })
         .await
         .expect("mini's location removed")
@@ -339,6 +346,7 @@ async fn removing_a_host_drops_its_locations() {
                 kind: ProjectKind::Directory,
                 remote: None,
             },
+            git_credential: None,
         })
         .await
         .expect("added")
@@ -353,6 +361,7 @@ async fn removing_a_host_drops_its_locations() {
             kind: ProjectKind::Directory,
             remote: None,
         }),
+        git_credential: None,
     })
     .await
     .expect("studio's joined");
@@ -363,6 +372,7 @@ async fn removing_a_host_drops_its_locations() {
             name: None,
             remove_host: Some("studio".to_owned()),
             add: Some(git(&studio, "/code/notes", "github.com/j/notes")),
+            git_credential: None,
         })
         .await
         .expect_err("a repository");
@@ -374,6 +384,7 @@ async fn removing_a_host_drops_its_locations() {
         .send(AddProjectRequest {
             name: "lab".to_owned(),
             location: git("h-nobody", "/lab", "github.com/j/lab"),
+            git_credential: None,
         })
         .await
         .expect_err("a Host that never joined");
@@ -420,6 +431,7 @@ async fn projects_outlive_a_restart() {
         .add_project(AddProjectRequest {
             name: "odin".to_owned(),
             location: git(&studio, "/code/odin", "github.com/j/odin"),
+            git_credential: None,
         })
         .expect("added");
     dispatcher.stop().await;
@@ -528,6 +540,7 @@ async fn clones_through_an_ssh_alias_and_the_plain_host_are_one_project() {
     cli.send(AddProjectRequest {
         name: "Odin".to_owned(),
         location: git(&studio, &studio_path, resolved),
+        git_credential: None,
     })
     .await
     .expect("projects/add");
@@ -537,6 +550,7 @@ async fn clones_through_an_ssh_alias_and_the_plain_host_are_one_project() {
             name: None,
             remove_host: None,
             add: Some(git(&mini, &mini_path, resolved)),
+            git_credential: None,
         })
         .await
         .expect("mini's clone joined")
@@ -559,6 +573,7 @@ async fn clones_through_an_ssh_alias_and_the_plain_host_are_one_project() {
     cli.send(AddProjectRequest {
         name: "Odin".to_owned(),
         location: git(&studio, &studio_path, alias),
+        git_credential: None,
     })
     .await
     .expect("projects/add");
@@ -568,6 +583,7 @@ async fn clones_through_an_ssh_alias_and_the_plain_host_are_one_project() {
             name: None,
             remove_host: None,
             add: Some(git(&mini, &mini_path, alias)),
+            git_credential: None,
         })
         .await
         .expect("joined as recorded")

@@ -111,6 +111,12 @@ impl DaemonPaths {
         self.socket.with_file_name("terminals.sock")
     }
 
+    /// Where `weave git-credential` asks the Host for a Project's git token (ADR 0036): beside
+    /// the Host's socket.
+    pub fn git_credentials_socket(&self) -> PathBuf {
+        self.socket.with_file_name("git-credentials.sock")
+    }
+
     /// Where the Neovim in each of the Host's terminals listens, `<id>.sock` (WVE-233): beside
     /// the Host's socket, in the user's runtime directory where they have one, since a Unix
     /// socket's path has at most 103 bytes on macOS (104 with its NUL), 107 on Linux.

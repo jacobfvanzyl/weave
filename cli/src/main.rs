@@ -143,6 +143,11 @@ enum Command {
     /// which the environment names. The Host declares it to agents; it isn't for people.
     #[command(hide = true)]
     McpBridge,
+    /// Git credential helper for the weave Host's agents and terminals (ADR 0036): asks the
+    /// Host's local git credential socket for a Project's token. Configured by the Host via
+    /// `GIT_CONFIG_*`; it isn't for people.
+    #[command(hide = true)]
+    GitCredential { action: Option<String> },
 }
 
 #[tokio::main]
@@ -193,6 +198,16 @@ async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Logout(args) => logged(agents::LOG, agents::logout(args)).await,
         // Stdout carries MCP; diagnostics go to stderr, the agent's to keep.
         Command::McpBridge => logged("warn", mcp_bridge()).await,
+        // Stdout carries git's credential protocol; stay quiet on stderr.
+        Command::GitCredential { action } => {
+            weave_host::git_credentials::helper(
+                action.as_deref(),
+                tokio::io::stdin(),
+                tokio::io::stdout(),
+            )
+            .await?;
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 
@@ -573,6 +588,47 @@ mod tests {
             "--remove-host",
             "homelab"
         ]));
+        assert!(parses(&[
+            "weave",
+            "projects",
+            "update",
+            "odin",
+            "--git-credential",
+            "personal-git"
+        ]));
+        assert!(parses(&[
+            "weave",
+            "projects",
+            "update",
+            "odin",
+            "--clear-git-credential"
+        ]));
+        assert!(!parses(&[
+            "weave",
+            "projects",
+            "update",
+            "odin",
+            "--git-credential",
+            "personal-git",
+            "--clear-git-credential"
+        ]));
+        assert!(parses(&[
+            "weave",
+            "projects",
+            "add",
+            "--git-credential",
+            "personal-git"
+        ]));
+        assert!(!parses(&[
+            "weave",
+            "projects",
+            "add",
+            "--to",
+            "odin",
+            "--git-credential",
+            "personal-git"
+        ]));
+        assert!(parses(&["weave", "git-credential", "get"]));
         // A Bot is named in place of where a schedule runs, and a time in place of a cron
         // expression (WVE-118).
         let schedule = |more: &[&str]| {

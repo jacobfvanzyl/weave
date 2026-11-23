@@ -7569,6 +7569,27 @@ expression: schema()
             "path"
           ],
           "description": "As the file at `path` under the home of the Host's user, which only they can read: for\na program that reads its sign-in from a file of its own."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "remote": {
+              "type": "string"
+            },
+            "username": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "git"
+            }
+          },
+          "required": [
+            "type",
+            "remote",
+            "username"
+          ],
+          "description": "For git HTTPS access to `remote` (normalized as `host/owner/repo`), served to agents'\ngit through the Host's credential helper and never written to git config or an agent's\nenvironment."
         }
       ],
       "description": "How a Host gives a credential to what uses it."
@@ -12357,6 +12378,13 @@ expression: schema()
           ],
           "description": "A git Project's repository's remote, as [`crate::worktrees::GitLocation::remote`] gives\nit, such as `github.com/owner/name`: a clone with it on another Host may join the\nProject. Absent for a repository without one, and for a directory."
         },
+        "gitCredential": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The name of the token credential whose git token this Project's Hosts get for `remote`\n(ADR 0036); absent when none is attached."
+        },
         "locations": {
           "type": "array",
           "items": {
@@ -12450,6 +12478,13 @@ expression: schema()
         },
         "location": {
           "$ref": "#/$defs/NewLocation"
+        },
+        "gitCredential": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Attach this token credential for git HTTPS access to the Project's remote (ADR 0036)."
         }
       },
       "required": [
@@ -12518,12 +12553,19 @@ expression: schema()
             }
           ],
           "description": "Add this location."
+        },
+        "gitCredential": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Attach a token credential for git HTTPS access to the Project's remote, or `null` to\ndetach it (ADR 0036)."
         }
       },
       "required": [
         "project"
       ],
-      "description": "`projects/update`: rename a Project, remove its location on one Host, and add one, in that\norder and all or none. A location added is refused when it's another kind than the\nProject's, a repository whose remote isn't the Project's, or on a Host where the Project\nhas a location still: one at the same path again changes nothing. A git Project without a\nremote takes the remote of a location added with one."
+      "description": "`projects/update`: rename a Project, remove its location on one Host, add one, and attach\nor detach its git credential, in that order and all or none. A location added is refused\nwhen it's another kind than the Project's, a repository whose remote isn't the Project's,\nor on a Host where the Project has a location still: one at the same path again changes\nnothing. A git Project without a remote takes the remote of a location added with one.\n`gitCredential` is cleared with `null`."
     },
     "RemoveProjectRequest": {
       "type": "object",

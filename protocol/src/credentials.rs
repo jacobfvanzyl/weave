@@ -25,6 +25,10 @@ pub enum CredentialUse {
     /// As the file at `path` under the home of the Host's user, which only they can read: for
     /// a program that reads its sign-in from a file of its own.
     File { path: String },
+    /// For git HTTPS access to `remote` (normalized as `host/owner/repo`), served to agents'
+    /// git through the Host's credential helper and never written to git config or an agent's
+    /// environment.
+    Git { remote: String, username: String },
 }
 
 /// A credential for a Host to hold.

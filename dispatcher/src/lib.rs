@@ -572,7 +572,8 @@ impl Shared {
         if !takes {
             return;
         }
-        let credentials = match self.credentials.for_hosts(&self.store) {
+        let now = self.config.clock.now();
+        let credentials = match self.credentials.for_host(&self.store, host_id, now) {
             Ok(Some(credentials)) => credentials,
             Ok(None) => return,
             Err(error) => {

@@ -365,17 +365,23 @@ real paths here (`real_here`). Peer Hosts (ADR 0017, WVE-109) are retired: `Devi
 other devices that paired before WVE-197, and `Daemon::new` removes `DaemonConfig::retired`
 (`peers.json`, `host-key.json`). The tests are the Dispatcher's (`dispatcher/tests/hosts.rs`).
 
-Credentials (ADR 0036, WVE-239; `credentials.rs`, feature `credentials`): the person's
-credentials as the Dispatcher the Host joined gives them, with `credentials/sync`, which only
-that Dispatcher may send (`Connection::sync_credentials` refuses any peer but `Peer::Joined`) and
-which carries the whole set: one left out is dropped. Each says how it's used
-(`CredentialUse`). One for an agent's environment is added to `Launch::environment` in
+Credentials (ADR 0036, WVE-239; `credentials.rs`, `git_credentials.rs`, feature `credentials`):
+the person's credentials as the Dispatcher the Host joined gives them, with `credentials/sync`,
+which only that Dispatcher may send (`Connection::sync_credentials` refuses any peer but
+`Peer::Joined`) and which carries the whole set: one left out is dropped. Each says how it's
+used (`CredentialUse`). One for an agent's environment is added to `Launch::environment` in
 `Shared::launch`, over the Host's own and under the agent's settings, which is never journaled
 and isn't part of a `LaunchKey`; one past its `expiresAt` isn't given. One that is a file is
 written under the home (`placed` refuses a path that leaves it), readable by the person only,
-and removed when dropped. The set is kept sealed in `credentials.sealed` beside
+and removed when dropped. One for git (`CredentialUse::Git { remote, username }`) is scoped to
+that exact HTTPS repository remote (`Credentials::git_for`) and answered only over the Host's
+private `git-credentials.sock` (`Daemon::serve_git_credentials`, 0600, peer-UID checked);
+`git_credentials::apply_environment` injects `WEAVE_GIT_CREDENTIAL_SOCKET` and `GIT_CONFIG_*`
+(pointing to `weave git-credential`, with per-remote helper overrides and `credential.useHttpPath`)
+into every agent (`Shared::launch`) and terminal (`client::terminal_environment`), never writing
+tokens to disk or process environments. The set is kept sealed in `credentials.sealed` beside
 `dispatcher.json`, under the key in `credentials.key`, so agents start while the Dispatcher is
 away; a Host with no `DaemonConfig::dispatcher` keeps it in memory. The Host knows nothing of
 which vendor a credential is for: the Dispatcher does (`dispatcher/src/signins.rs`). Never log
 a value, put one in a journal or a status, or answer one to a client. Its tests are in the
-module and in `dispatcher/tests/credentials.rs`.
+modules and in `dispatcher/tests/credentials.rs`.

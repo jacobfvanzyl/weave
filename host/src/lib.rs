@@ -37,6 +37,7 @@ mod devices;
 mod dispatcher;
 mod files;
 mod git;
+pub mod git_credentials;
 mod host_tools;
 mod instance;
 mod journal;
@@ -199,6 +200,11 @@ pub struct DaemonConfig {
     /// Where SSH remotes' hosts go, for a repository's identity (WVE-213); none runs `ssh -G`
     /// with the agents' environment. Tests give their own, such as [`remotes::AsWritten`].
     pub ssh: Option<Arc<dyn remotes::SshHosts>>,
+    /// The socket `weave git-credential` asks for a Project's git token (ADR 0036); none for a
+    /// Host that serves no git credentials, as one inside a client.
+    pub git_credentials_socket: Option<PathBuf>,
+    /// The `weave` binary invoked by git as its credential helper (`<exe> git-credential`).
+    pub git_credential_helper: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -237,6 +243,8 @@ impl DaemonConfig {
             retired: Vec::new(),
             dispatcher: None,
             ssh: None,
+            git_credentials_socket: None,
+            git_credential_helper: std::env::current_exe().ok(),
         }
     }
 
@@ -255,6 +263,7 @@ impl DaemonConfig {
             nvim_sockets: Some(paths.nvim_sockets()),
             retired: paths.retired(),
             dispatcher: Some(DispatcherSettings::in_dir(paths)),
+            git_credentials_socket: Some(paths.git_credentials_socket()),
             ..Self::in_process(None)
         }
     }
@@ -543,8 +552,16 @@ impl Shared {
             cwd: cwd.to_path_buf(),
             environment: {
                 // Over the Host's own environment, and never part of what is journaled.
+                let now = journal::now_ms();
                 let mut environment = self.config.environment.vars.clone();
-                environment.extend(self.credentials.environment(&agent.id, journal::now_ms()));
+                environment.extend(self.credentials.environment(&agent.id, now));
+                if let (Some(socket), Some(helper)) = (
+                    &self.config.git_credentials_socket,
+                    &self.config.git_credential_helper,
+                ) {
+                    let remotes = self.credentials.git_remotes(now);
+                    git_credentials::apply_environment(&mut environment, socket, helper, &remotes);
+                }
                 environment
             },
             process: Launch::new_process(),
@@ -1445,6 +1462,15 @@ impl Daemon {
         Ok(())
     }
 
+    /// Serve `weave git-credential` lookups on `socket`, beside the Host's own, until the Host
+    /// stops (ADR 0036).
+    pub async fn serve_git_credentials(&self, socket: &Path) -> std::io::Result<()> {
+        let listener = socket::bind_private(socket)?;
+        git_credentials::serve(Arc::clone(&self.shared), listener).await;
+        let _ = std::fs::remove_file(socket);
+        Ok(())
+    }
+
     /// At startup, connect to the Dispatcher the Host joined, if it joined one (ADR 0030).
     pub fn resume_dispatcher(&self) {
         dispatcher::resume(&self.shared);
@@ -1469,6 +1495,23 @@ impl Daemon {
         self.shared
             .credentials
             .environment(agent, journal::now_ms())
+    }
+
+    /// The `(username, token)` held for the HTTPS git repository at `host`/`path` now.
+    pub fn git_credential(&self, host: &str, path: &str) -> Option<(String, String)> {
+        self.shared
+            .credentials
+            .git_for(host, path, journal::now_ms())
+    }
+
+    /// The `(username, token)` held for the HTTPS git repository at `host`/`path` at `now_ms`.
+    pub fn git_credential_at(
+        &self,
+        host: &str,
+        path: &str,
+        now_ms: weave_host_protocol::Timestamp,
+    ) -> Option<(String, String)> {
+        self.shared.credentials.git_for(host, path, now_ms)
     }
 
     /// The Dispatcher the Host joined, and how its connection stands.

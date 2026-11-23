@@ -834,4 +834,267 @@ mod renewal {
         dispatcher.stop().await;
         serving.abort();
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn git_credentials_follow_each_hosts_projects_and_remotes() {
+        use weave_host_protocol::dispatcher::AddProjectRequest;
+        use weave_host_protocol::dispatcher::NewLocation;
+        use weave_host_protocol::dispatcher::ProjectKind;
+        use weave_host_protocol::dispatcher::UpdateProjectRequest;
+
+        let t0 = 2_000_000_000_000u64;
+        let clock = TestClock::new(t0);
+        let renewer = ScriptedRenewer::new(Vec::new());
+
+        let studio = World::new().await;
+        let mini = World::new().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (dispatcher, serving) = start_with_renewer(
+            dir.path(),
+            Arc::clone(&clock) as Arc<dyn Clock>,
+            Arc::clone(&renewer) as Arc<dyn Renewer>,
+        );
+        studio.join(&dispatcher, dir.path(), "studio").await;
+        mini.join(&dispatcher, dir.path(), "mini").await;
+        let studio_id = studio.host_id().await;
+        let mini_id = mini.host_id().await;
+        host_until(&dispatcher, &studio_id, |host| host.connected).await;
+        host_until(&dispatcher, &mini_id, |host| host.connected).await;
+
+        dispatcher
+            .unlock_credentials(PASSPHRASE.to_owned(), true)
+            .await
+            .expect("unlocked");
+        dispatcher
+            .set_credential("personal-git", CredentialKind::Token, None, "ghp_personal")
+            .expect("personal token");
+        dispatcher
+            .set_credential("work-git", CredentialKind::Token, None, "ghp_work")
+            .expect("work token");
+
+        // Personal project on both studio and mini; work project on studio only.
+        dispatcher
+            .add_project(AddProjectRequest {
+                name: "odin".to_owned(),
+                location: NewLocation {
+                    host_id: studio_id.clone(),
+                    path: "/code/odin".into(),
+                    kind: ProjectKind::Git,
+                    remote: Some("github.com/j/odin".to_owned()),
+                },
+                git_credential: Some("personal-git".to_owned()),
+            })
+            .expect("odin");
+        dispatcher
+            .update_project(UpdateProjectRequest {
+                project: "odin".to_owned(),
+                name: None,
+                remove_host: None,
+                add: Some(NewLocation {
+                    host_id: mini_id.clone(),
+                    path: "/home/j/odin".into(),
+                    kind: ProjectKind::Git,
+                    remote: Some("github.com/j/odin".to_owned()),
+                }),
+                git_credential: None,
+            })
+            .expect("odin on mini");
+        dispatcher
+            .add_project(AddProjectRequest {
+                name: "portal".to_owned(),
+                location: NewLocation {
+                    host_id: studio_id.clone(),
+                    path: "/work/portal".into(),
+                    kind: ProjectKind::Git,
+                    remote: Some("github.com/acme/portal".to_owned()),
+                },
+                git_credential: Some("work-git".to_owned()),
+            })
+            .expect("portal");
+
+        until("studio holds both git credentials", || {
+            studio
+                .daemon
+                .git_credential_at("github.com", "j/odin", t0 + 1)
+                == Some(("x-access-token".to_owned(), "ghp_personal".to_owned()))
+                && studio
+                    .daemon
+                    .git_credential_at("github.com", "acme/portal", t0 + 1)
+                    == Some(("x-access-token".to_owned(), "ghp_work".to_owned()))
+        })
+        .await;
+        until("mini holds only personal-git", || {
+            mini.daemon
+                .git_credential_at("github.com", "j/odin", t0 + 1)
+                == Some(("x-access-token".to_owned(), "ghp_personal".to_owned()))
+        })
+        .await;
+        // Mini NEVER receives work-git, and neither Host answers for an unrelated repo.
+        assert_eq!(
+            mini.daemon
+                .git_credential_at("github.com", "acme/portal", t0 + 1),
+            None
+        );
+        assert_eq!(
+            studio
+                .daemon
+                .git_credential_at("github.com", "j/unrelated", t0 + 1),
+            None
+        );
+
+        // Removing mini's location drops personal-git from mini while studio keeps it.
+        dispatcher
+            .update_project(UpdateProjectRequest {
+                project: "odin".to_owned(),
+                name: None,
+                remove_host: Some("mini".to_owned()),
+                add: None,
+                git_credential: None,
+            })
+            .expect("removed mini");
+        until("mini dropped personal-git", || {
+            mini.daemon
+                .git_credential_at("github.com", "j/odin", t0 + 1)
+                .is_none()
+        })
+        .await;
+        assert_eq!(
+            studio
+                .daemon
+                .git_credential_at("github.com", "j/odin", t0 + 1),
+            Some(("x-access-token".to_owned(), "ghp_personal".to_owned()))
+        );
+
+        // Detaching work-git from portal drops it from studio.
+        dispatcher
+            .update_project(UpdateProjectRequest {
+                project: "portal".to_owned(),
+                name: None,
+                remove_host: None,
+                add: None,
+                git_credential: Some(None),
+            })
+            .expect("cleared work-git");
+        until("studio dropped work-git", || {
+            studio
+                .daemon
+                .git_credential_at("github.com", "acme/portal", t0 + 1)
+                .is_none()
+        })
+        .await;
+
+        // Re-attaching work-git and removing the credential drops it and clears the Project.
+        dispatcher
+            .update_project(UpdateProjectRequest {
+                project: "portal".to_owned(),
+                name: None,
+                remove_host: None,
+                add: None,
+                git_credential: Some(Some("work-git".to_owned())),
+            })
+            .expect("re-attached");
+        until("studio re-received work-git", || {
+            studio
+                .daemon
+                .git_credential_at("github.com", "acme/portal", t0 + 1)
+                == Some(("x-access-token".to_owned(), "ghp_work".to_owned()))
+        })
+        .await;
+        dispatcher.remove_credential("work-git").expect("removed");
+        until("studio dropped removed work-git", || {
+            studio
+                .daemon
+                .git_credential_at("github.com", "acme/portal", t0 + 1)
+                .is_none()
+        })
+        .await;
+        let portal = dispatcher
+            .projects()
+            .expect("projects")
+            .into_iter()
+            .find(|p| p.name == "portal")
+            .expect("portal");
+        assert_eq!(portal.git_credential, None);
+
+        dispatcher.stop().await;
+        serving.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn git_credentials_expire_after_seven_days_and_refresh_daily_while_connected() {
+        use weave_host_protocol::dispatcher::AddProjectRequest;
+        use weave_host_protocol::dispatcher::NewLocation;
+        use weave_host_protocol::dispatcher::ProjectKind;
+
+        const DAY: u64 = 24 * 60 * 60 * 1000;
+        let t0 = 2_000_000_000_000u64;
+        let clock = TestClock::new(t0);
+        let renewer = ScriptedRenewer::new(Vec::new());
+
+        let studio = World::new().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (dispatcher, serving) = start_with_renewer(
+            dir.path(),
+            Arc::clone(&clock) as Arc<dyn Clock>,
+            Arc::clone(&renewer) as Arc<dyn Renewer>,
+        );
+        studio.join(&dispatcher, dir.path(), "studio").await;
+        let studio_id = studio.host_id().await;
+        host_until(&dispatcher, &studio_id, |host| host.connected).await;
+
+        dispatcher
+            .unlock_credentials(PASSPHRASE.to_owned(), true)
+            .await
+            .expect("unlocked");
+        dispatcher
+            .set_credential("personal-git", CredentialKind::Token, None, "ghp_personal")
+            .expect("token");
+        dispatcher
+            .add_project(AddProjectRequest {
+                name: "odin".to_owned(),
+                location: NewLocation {
+                    host_id: studio_id,
+                    path: "/code/odin".into(),
+                    kind: ProjectKind::Git,
+                    remote: Some("github.com/j/odin".to_owned()),
+                },
+                git_credential: Some("personal-git".to_owned()),
+            })
+            .expect("odin");
+
+        until("studio holds personal-git with 7-day expiry", || {
+            studio
+                .daemon
+                .git_credential_at("github.com", "j/odin", t0 + 7 * DAY - 1)
+                == Some(("x-access-token".to_owned(), "ghp_personal".to_owned()))
+        })
+        .await;
+        // Without a refresh, it expires right at t0 + 7d.
+        assert_eq!(
+            studio
+                .daemon
+                .git_credential_at("github.com", "j/odin", t0 + 7 * DAY),
+            None
+        );
+
+        // Advancing 24h triggers the Dispatcher's daily refresh while connected and unlocked,
+        // extending the Host's cache expiry to t0 + 8d.
+        clock.advance(DAY);
+        until("daily refresh extended cache past t0 + 7d", || {
+            studio
+                .daemon
+                .git_credential_at("github.com", "j/odin", t0 + 7 * DAY)
+                == Some(("x-access-token".to_owned(), "ghp_personal".to_owned()))
+        })
+        .await;
+        assert_eq!(
+            studio
+                .daemon
+                .git_credential_at("github.com", "j/odin", t0 + 8 * DAY),
+            None
+        );
+
+        dispatcher.stop().await;
+        serving.abort();
+    }
 }

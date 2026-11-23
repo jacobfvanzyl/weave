@@ -66,7 +66,7 @@ enum ProjectsCommand {
     Show(ProjectArgs),
     /// Rename a Project.
     Rename(RenameArgs),
-    /// Change a Project: remove its location on one Host.
+    /// Change a Project: remove its location on one Host, or set or clear its git credential.
     Update(UpdateArgs),
     /// Forget a Project and all its locations. What's in its directories stays.
     Remove(ProjectArgs),
@@ -109,6 +109,10 @@ struct AddArgs {
     #[arg(long, value_name = "HOST")]
     host: Option<String>,
 
+    /// The token credential in `weave credentials` to give Hosts for this git Project's remote.
+    #[arg(long, value_name = "CREDENTIAL", conflicts_with = "to")]
+    git_credential: Option<String>,
+
     /// Print the Project as JSON. It asks nothing: a clone of a repository a Project has on
     /// other Hosts needs --to or --name.
     #[arg(long)]
@@ -133,7 +137,18 @@ struct UpdateArgs {
     /// Remove its location on this Host, by its id or name. The Project stays, with its other
     /// locations.
     #[arg(long, value_name = "HOST")]
-    remove_host: String,
+    remove_host: Option<String>,
+    /// Attach this token credential in `weave credentials` to a git Project so Hosts where it
+    /// has a location can authenticate git against its remote.
+    #[arg(
+        long,
+        value_name = "CREDENTIAL",
+        conflicts_with = "clear_git_credential"
+    )]
+    git_credential: Option<String>,
+    /// Detach the Project's git credential so Hosts drop it.
+    #[arg(long)]
+    clear_git_credential: bool,
     /// Print the Project as JSON.
     #[arg(long)]
     json: bool,
@@ -157,6 +172,7 @@ pub async fn command(args: ProjectsArgs) -> anyhow::Result<ExitCode> {
                 name: Some(name),
                 remove_host: None,
                 add: None,
+                git_credential: None,
             };
             change(request, json, |renamed| {
                 format!("Renamed {project} to {}.", renamed.name)
@@ -166,20 +182,54 @@ pub async fn command(args: ProjectsArgs) -> anyhow::Result<ExitCode> {
         ProjectsCommand::Update(UpdateArgs {
             project,
             remove_host,
+            git_credential,
+            clear_git_credential,
             json,
         }) => {
+            let git_credential = if clear_git_credential {
+                Some(None)
+            } else {
+                git_credential.map(Some)
+            };
+            if remove_host.is_none() && git_credential.is_none() {
+                bail!(
+                    "say what to change: --remove-host <host>, --git-credential <credential>, or \
+                     --clear-git-credential"
+                );
+            }
+            let removed_host = remove_host.clone();
+            let credential_change = git_credential.clone();
             let request = UpdateProjectRequest {
                 project,
                 name: None,
-                remove_host: Some(remove_host.clone()),
+                remove_host,
                 add: None,
+                git_credential,
             };
-            change(request, json, |changed| match changed.locations.len() {
-                0 => format!(
-                    "Removed {}'s location on {remove_host}; it has none left.",
-                    changed.name
-                ),
-                _ => format!("Removed {}'s location on {remove_host}.", changed.name),
+            change(request, json, |changed| {
+                let mut parts = Vec::new();
+                if let Some(host) = &removed_host {
+                    parts.push(match changed.locations.len() {
+                        0 => format!(
+                            "Removed {}'s location on {host}; it has none left.",
+                            changed.name
+                        ),
+                        _ => format!("Removed {}'s location on {host}.", changed.name),
+                    });
+                }
+                match &credential_change {
+                    Some(Some(name)) => parts.push(format!(
+                        "Attached git credential {name} to {}. Hosts with a location for it are \
+                         synced now.",
+                        changed.name
+                    )),
+                    Some(None) => parts.push(format!(
+                        "Cleared {}'s git credential. Hosts are synced now.",
+                        changed.name
+                    )),
+                    None => {}
+                }
+                parts.join(" ")
             })
             .await
         }
@@ -283,6 +333,7 @@ async fn add(args: AddArgs) -> anyhow::Result<()> {
         name,
         to,
         host,
+        git_credential,
         json,
     } = args;
     let target = match host.as_deref() {
@@ -313,7 +364,7 @@ async fn add(args: AddArgs) -> anyhow::Result<()> {
     };
     let dispatcher = dispatcher::connect(&dispatcher::paths()?).await?;
     let registered = async {
-        let registered = register(&dispatcher, location, name, to, json).await?;
+        let registered = register(&dispatcher, location, name, to, git_credential, json).await?;
         refresh(&dispatcher).await;
         anyhow::Ok(registered)
     }
@@ -419,6 +470,7 @@ async fn register(
     location: NewLocation,
     name: Option<String>,
     to: Option<String>,
+    git_credential: Option<String>,
     json: bool,
 ) -> anyhow::Result<(Project, String)> {
     let listed = projects::from(dispatcher).await?;
@@ -508,7 +560,11 @@ async fn register(
     };
     let kind = location.kind;
     let project = dispatcher
-        .send(AddProjectRequest { name, location })
+        .send(AddProjectRequest {
+            name,
+            location,
+            git_credential,
+        })
         .await?
         .project;
     let what = match kind {
@@ -533,6 +589,7 @@ async fn join(
             name: None,
             remove_host: None,
             add: Some(location),
+            git_credential: None,
         })
         .await?
         .project)
@@ -561,14 +618,24 @@ fn describe(listed: &Listed) -> String {
         .collect()
 }
 
-/// "odin  git, github.com/j/odin" and a line for each location: "  homelab  /home/jaco/odin".
+/// "odin  git, github.com/j/odin, git credential personal-git" and a line for each location:
+/// "  homelab  /home/jaco/odin".
 fn describe_one(project: &Project, listed: &Listed) -> String {
     let remote = project
         .remote
         .as_deref()
         .map(|remote| format!(", {remote}"))
         .unwrap_or_default();
-    let mut text = format!("{}  {}{remote}\n", project.name, project.kind.name());
+    let git_credential = project
+        .git_credential
+        .as_deref()
+        .map(|name| format!(", git credential {name}"))
+        .unwrap_or_default();
+    let mut text = format!(
+        "{}  {}{remote}{git_credential}\n",
+        project.name,
+        project.kind.name()
+    );
     if project.locations.is_empty() {
         text.push_str("  on no Host: those it was on have left the Dispatcher\n");
         return text;
@@ -610,6 +677,7 @@ mod tests {
                     name: "odin".to_owned(),
                     kind: ProjectKind::Git,
                     remote: Some("github.com/j/odin".to_owned()),
+                    git_credential: Some("personal-git".to_owned()),
                     locations: vec![
                         location("h-lab", "/home/jaco/odin"),
                         location("h-mac", "/Users/jaco/odin"),
@@ -622,6 +690,7 @@ mod tests {
                     name: "notes".to_owned(),
                     kind: ProjectKind::Directory,
                     remote: None,
+                    git_credential: None,
                     locations: Vec::new(),
                     created_at: 0,
                     updated_at: 0,
@@ -642,7 +711,7 @@ mod tests {
         };
         assert_eq!(
             describe(&listed),
-            "odin  git, github.com/j/odin\n  \
+            "odin  git, github.com/j/odin, git credential personal-git\n  \
              homelab  /home/jaco/odin\n  \
              mac      /Users/jaco/odin\n\
              notes  directory\n  \

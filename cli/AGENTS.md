@@ -308,4 +308,7 @@ default `list` (showing expiry and any renewal error). A passphrase or a value i
 `ask::secret`, with nothing echoed at a terminal and one line of standard input otherwise, or
 from `--file`; none is ever an argument, and nothing prints one. `weave dispatcher run`
 captures the login shell's environment so the Dispatcher finds `claude` and `codex` on `PATH`
-when run as a service.
+when run as a service. `weave projects add --git-credential <name>` and `weave projects update
+<project> --git-credential <name>` / `--clear-git-credential` attach or detach a token
+credential on a git Project; `weave daemon run` serves `git-credentials.sock`, and the hidden
+`weave git-credential` subcommand answers git's credential helper protocol from it.

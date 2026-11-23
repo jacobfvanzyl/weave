@@ -42,6 +42,8 @@ pub(crate) struct Change {
     /// The Host whose location goes, by id or name.
     pub(crate) remove_host: Option<String>,
     pub(crate) add: Option<NewLocation>,
+    /// Change the git credential attached to the Project (`Some(None)` clears it).
+    pub(crate) git_credential: Option<Option<String>>,
 }
 
 impl Store {
@@ -60,11 +62,16 @@ impl Store {
         &self,
         name: &str,
         location: &NewLocation,
+        git_credential: Option<&str>,
     ) -> Result<Project, ProjectError> {
         let mut connection = self.lock();
         let transaction = connection.transaction()?;
         let name = free_name(&transaction, name, None)?;
         place(&transaction, location)?;
+        let git_credential = match git_credential {
+            Some(name) => Some(check_git_credential(&transaction, location.kind, name)?),
+            None => None,
+        };
         let now = now_ms();
         let project = Project {
             id: format!("p-{}", random_id()),
@@ -74,6 +81,7 @@ impl Store {
                 ProjectKind::Git => location.remote.clone(),
                 ProjectKind::Directory => None,
             },
+            git_credential,
             locations: vec![ProjectLocation {
                 host_id: location.host_id.clone(),
                 path: location.path.clone(),
@@ -82,13 +90,14 @@ impl Store {
             updated_at: now,
         };
         transaction.execute(
-            "INSERT INTO projects (id, name, kind, remote, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            "INSERT INTO projects (id, name, kind, remote, git_credential, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
             params![
                 project.id,
                 project.name,
                 project.kind.name(),
                 project.remote,
+                project.git_credential,
                 to_sql(now)
             ],
         )?;
@@ -97,7 +106,8 @@ impl Store {
         Ok(project)
     }
 
-    /// Rename the Project `by` names, remove its location on a Host and add one, all or none.
+    /// Rename the Project `by` names, remove its location on a Host, add one, and set or clear
+    /// its git credential, all or none.
     pub(crate) fn update_project(&self, by: &str, change: Change) -> Result<Project, ProjectError> {
         let mut connection = self.lock();
         let transaction = connection.transaction()?;
@@ -128,6 +138,20 @@ impl Store {
         }
         if let Some(location) = &change.add {
             changed |= join(&transaction, &mut project, location, now)?;
+        }
+        if let Some(git_credential) = &change.git_credential {
+            let next = match git_credential {
+                Some(name) => Some(check_git_credential(&transaction, project.kind, name)?),
+                None => None,
+            };
+            if next != project.git_credential {
+                transaction.execute(
+                    "UPDATE projects SET git_credential = ?2 WHERE id = ?1",
+                    params![project.id, next],
+                )?;
+                project.git_credential = next;
+                changed = true;
+            }
         }
         if changed {
             transaction.execute(
@@ -381,6 +405,42 @@ fn host_name(connection: &Connection, host_id: &str) -> rusqlite::Result<Option<
         .optional()
 }
 
+/// Check `name` may be attached as a git credential to a Project of `kind`: it must be a git
+/// Project, and `name` must exist in `credentials` as a `token` credential.
+fn check_git_credential(
+    connection: &Connection,
+    kind: ProjectKind,
+    name: &str,
+) -> Result<String, ProjectError> {
+    if kind != ProjectKind::Git {
+        return Err(ProjectError::Refused(
+            "only a git Project takes a git credential".to_owned(),
+        ));
+    }
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(ProjectError::Refused(
+            "a git credential needs a name".to_owned(),
+        ));
+    }
+    let stored: Option<String> = connection
+        .query_row(
+            "SELECT kind FROM credentials WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match stored.as_deref() {
+        Some("token") => Ok(name.to_owned()),
+        Some(_) => Err(ProjectError::Refused(format!(
+            "{name} isn't a token credential, so it can't be a Project's git credential"
+        ))),
+        None => Err(ProjectError::Refused(format!(
+            "no credential called {name}"
+        ))),
+    }
+}
+
 fn insert_location(
     connection: &Connection,
     project_id: &str,
@@ -408,7 +468,7 @@ fn text(path: &Path) -> String {
 /// Every Project with its locations, by name.
 fn all(connection: &Connection) -> rusqlite::Result<Vec<Project>> {
     let mut statement = connection.prepare(
-        "SELECT id, name, kind, remote, created_at, updated_at FROM projects \
+        "SELECT id, name, kind, remote, git_credential, created_at, updated_at FROM projects \
          ORDER BY name COLLATE NOCASE, id",
     )?;
     let mut projects: Vec<Project> = statement
@@ -422,9 +482,10 @@ fn all(connection: &Connection) -> rusqlite::Result<Vec<Project>> {
                     _ => ProjectKind::Directory,
                 },
                 remote: row.get(3)?,
+                git_credential: row.get(4)?,
                 locations: Vec::new(),
-                created_at: from_sql(row.get(4)?),
-                updated_at: from_sql(row.get(5)?),
+                created_at: from_sql(row.get(5)?),
+                updated_at: from_sql(row.get(6)?),
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -522,6 +583,7 @@ mod tests {
             .add_project(
                 " Odin ",
                 &git("h-mac", "/Users/jaco/odin", Some("github.com/j/odin")),
+                None,
             )
             .expect("added");
         assert_eq!(odin.name, "Odin");
@@ -590,15 +652,17 @@ mod tests {
     fn names_are_unique_ignoring_case() {
         let store = store();
         store
-            .add_project("Odin", &git("h-mac", "/code/odin", None))
+            .add_project("Odin", &git("h-mac", "/code/odin", None), None)
             .expect("added");
         for name in ["odin", "ODIN", "  oDiN"] {
-            let why = refused(store.add_project(name, &directory("h-mac", "/notes")));
+            let why = refused(store.add_project(name, &directory("h-mac", "/notes"), None));
             assert_eq!(why, "there's a Project called Odin already");
         }
-        assert!(refused(store.add_project("  ", &directory("h-mac", "/notes"))).contains("name"));
+        assert!(
+            refused(store.add_project("  ", &directory("h-mac", "/notes"), None)).contains("name")
+        );
         let notes = store
-            .add_project("notes", &directory("h-mac", "/notes"))
+            .add_project("notes", &directory("h-mac", "/notes"), None)
             .expect("added");
         let taken = refused(store.update_project(
             &notes.id,
@@ -635,10 +699,11 @@ mod tests {
             .add_project(
                 "odin",
                 &git("h-mac", "/code/odin", Some("github.com/j/odin")),
+                None,
             )
             .expect("added");
         store
-            .add_project("notes", &directory("h-mac", "/notes"))
+            .add_project("notes", &directory("h-mac", "/notes"), None)
             .expect("added");
         let add = |project: &str, location| {
             store.update_project(
@@ -667,16 +732,16 @@ mod tests {
         // Another Project's location, or a Host that never joined.
         let taken = refused(
             add("notes", directory("h-lab", "/x"))
-                .and_then(|_| store.add_project("lab notes", &directory("h-lab", "/x"))),
+                .and_then(|_| store.add_project("lab notes", &directory("h-lab", "/x"), None)),
         );
         assert_eq!(taken, "/x on homelab belongs to notes already");
-        let stranger = refused(store.add_project("lab", &directory("h-nobody", "/lab")));
+        let stranger = refused(store.add_project("lab", &directory("h-nobody", "/lab"), None));
         assert!(stranger.contains("hasn't joined"), "{stranger}");
-        let relative = refused(store.add_project("lab", &directory("h-lab", "lab")));
+        let relative = refused(store.add_project("lab", &directory("h-lab", "lab"), None));
         assert!(relative.contains("isn't a whole path"), "{relative}");
         // A git Project without a remote takes the first one a location brings.
         store
-            .add_project("scratch", &git("h-mac", "/code/scratch", None))
+            .add_project("scratch", &git("h-mac", "/code/scratch", None), None)
             .expect("added");
         let joined = add(
             "scratch",
@@ -696,7 +761,7 @@ mod tests {
         let alias = "github.com-kp/Keyphase-Technologies/odin";
         let resolved = "github.com/Keyphase-Technologies/odin";
         let odin = store
-            .add_project("Odin", &git("h-mac", "/Users/jaco/odin", Some(alias)))
+            .add_project("Odin", &git("h-mac", "/Users/jaco/odin", Some(alias)), None)
             .expect("added");
         store
             .update_project(
@@ -766,7 +831,7 @@ mod tests {
         assert_eq!(moved.locations.len(), 2);
         // A git Project without a remote takes the first a Host reports.
         store
-            .add_project("scratch", &git("h-mac", "/code/scratch", None))
+            .add_project("scratch", &git("h-mac", "/code/scratch", None), None)
             .expect("added");
         let taken = store
             .reported_remote("h-mac", Path::new("/code/scratch"), "github.com/j/scratch")
@@ -779,7 +844,7 @@ mod tests {
     fn removing_a_host_takes_its_locations_and_the_project_stays() {
         let store = store();
         let odin = store
-            .add_project("odin", &git("h-lab", "/code/odin", None))
+            .add_project("odin", &git("h-lab", "/code/odin", None), None)
             .expect("added");
         assert!(store.remove_host("h-lab").expect("removed"));
         let left = store.project("odin").expect("found").expect("still there");
@@ -789,5 +854,89 @@ mod tests {
         assert_eq!(gone.id, odin.id);
         assert_eq!(store.projects().expect("listed"), Vec::new());
         assert!(refused(store.remove_project("odin")).contains("no Project odin"));
+    }
+
+    #[test]
+    fn a_git_project_attaches_a_token_credential_and_clears_when_removed() {
+        use weave_host_protocol::dispatcher::CredentialKind;
+
+        let store = store();
+        store
+            .set_credential(
+                "personal-git",
+                CredentialKind::Token,
+                None,
+                None,
+                &[0; 24],
+                b"x",
+            )
+            .expect("token");
+        store
+            .set_credential(
+                "claude",
+                CredentialKind::SignIn,
+                Some("claude"),
+                None,
+                &[0; 24],
+                b"y",
+            )
+            .expect("sign-in");
+
+        // Directory Projects cannot take a git credential.
+        let why = refused(store.add_project(
+            "notes",
+            &directory("h-mac", "/notes"),
+            Some("personal-git"),
+        ));
+        assert!(why.contains("only a git Project"), "{why}");
+        // Unknown or sign-in credentials are refused.
+        let why = refused(store.add_project(
+            "odin",
+            &git("h-mac", "/code/odin", Some("github.com/j/odin")),
+            Some("missing"),
+        ));
+        assert!(why.contains("no credential called missing"), "{why}");
+        let why = refused(store.add_project(
+            "odin",
+            &git("h-mac", "/code/odin", Some("github.com/j/odin")),
+            Some("claude"),
+        ));
+        assert!(why.contains("isn't a token credential"), "{why}");
+
+        let odin = store
+            .add_project(
+                "odin",
+                &git("h-mac", "/code/odin", Some("github.com/j/odin")),
+                Some("personal-git"),
+            )
+            .expect("added");
+        assert_eq!(odin.git_credential.as_deref(), Some("personal-git"));
+
+        // Clearing detaches it; re-attaching restores it.
+        let cleared = store
+            .update_project(
+                "odin",
+                Change {
+                    git_credential: Some(None),
+                    ..Change::default()
+                },
+            )
+            .expect("cleared");
+        assert_eq!(cleared.git_credential, None);
+        let reattached = store
+            .update_project(
+                "odin",
+                Change {
+                    git_credential: Some(Some("personal-git".to_owned())),
+                    ..Change::default()
+                },
+            )
+            .expect("reattached");
+        assert_eq!(reattached.git_credential.as_deref(), Some("personal-git"));
+
+        // Deleting the credential clears git_credential via ON DELETE SET NULL.
+        assert!(store.remove_credential("personal-git").expect("removed"));
+        let after = store.project("odin").expect("found").expect("there");
+        assert_eq!(after.git_credential, None);
     }
 }

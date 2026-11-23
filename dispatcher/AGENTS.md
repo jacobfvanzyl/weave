@@ -270,12 +270,16 @@ keys both ways, removal, a Host paired before Hosts joined, and one joining over
   `sign_in_interactive` runs `claude auth login` or `codex login` the same way for the CLI.
   `renewer.rs` runs a background task on `Clock` that renews each sign-in before expiry (1 hour
   before for Claude, 24 hours before for Codex) while unlocked, serialized by `Shared::renewing`
-  with per-credential backoff (`Backoffs`: 1m, 5m, 15m, 1h), and `credentials/renew` runs the
-  same path on demand; `replace_renewed_credential` guards against overwriting a concurrent
-  `set` or `remove`. `Credentials::for_hosts` makes every copy while unlocked, and
-  `Shared::sync_credentials` sends the set to each connected Host with the `credentials`
-  feature (`credentials/sync`): from a Host's link as it connects (`sync_credentials_to`), and
-  after an unlock, a set, a renewal or a remove. Locked, nothing is sent.
+  with per-credential backoff (`Backoffs`: 1m, 5m, 15m, 1h), and re-syncs connected Hosts daily
+  when any Project has a `git_credential` so their 7-day cached git tokens stay fresh;
+  `credentials/renew` runs the same renewal path on demand, and `replace_renewed_credential`
+  guards against overwriting a concurrent `set` or `remove`. The sixteenth migration added
+  `git_credential` on `projects` (`REFERENCES credentials (name) ON DELETE SET NULL`).
+  `Credentials::for_host` builds each Host's own credential set while unlocked: every sign-in
+  plus the token of each git Project located on that Host (with a 7-day `expires_at`, scoped to
+  that Project's remote as `CredentialUse::Git`). `Shared::sync_credentials` sends each Host its
+  set (`credentials/sync`): from a Host's link as it connects (`sync_credentials_to`), and after
+  an unlock, a set, a renewal, a remove, or a Project change. Locked, nothing is sent.
 - `machines.rs`, `machines/` (WVE-238, a spike behind the `machines` cargo feature, off by
   default): computers for Hosts, made in the cloud. `Machines` is a provider of them, which knows
   nothing of Hosts (`machines/fly.rs`, Fly's Machines API; one app, a volume per machine at

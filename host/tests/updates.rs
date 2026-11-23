@@ -179,6 +179,8 @@ impl World {
             retired: Vec::new(),
             dispatcher: None,
             ssh: Some(Arc::new(weave_host::remotes::AsWritten)),
+            git_credentials_socket: None,
+            git_credential_helper: None,
         })
     }
 

@@ -202,6 +202,7 @@ mod tests {
             name: name.to_owned(),
             kind,
             remote: None,
+            git_credential: None,
             locations: locations
                 .iter()
                 .map(|(host_id, path)| ProjectLocation {

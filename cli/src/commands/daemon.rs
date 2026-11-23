@@ -183,6 +183,13 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
             tracing::warn!(%error, socket = %terminal_socket.display(), "local terminal streams aren't served");
         }
     });
+    let git_creds = daemon.clone();
+    let git_socket = paths.git_credentials_socket();
+    tokio::spawn(async move {
+        if let Err(error) = git_creds.serve_git_credentials(&git_socket).await {
+            tracing::warn!(%error, socket = %git_socket.display(), "local git credentials aren't served");
+        }
+    });
     daemon.serve(listening.listener, idle_exit).await;
     let _ = std::fs::remove_file(&paths.socket);
     tracing::info!("weave Host stopped");

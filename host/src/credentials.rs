@@ -1,10 +1,11 @@
 //! The person's credentials as this Host holds them (ADR 0036, WVE-239): what the Dispatcher it
 //! joined gave it with `credentials/sync`, each a copy that can't be renewed.
 //!
-//! A credential is used one of two ways. One for an agent's environment is added to what the
+//! A credential is used one of three ways. One for an agent's environment is added to what the
 //! agent's process starts with, which is never written to disk. One that is a file is written
 //! under the person's home, readable by them only, where the program it is for reads its own
-//! sign-in; a set that leaves it out removes the file.
+//! sign-in; a set that leaves it out removes the file. One for git is scoped to a single HTTPS
+//! repository remote and answered only through the Host's local git credential helper socket.
 //!
 //! The Host keeps the set so agents start while the Dispatcher is away: sealed in
 //! `credentials.sealed`, beside its other records, under a key in `credentials.key` that only
@@ -127,6 +128,19 @@ impl Credentials {
                         )));
                     }
                 }
+                CredentialUse::Git { remote, username } => {
+                    let valid = normalize_stored_remote(remote).is_some()
+                        && !username.is_empty()
+                        && !username.chars().any(char::is_control)
+                        && !credential.value.is_empty()
+                        && !credential.value.chars().any(char::is_control);
+                    if !valid {
+                        return Err(invalid(format!(
+                            "credential {} isn't a valid git remote credential",
+                            credential.name
+                        )));
+                    }
+                }
             }
         }
         let mut held = lock(&self.held);
@@ -170,6 +184,49 @@ impl Credentials {
             .collect()
     }
 
+    /// The `(username, token)` held for the HTTPS git repository at `host`/`path`, if one is
+    /// still good at `now`. Matches only that exact repository (ignoring case and trailing `.git`).
+    pub(crate) fn git_for(
+        &self,
+        host: &str,
+        path: &str,
+        now: Timestamp,
+    ) -> Option<(String, String)> {
+        let wanted = normalize_remote(host, path)?;
+        lock(&self.held)
+            .iter()
+            .filter(|credential| credential.expires_at.is_none_or(|expires| expires > now))
+            .find_map(|credential| match &credential.used {
+                CredentialUse::Git { remote, username }
+                    if normalize_stored_remote(remote)
+                        .is_some_and(|held| held.eq_ignore_ascii_case(&wanted)) =>
+                {
+                    Some((username.clone(), credential.value.clone()))
+                }
+                _ => None,
+            })
+    }
+
+    /// Normalized remotes (`host/owner/repo`) of non-expired git credentials held at `now`,
+    /// deduplicated in order.
+    pub(crate) fn git_remotes(&self, now: Timestamp) -> Vec<String> {
+        let mut remotes = Vec::new();
+        for credential in lock(&self.held).iter() {
+            if credential.expires_at.is_some_and(|expires| expires <= now) {
+                continue;
+            }
+            if let CredentialUse::Git { remote, .. } = &credential.used
+                && let Some(normalized) = normalize_stored_remote(remote)
+                && !remotes
+                    .iter()
+                    .any(|existing: &String| existing.eq_ignore_ascii_case(&normalized))
+            {
+                remotes.push(normalized);
+            }
+        }
+        remotes
+    }
+
     /// The names of the credentials it holds, in the order given.
     pub(crate) fn names(&self) -> Vec<String> {
         lock(&self.held)
@@ -177,6 +234,44 @@ impl Credentials {
             .map(|credential| credential.name.clone())
             .collect()
     }
+}
+
+/// Normalize a `(host, path)` pair from git's credential protocol into `host/path`, stripping
+/// the default HTTPS port `:443`, leading/trailing slashes, and a trailing `.git`.
+pub(crate) fn normalize_remote(host: &str, path: &str) -> Option<String> {
+    if host.is_empty()
+        || path.is_empty()
+        || host.chars().any(|c| c.is_control() || c.is_whitespace())
+        || path.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return None;
+    }
+    let host = host
+        .strip_suffix(":443")
+        .unwrap_or(host)
+        .to_ascii_lowercase();
+    if host.is_empty() || host.contains('/') {
+        return None;
+    }
+    let mut path = path.trim_matches('/');
+    if path.len() >= 4 && path[path.len() - 4..].eq_ignore_ascii_case(".git") {
+        path = &path[..path.len() - 4];
+    }
+    let path = path.trim_matches('/');
+    if path.is_empty()
+        || path
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "..")
+    {
+        return None;
+    }
+    Some(format!("{host}/{path}"))
+}
+
+/// Normalize a stored Project remote (`host/owner/repo`).
+fn normalize_stored_remote(remote: &str) -> Option<String> {
+    let (host, path) = remote.split_once('/')?;
+    normalize_remote(host, path)
 }
 
 fn sealed_path(dir: &Path) -> PathBuf {
@@ -372,5 +467,105 @@ mod tests {
         std::fs::remove_file(key_path(dir.path())).expect("its key");
         let lost = Credentials::load(Some(dir.path().to_path_buf()), home.path().to_path_buf());
         assert_eq!(lost.names(), Vec::<String>::new());
+    }
+
+    fn git(
+        name: &str,
+        remote: &str,
+        username: &str,
+        value: &str,
+        expires_at: Option<u64>,
+    ) -> HeldCredential {
+        HeldCredential {
+            name: name.to_owned(),
+            used: CredentialUse::Git {
+                remote: remote.to_owned(),
+                username: username.to_owned(),
+            },
+            value: value.to_owned(),
+            expires_at,
+        }
+    }
+
+    #[test]
+    fn a_git_credential_matches_only_its_repository_until_it_expires() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let credentials =
+            Credentials::load(Some(dir.path().to_path_buf()), home.path().to_path_buf());
+        credentials
+            .sync(vec![
+                git(
+                    "git:p-1:personal",
+                    "github.com/j/odin",
+                    "x-access-token",
+                    "tok-personal",
+                    Some(5_000),
+                ),
+                git(
+                    "git:p-2:work",
+                    "github.com/acme/portal",
+                    "x-access-token",
+                    "tok-work",
+                    Some(10_000),
+                ),
+            ])
+            .expect("held");
+
+        // Exact repo, with .git suffix, port :443, and different casing.
+        assert_eq!(
+            credentials.git_for("github.com", "j/odin", 1_000),
+            Some(("x-access-token".to_owned(), "tok-personal".to_owned()))
+        );
+        assert_eq!(
+            credentials.git_for("GitHub.com:443", "/j/ODIN.git", 1_000),
+            Some(("x-access-token".to_owned(), "tok-personal".to_owned()))
+        );
+        assert_eq!(
+            credentials.git_for("github.com", "acme/portal.git", 1_000),
+            Some(("x-access-token".to_owned(), "tok-work".to_owned()))
+        );
+        // Another repo on the same host gets nothing.
+        assert_eq!(
+            credentials.git_for("github.com", "j/other.git", 1_000),
+            None
+        );
+        assert_eq!(credentials.git_for("github.com", "j/odin-2", 1_000), None);
+        // Expired git credential stops being handed out.
+        assert_eq!(credentials.git_for("github.com", "j/odin", 5_000), None);
+        assert_eq!(
+            credentials.git_remotes(1_000),
+            vec![
+                "github.com/j/odin".to_owned(),
+                "github.com/acme/portal".to_owned(),
+            ]
+        );
+        assert_eq!(
+            credentials.git_remotes(5_000),
+            vec!["github.com/acme/portal".to_owned()]
+        );
+
+        // Reloading from sealed storage preserves git credentials without leaking plaintext.
+        let sealed = std::fs::read(sealed_path(dir.path())).expect("sealed");
+        assert!(!sealed.windows(b"tok-work".len()).any(|w| w == b"tok-work"));
+        let again = Credentials::load(Some(dir.path().to_path_buf()), home.path().to_path_buf());
+        assert_eq!(
+            again.git_for("github.com", "acme/portal", 1_000),
+            Some(("x-access-token".to_owned(), "tok-work".to_owned()))
+        );
+    }
+
+    #[test]
+    fn invalid_git_credentials_are_refused() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let credentials = Credentials::load(None, home.path().to_path_buf());
+        for bad in [
+            git("bad-remote", "github.com", "u", "tok", None),
+            git("traversal", "github.com/a/../b", "u", "tok", None),
+            git("newline-val", "github.com/j/odin", "u", "tok\nextra", None),
+            git("empty-user", "github.com/j/odin", "", "tok", None),
+        ] {
+            assert!(credentials.sync(vec![bad]).is_err());
+        }
     }
 }

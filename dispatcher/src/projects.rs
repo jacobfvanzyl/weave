@@ -8,6 +8,7 @@
 //! repository through its open threads (WVE-213, [`crate::link`]).
 
 use std::path::Path;
+use std::sync::Arc;
 
 use agent_client_protocol::Error;
 use weave_host_protocol::dispatcher::AddProjectRequest;
@@ -34,40 +35,62 @@ impl Shared {
             .ok_or_else(|| invalid(format!("there's no Project {by}")))
     }
 
-    pub(crate) fn add_project(&self, request: AddProjectRequest) -> Result<Project, Error> {
+    pub(crate) fn add_project(
+        self: &Arc<Self>,
+        request: AddProjectRequest,
+    ) -> Result<Project, Error> {
         let project = self
             .store
-            .add_project(&request.name, &request.location)
+            .add_project(
+                &request.name,
+                &request.location,
+                request.git_credential.as_deref(),
+            )
             .map_err(refused)?;
         tracing::info!(project = %project.name, kind = project.kind.name(), "added a Project");
+        if project.git_credential.is_some() {
+            self.sync_credentials();
+            self.credentials_changed.notify_one();
+        }
         Ok(project)
     }
 
-    pub(crate) fn update_project(&self, request: UpdateProjectRequest) -> Result<Project, Error> {
+    pub(crate) fn update_project(
+        self: &Arc<Self>,
+        request: UpdateProjectRequest,
+    ) -> Result<Project, Error> {
         let change = Change {
             name: request.name,
             remove_host: request.remove_host,
             add: request.add,
+            git_credential: request.git_credential,
         };
         let project = self
             .store
             .update_project(&request.project, change)
             .map_err(refused)?;
         tracing::info!(project = %project.name, "changed a Project");
+        self.sync_credentials();
+        self.credentials_changed.notify_one();
         Ok(project)
     }
 
     /// Note the remote `host`, a Host that resolves remotes (WVE-213), reports for the
     /// repository at `repo` there, which a git Project located there follows
     /// ([`crate::store::Store::reported_remote`]).
-    pub(crate) fn reported_remote(&self, host: &StoredHost, repo: &Path, remote: &str) {
+    pub(crate) fn reported_remote(self: &Arc<Self>, host: &StoredHost, repo: &Path, remote: &str) {
         match self.store.reported_remote(&host.host_id, repo, remote) {
-            Ok(Some(project)) => tracing::info!(
-                project = %project.name,
-                host = %host.host_id,
-                remote,
-                "a Project's remote is now what a Host it's on reports"
-            ),
+            Ok(Some(project)) => {
+                tracing::info!(
+                    project = %project.name,
+                    host = %host.host_id,
+                    remote,
+                    "a Project's remote is now what a Host it's on reports"
+                );
+                if project.git_credential.is_some() {
+                    self.sync_credentials();
+                }
+            }
             Ok(None) => {}
             Err(why) => {
                 tracing::warn!(host = %host.host_id, %why, "noting a repository's remote failed")
@@ -75,9 +98,13 @@ impl Shared {
         }
     }
 
-    pub(crate) fn remove_project(&self, by: &str) -> Result<(), Error> {
+    pub(crate) fn remove_project(self: &Arc<Self>, by: &str) -> Result<(), Error> {
         let project = self.store.remove_project(by).map_err(refused)?;
         tracing::info!(project = %project.name, "removed a Project");
+        if project.git_credential.is_some() {
+            self.sync_credentials();
+            self.credentials_changed.notify_one();
+        }
         Ok(())
     }
 }

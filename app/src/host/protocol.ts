@@ -834,6 +834,11 @@ export type CredentialUse =
   | {
       path: string;
       type: "file";
+    }
+  | {
+      remote: string;
+      username: string;
+      type: "git";
     };
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -8258,6 +8263,11 @@ export interface Project {
    */
   remote?: string | null;
   /**
+   * The name of the token credential whose git token this Project's Hosts get for `remote`
+   * (ADR 0036); absent when none is attached.
+   */
+  gitCredential?: string | null;
+  /**
    * At most one for each Host, in the order they were added. Empty once every Host it was on
    * has been removed from the Dispatcher.
    */
@@ -8311,6 +8321,10 @@ export interface ProjectResponse {
 export interface AddProjectRequest {
   name: string;
   location: NewLocation;
+  /**
+   * Attach this token credential for git HTTPS access to the Project's remote (ADR 0036).
+   */
+  gitCredential?: string | null;
 }
 /**
  * A directory to make a location of a Project, as its Host's `worktrees/list` placed it: a
@@ -8336,11 +8350,12 @@ export interface NewLocation {
   remote?: string | null;
 }
 /**
- * `projects/update`: rename a Project, remove its location on one Host, and add one, in that
- * order and all or none. A location added is refused when it's another kind than the
- * Project's, a repository whose remote isn't the Project's, or on a Host where the Project
- * has a location still: one at the same path again changes nothing. A git Project without a
- * remote takes the remote of a location added with one.
+ * `projects/update`: rename a Project, remove its location on one Host, add one, and attach
+ * or detach its git credential, in that order and all or none. A location added is refused
+ * when it's another kind than the Project's, a repository whose remote isn't the Project's,
+ * or on a Host where the Project has a location still: one at the same path again changes
+ * nothing. A git Project without a remote takes the remote of a location added with one.
+ * `gitCredential` is cleared with `null`.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "UpdateProjectRequest".
@@ -8362,6 +8377,11 @@ export interface UpdateProjectRequest {
    * Add this location.
    */
   add?: NewLocation | null;
+  /**
+   * Attach a token credential for git HTTPS access to the Project's remote, or `null` to
+   * detach it (ADR 0036).
+   */
+  gitCredential?: string | null;
 }
 /**
  * `projects/remove`: forget a Project, by id or name, and all its locations. What's in its

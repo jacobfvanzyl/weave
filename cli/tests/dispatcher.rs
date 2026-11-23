@@ -1736,3 +1736,154 @@ fn a_bots_home_keeps_what_was_there() {
     let listed = weave(true, &["bots"]);
     assert!(!said(&listed).contains("inner"), "{}", said(&listed));
 }
+
+/// End-to-end git credential flow (ADR 0036, WVE-239): set a token credential, attach it to a
+/// git Project via `weave projects update --git-credential`, and verify that real `git credential
+/// fill` invokes `weave git-credential get` against the Host's `git-credentials.sock`, beats a
+/// global helper only for that Project's remote, and stops returning the token once detached.
+#[test]
+fn git_credential_helper_authenticates_only_the_projects_remote() {
+    use std::collections::BTreeMap;
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let mut world = World::new();
+    world.start_host();
+    // Connect the CLI and join this computer's Host to the Dispatcher.
+    let (url, code) = world.offer();
+    let connected = world.weave(&[
+        "dispatcher",
+        "connect",
+        &url,
+        &code,
+        "--name",
+        "laptop",
+        "--host",
+    ]);
+    assert!(connected.status.success(), "{}", said(&connected));
+    let host = world.host.as_ref().expect("host").clone();
+    let git_socket = world.dir.path().join("here/host/git-credentials.sock");
+    let server_socket = git_socket.clone();
+    let server_host = host.clone();
+    world.runtime.spawn(async move {
+        let _ = server_host.serve_git_credentials(&server_socket).await;
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !git_socket.exists() {
+        assert!(std::time::Instant::now() < deadline, "git socket bound");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    // Unlock credentials and store a token via the CLI.
+    let run_with_stdin = |args: &[&str], input: &str| {
+        let mut child = world
+            .command(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn weave");
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(input.as_bytes())
+            .expect("write stdin");
+        let output = child.wait_with_output().expect("wait");
+        assert!(output.status.success(), "{args:?}: {}", said(&output));
+        output
+    };
+    run_with_stdin(&["credentials", "unlock"], "correct horse battery staple\n");
+    run_with_stdin(&["credentials", "set", "personal-git"], "ghp_e2e_secret\n");
+
+    // Register a git repository as a Project and attach `personal-git`.
+    let repo = world.home().join("code/odin");
+    repository(&repo, "https://github.com/j/odin.git");
+    let added = world
+        .command(&["projects", "add"])
+        .current_dir(&repo)
+        .output()
+        .expect("projects add");
+    assert!(added.status.success(), "{}", said(&added));
+    let updated = world.weave(&[
+        "projects",
+        "update",
+        "odin",
+        "--git-credential",
+        "personal-git",
+    ]);
+    assert!(updated.status.success(), "{}", said(&updated));
+    let shown = world.weave(&["projects", "show", "odin"]);
+    assert!(
+        said(&shown).contains("git credential personal-git"),
+        "{}",
+        said(&shown)
+    );
+
+    // Wait until the Host has synced the git credential.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while host.git_credential("github.com", "j/odin").is_none() {
+        assert!(std::time::Instant::now() < deadline, "Host received token");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // Configure a decoy global git config with a fallback helper returning `global-user`/`global-pass`.
+    let global_cfg = world.dir.path().join("gitconfig");
+    std::fs::write(
+        &global_cfg,
+        "[credential]\n\thelper = \"!f() { echo username=global-user; echo password=global-pass; }; f\"\n",
+    )
+    .expect("gitconfig");
+
+    let mut env = BTreeMap::new();
+    weave_host::git_credentials::apply_environment(
+        &mut env,
+        &git_socket,
+        std::path::Path::new(env!("CARGO_BIN_EXE_weave")),
+        &["github.com/j/odin".to_owned()],
+    );
+
+    let git_fill = |url: &str| {
+        let mut child = Command::new("git")
+            .args(["credential", "fill"])
+            .env("GIT_CONFIG_GLOBAL", &global_cfg)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .envs(&env)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn git");
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(format!("url={url}\n\n").as_bytes())
+            .expect("write url");
+        let output = child.wait_with_output().expect("git fill");
+        assert!(output.status.success(), "{url}: {}", said(&output));
+        String::from_utf8(output.stdout).expect("utf8")
+    };
+
+    // Project's remote uses the Host's scoped token, overriding the global helper.
+    let odin = git_fill("https://github.com/j/odin.git");
+    assert!(odin.contains("username=x-access-token\n"), "{odin}");
+    assert!(odin.contains("password=ghp_e2e_secret\n"), "{odin}");
+    assert!(!odin.contains("global-pass"), "{odin}");
+
+    // Another repo on github.com is untouched and still uses the global helper.
+    let other = git_fill("https://github.com/j/other.git");
+    assert!(other.contains("username=global-user\n"), "{other}");
+    assert!(other.contains("password=global-pass\n"), "{other}");
+    assert!(!other.contains("ghp_e2e_secret"), "{other}");
+
+    // Clearing the Project's git credential drops it from the Host.
+    let cleared = world.weave(&["projects", "update", "odin", "--clear-git-credential"]);
+    assert!(cleared.status.success(), "{}", said(&cleared));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while host.git_credential("github.com", "j/odin").is_some() {
+        assert!(std::time::Instant::now() < deadline, "Host dropped token");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

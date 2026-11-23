@@ -410,7 +410,7 @@ async fn follow(
 /// it; another's is as the Host read it while the thread was open, perhaps before it resolved
 /// remotes.
 fn remotes(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     host: &StoredHost,
     reported: &mut HashMap<PathBuf, String>,
     listing: &ThreadListing,

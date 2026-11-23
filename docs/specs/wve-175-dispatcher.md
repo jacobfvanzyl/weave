@@ -471,7 +471,13 @@ Dispatcher keeps them, and says so with the `credentials` feature.
   - `codex`'s is Codex's `auth.json`. A Host gets the file at `.codex/auth.json` with a
     placeholder where the renewal token was, expiring when its access token does.
   - A sign-in for any other agent is refused, and one that isn't that agent's file.
-  - Tokens aren't given yet.
+  - A `token` attaches to a git Project by name (`Project.gitCredential`, set on `projects/add`
+    or `projects/update`, cleared with `gitCredential: null` or when the credential is removed).
+    Each Host receives a Project's token only when the Project has a location on that Host and a
+    remote, scoped to that exact remote (`CredentialUse::Git { remote, username }`) with a 7-day
+    cache lifetime; while unlocked, the Dispatcher refreshes connected Hosts daily so their
+    cached tokens stay valid, and drops them immediately when a Host location, Project or
+    credential is removed.
 - **Sign-ins stay fresh.** While unlocked, the Dispatcher watches each sign-in's `expiresAt`
   and renews it before expiry (1 hour before for `claude`, 24 hours before for `codex`) by
   running the vendor's unmodified program in a private temporary directory inside its own state
@@ -483,7 +489,7 @@ Dispatcher keeps them, and says so with the `credentials` feature.
   (1m, 5m, 15m, 1h). `credentials/renew` runs the same renewal on demand, and `weave
   credentials login <agent>` runs the vendor's sign-in program interactively in a private
   temporary directory and sends the resulting file to the Dispatcher.
-- **Not yet:** git credentials by Project; and changing the passphrase.
+- **Not yet:** changing the passphrase.
 
 ## Bots
 
@@ -964,6 +970,7 @@ type Project = {
   id: string; name: string;
   kind: "git" | "directory";
   remote?: string;            // a git Project's repository's remote: "github.com/owner/name"
+  gitCredential?: string;     // name of a token credential in `weave credentials` for this git Project
   locations: {hostId: string; path: string}[];   // at most one per Host, as they were added
   createdAt: number; updatedAt: number;
 };
@@ -976,18 +983,20 @@ By name. Only with the `projects` feature, as are the rest.
 
 By id or name, ignoring case; invalid params, "there's no Project …", for none.
 
-**`projects/add`** `{name, location: NewLocation}` → `{project}`
+**`projects/add`** `{name, location: NewLocation, gitCredential?}` → `{project}`
 
 A new Project of the kind its first location is. Invalid params, saying why, for an empty name or
 one of more than one line, a name another Project has ignoring case, a Host that hasn't joined,
-a path that isn't whole, or a location another Project has.
+a path that isn't whole, a location another Project has, or a `gitCredential` on a directory
+Project or naming no `token` credential.
 
-**`projects/update`** `{project, name?, removeHost?, add?: NewLocation}` → `{project}`
+**`projects/update`** `{project, name?, removeHost?, add?: NewLocation, gitCredential?: string | null}` → `{project}`
 
-In that order, all or none: renames it, removes its location on a Host (by id or name), and adds
-one. Adding is refused for a location of another kind, a repository with another remote, or a
-Host it has a location on still (removing that one in the same request moves it); the same
-location again changes nothing. `updatedAt` moves when anything changed.
+In that order, all or none: renames it, removes its location on a Host (by id or name), adds
+one, and sets or clears (`null`) its `gitCredential`. Adding is refused for a location of another
+kind, a repository with another remote, or a Host it has a location on still (removing that one
+in the same request moves it); the same location again changes nothing. `updatedAt` moves when
+anything changed, and connected Hosts' credentials are synced.
 
 **`projects/remove`** `{project}` → `{}`
 

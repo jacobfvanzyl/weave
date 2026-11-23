@@ -1336,6 +1336,7 @@ async fn an_agent_works_in_a_project_by_name_on_whichever_host_has_it() {
         .add_project(AddProjectRequest {
             name: "Odin".to_owned(),
             location: location(&a_id, &odin_here, remote),
+            git_credential: None,
         })
         .expect("Odin");
     running
@@ -1345,6 +1346,7 @@ async fn an_agent_works_in_a_project_by_name_on_whichever_host_has_it() {
             name: None,
             remove_host: None,
             add: Some(location(&b_id, &odin_there, remote)),
+            git_credential: None,
         })
         .expect("Odin on studio");
     running
@@ -1352,6 +1354,7 @@ async fn an_agent_works_in_a_project_by_name_on_whichever_host_has_it() {
         .add_project(AddProjectRequest {
             name: "notes".to_owned(),
             location: location(&b_id, &notes, None),
+            git_credential: None,
         })
         .expect("notes");
 
@@ -1549,6 +1552,7 @@ async fn a_project_replaces_the_path_guess_on_another_host() {
         .add_project(AddProjectRequest {
             name: "Odin".to_owned(),
             location: location(&a_id, &odin_here, remote),
+            git_credential: None,
         })
         .expect("Odin");
     running
@@ -1558,6 +1562,7 @@ async fn a_project_replaces_the_path_guess_on_another_host() {
             name: None,
             remove_host: None,
             add: Some(location(&b_id, &odin_there, remote)),
+            git_credential: None,
         })
         .expect("Odin on studio");
 
@@ -1584,6 +1589,7 @@ async fn a_project_replaces_the_path_guess_on_another_host() {
         .add_project(AddProjectRequest {
             name: "solo".to_owned(),
             location: location(&a_id, &solo, None),
+            git_credential: None,
         })
         .expect("solo");
     let alone = new_thread(&a_local, &solo).await;

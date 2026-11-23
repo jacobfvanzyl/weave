@@ -29,6 +29,10 @@ const BACKOFF_MS: [u64; 4] = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 
 /// Fallback wake interval while unlocked when no sign-in has a known expiry.
 const IDLE_WAIT_MS: u64 = 60 * 60 * 1000;
 
+/// How often connected Hosts receive a refreshed 7-day git credential cache while unlocked
+/// (ADR 0036): once a day.
+const GIT_RESYNC_INTERVAL_MS: u64 = 24 * 60 * 60 * 1000;
+
 /// Per-credential renewal retry backoff, held in memory.
 #[derive(Default)]
 pub(crate) struct Backoffs {
@@ -66,18 +70,21 @@ impl Backoffs {
     }
 }
 
-/// Watch every sign-in and renew each before its access token expires, until the Dispatcher
-/// stops. Does nothing while the credentials are locked.
+/// Watch every sign-in and renew each before its access token expires, and refresh connected
+/// Hosts' 7-day git credential cache daily, until the Dispatcher stops. Does nothing while the
+/// credentials are locked.
 pub(crate) async fn run(shared: Arc<Shared>) {
+    let mut next_git_sync: Option<Timestamp> = None;
     loop {
         if !shared.credentials.is_unlocked() {
+            next_git_sync = None;
             tokio::select! {
                 () = shared.credentials_changed.notified() => continue,
                 () = shared.stop.cancelled() => return,
             }
         }
         // Backfill expiry on any sign-in stored before migration 15 while we have the key.
-        let _ = shared.credentials.for_hosts(&shared.store);
+        shared.credentials.backfill_expiries(&shared.store);
 
         let now = shared.config.clock.now();
         let credentials = match shared.store.credentials() {
@@ -141,6 +148,26 @@ pub(crate) async fn run(shared: Arc<Shared>) {
                 }
             }
             continue;
+        }
+
+        let has_git_credentials = shared.store.projects().is_ok_and(|projects| {
+            projects
+                .iter()
+                .any(|project| project.git_credential.is_some())
+        });
+        if has_git_credentials {
+            let due_at =
+                *next_git_sync.get_or_insert_with(|| now.saturating_add(GIT_RESYNC_INTERVAL_MS));
+            if now >= due_at {
+                shared.sync_credentials();
+                let next = now.saturating_add(GIT_RESYNC_INTERVAL_MS);
+                next_git_sync = Some(next);
+                next_wake = Some(next_wake.map_or(next, |cur| cur.min(next)));
+            } else {
+                next_wake = Some(next_wake.map_or(due_at, |cur| cur.min(due_at)));
+            }
+        } else {
+            next_git_sync = None;
         }
 
         let wake = next_wake.unwrap_or_else(|| now.saturating_add(IDLE_WAIT_MS));

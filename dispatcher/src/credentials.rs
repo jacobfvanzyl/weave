@@ -22,11 +22,13 @@ use chacha20poly1305::XChaCha20Poly1305;
 use chacha20poly1305::aead::Aead as _;
 use chacha20poly1305::aead::Payload;
 use weave_host_protocol::Timestamp;
+use weave_host_protocol::credentials::CredentialUse;
 use weave_host_protocol::credentials::HeldCredential;
 use weave_host_protocol::dispatcher::Credential;
 use weave_host_protocol::dispatcher::CredentialKind;
 use weave_host_protocol::dispatcher::CredentialsState;
 use weave_host_protocol::dispatcher::CredentialsStatus;
+use weave_host_protocol::dispatcher::ProjectKind;
 use weave_host_protocol::errors;
 use zeroize::Zeroizing;
 
@@ -39,6 +41,11 @@ use crate::store::credentials::SealedKey;
 
 /// The fewest characters a new passphrase may have.
 pub const SHORTEST_PASSPHRASE: usize = 12;
+/// How long a Host may hold a cached git token before the Dispatcher has to refresh it
+/// (ADR 0036): 7 days. Connected Hosts receive a fresh copy daily while unlocked.
+pub(crate) const GIT_CACHE_LIFETIME_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+/// Username sent to git's credential helper for PATs (works on GitHub, GitLab, Gitea/Forgejo).
+const GIT_USERNAME: &str = "x-access-token";
 /// The longest a credential's name may be, and its value: a sign-in file is a few kilobytes.
 const LONGEST_NAME: usize = 100;
 const LONGEST_VALUE: usize = 256 * 1024;
@@ -353,9 +360,50 @@ impl Credentials {
             .map_err(internal)
     }
 
-    /// The copies a Host holds: each sign-in as its agent's program takes it, unable to renew.
-    /// Tokens aren't given yet: a git credential goes with its Project. None while locked.
-    pub(crate) fn for_hosts(&self, store: &Store) -> Result<Option<Vec<HeldCredential>>, Error> {
+    /// Backfill `expires_at` on any sign-in stored before migration 15 while unlocked.
+    pub(crate) fn backfill_expiries(&self, store: &Store) {
+        let Some(key) = lock(&self.key).clone() else {
+            return;
+        };
+        let Ok(credentials) = store.credentials() else {
+            return;
+        };
+        for credential in credentials {
+            if credential.expires_at.is_some() {
+                continue;
+            }
+            let (CredentialKind::SignIn, Some(agent)) = (credential.kind, &credential.agent) else {
+                continue;
+            };
+            let Ok(Some(kept)) = store.sealed_credential(&credential.name) else {
+                continue;
+            };
+            let Some(plain) = opened(
+                &key,
+                &kept.nonce,
+                &kept.sealed,
+                &binding(&kept.name, kept.kind),
+            )
+            .and_then(|plain| String::from_utf8(plain.to_vec()).ok().map(Zeroizing::new)) else {
+                continue;
+            };
+            if let Ok(copy) = signins::copy(&credential.name, agent, &plain)
+                && let Some(expires_at) = copy.expires_at
+            {
+                let _ = store.set_credential_expiry(&credential.name, expires_at);
+            }
+        }
+    }
+
+    /// The copies `host_id` holds at `now`: every sign-in (unable to renew), plus the git token
+    /// of each git Project located on `host_id` that names one, scoped to that Project's remote
+    /// with a 7-day cache lifetime. None while locked.
+    pub(crate) fn for_host(
+        &self,
+        store: &Store,
+        host_id: &str,
+        now: Timestamp,
+    ) -> Result<Option<Vec<HeldCredential>>, Error> {
         let Some(key) = lock(&self.key).clone() else {
             return Ok(None);
         };
@@ -395,6 +443,58 @@ impl Credentials {
                     tracing::warn!(credential = %credential.name, "a sign-in doesn't open with this key");
                 }
             }
+        }
+        // Git credentials: only for git Projects that have a location on `host_id` and a remote.
+        for project in store.projects().map_err(internal)? {
+            if project.kind != ProjectKind::Git || project.location(host_id).is_none() {
+                continue;
+            }
+            let (Some(remote), Some(cred_name)) = (&project.remote, &project.git_credential) else {
+                continue;
+            };
+            let Some(kept) = store.sealed_credential(cred_name).map_err(internal)? else {
+                continue;
+            };
+            if kept.kind != CredentialKind::Token {
+                tracing::warn!(
+                    project = %project.name,
+                    credential = %cred_name,
+                    "a Project's git credential is no longer a token; skipping"
+                );
+                continue;
+            }
+            let Some(plain) = opened(
+                &key,
+                &kept.nonce,
+                &kept.sealed,
+                &binding(&kept.name, kept.kind),
+            )
+            .and_then(|plain| String::from_utf8(plain.to_vec()).ok().map(Zeroizing::new)) else {
+                tracing::warn!(
+                    project = %project.name,
+                    credential = %cred_name,
+                    "a Project's git credential doesn't open with this key"
+                );
+                continue;
+            };
+            let token = plain.trim_end_matches(['\r', '\n']);
+            if token.is_empty() || token.chars().any(char::is_control) {
+                tracing::warn!(
+                    project = %project.name,
+                    credential = %cred_name,
+                    "a Project's git credential isn't a single-line token; skipping"
+                );
+                continue;
+            }
+            copies.push(HeldCredential {
+                name: format!("git:{}:{cred_name}", project.id),
+                used: CredentialUse::Git {
+                    remote: remote.clone(),
+                    username: GIT_USERNAME.to_owned(),
+                },
+                value: token.to_owned(),
+                expires_at: Some(now.saturating_add(GIT_CACHE_LIFETIME_MS)),
+            });
         }
         Ok(Some(copies))
     }

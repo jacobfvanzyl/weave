@@ -309,8 +309,16 @@ pub async fn command(args: CredentialsArgs) -> anyhow::Result<ExitCode> {
                     })
                     .await;
                 let credential = kept.map_err(said)?.credential;
+                let suffix = match credential.kind {
+                    CredentialKind::Token => format!(
+                        " Attach it to a git Project with `weave projects update <project> \
+                         --git-credential {}`.",
+                        credential.name
+                    ),
+                    CredentialKind::SignIn => " Your Hosts are given it now.".to_owned(),
+                };
                 println!(
-                    "Kept {}, {}{}. Your Hosts are given it now.",
+                    "Kept {}, {}{}.{suffix}",
                     credential.name,
                     kind_of(&credential),
                     expiry_clause(&credential, now_ms()),

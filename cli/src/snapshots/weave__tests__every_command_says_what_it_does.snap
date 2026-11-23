@@ -786,7 +786,7 @@ Commands:
   add     Register a directory as a Project, or as its location on another Host: a repository by its primary worktree, so all its worktrees are in it, or a directory outside one
   show    A Project and where it is on your Hosts
   rename  Rename a Project
-  update  Change a Project: remove its location on one Host
+  update  Change a Project: remove its location on one Host, or set or clear its git credential
   remove  Forget a Project and all its locations. What's in its directories stays
   help    Print this message or the help of the given subcommand(s)
 
@@ -824,6 +824,9 @@ Options:
 
       --host <HOST>
           The Host the directory is on, by its id or name as `weave hosts` lists them, reached through the Dispatcher; this computer's when omitted
+
+      --git-credential <CREDENTIAL>
+          The token credential in `weave credentials` to give Hosts for this git Project's remote
 
       --json
           Print the Project as JSON. It asks nothing: a clone of a repository a Project has on other Hosts needs --to or --name
@@ -867,9 +870,9 @@ Options:
           Print help
 
 $ weave projects update --help
-Change a Project: remove its location on one Host
+Change a Project: remove its location on one Host, or set or clear its git credential
 
-Usage: weave projects update [OPTIONS] --remove-host <HOST> <PROJECT>
+Usage: weave projects update [OPTIONS] <PROJECT>
 
 Arguments:
   <PROJECT>
@@ -878,6 +881,12 @@ Arguments:
 Options:
       --remove-host <HOST>
           Remove its location on this Host, by its id or name. The Project stays, with its other locations
+
+      --git-credential <CREDENTIAL>
+          Attach this token credential in `weave credentials` to a git Project so Hosts where it has a location can authenticate git against its remote
+
+      --clear-git-credential
+          Detach the Project's git credential so Hosts drop it
 
       --json
           Print the Project as JSON
