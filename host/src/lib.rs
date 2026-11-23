@@ -32,6 +32,7 @@
 
 mod admissions;
 mod client;
+mod credentials;
 mod devices;
 mod dispatcher;
 mod files;
@@ -332,6 +333,8 @@ pub(crate) struct Shared {
     pub(crate) devices: devices::Devices,
     /// The Dispatcher the Host joined, and its connection to it (ADR 0030).
     pub(crate) dispatcher: dispatcher::Joined,
+    /// The person's credentials the Dispatcher gave this Host (ADR 0036).
+    pub(crate) credentials: credentials::Credentials,
     /// The connections serving services' tools, and calls waiting on them (WVE-171).
     pub(crate) service_tools: service_tools::ServiceTools,
     pub(crate) updates: updates::Updates,
@@ -538,7 +541,12 @@ impl Shared {
             agent_id: agent.id.clone(),
             spec: agent.spec.clone(),
             cwd: cwd.to_path_buf(),
-            environment: self.config.environment.vars.clone(),
+            environment: {
+                // Over the Host's own environment, and never part of what is journaled.
+                let mut environment = self.config.environment.vars.clone();
+                environment.extend(self.credentials.environment(&agent.id, journal::now_ms()));
+                environment
+            },
             process: Launch::new_process(),
         }
     }
@@ -1259,6 +1267,14 @@ impl Daemon {
         let (stop, _) = watch::channel(false);
         let devices = devices::Devices::load(config.devices.clone());
         let joined = dispatcher::Joined::load(config.dispatcher.clone());
+        // Kept beside the record of the Dispatcher that gave them.
+        let credentials = credentials::Credentials::load(
+            config
+                .dispatcher
+                .as_ref()
+                .and_then(|settings| settings.record.parent().map(Path::to_path_buf)),
+            config.home.clone().unwrap_or_else(client::home),
+        );
         let admissions = Arc::new(admissions::Admissions::load(
             config.journals.as_deref(),
             JOURNAL_RETENTION,
@@ -1294,6 +1310,7 @@ impl Daemon {
                 ),
                 devices,
                 dispatcher: joined,
+                credentials,
                 service_tools: service_tools::ServiceTools::default(),
                 updates: updates::Updates::default(),
                 serve_entry: serve_entry::ServeEntry::new(config.former_serve.take()),
@@ -1440,6 +1457,18 @@ impl Daemon {
         request: weave_host_protocol::dispatcher::JoinDispatcherRequest,
     ) -> Result<weave_host_protocol::dispatcher::JoinedDispatcher, Error> {
         dispatcher::join(&self.shared, request).await
+    }
+
+    /// The names of the credentials the Dispatcher gave this Host (ADR 0036).
+    pub fn credential_names(&self) -> Vec<String> {
+        self.shared.credentials.names()
+    }
+
+    /// What an agent's process would start with from those credentials now.
+    pub fn credential_environment(&self, agent: &str) -> BTreeMap<String, String> {
+        self.shared
+            .credentials
+            .environment(agent, journal::now_ms())
     }
 
     /// The Dispatcher the Host joined, and how its connection stands.

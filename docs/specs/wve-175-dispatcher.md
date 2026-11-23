@@ -448,8 +448,8 @@ The person's credentials (ADR 0036, WVE-239): what lets their agents and git act
 Dispatcher keeps them, and says so with the `credentials` feature.
 
 - **A credential** is a name, a kind and a value. A `token` doesn't change until the person
-  replaces it; a `signIn` is what a vendor's own program wrote when they signed in to it. The
-  API takes a value and never answers one.
+  replaces it; a `signIn` is what a vendor's own program wrote when they signed in to it, and
+  names the `agent` it is for. The API takes a value and never answers one.
 - **At rest** each value is sealed with XChaCha20-Poly1305 under a random data key, bound to its
   name and kind, so one row can't be passed off as another. The data key is sealed under a key
   Argon2id makes from the person's passphrase (64 MiB, three passes), with the cost kept beside
@@ -461,8 +461,20 @@ Dispatcher keeps them, and says so with the `credentials` feature.
   or read (`credentialsLocked`).
 - **A new passphrase** has at least 12 characters. Nothing recovers one: a forgotten
   passphrase means removing the credentials and setting them again.
-- **Not yet:** giving credentials to Hosts, a Host's cache of them, signing in by running a
-  vendor's program, renewing a sign-in, git credentials by Project, and changing the passphrase.
+- **Hosts are given copies that can't renew.** While unlocked, the Dispatcher sends each
+  connected Host with the `credentials` feature the whole set it is to hold
+  (`credentials/sync`, [the Host protocol](wve-85-host-protocol.md#credentials)): when the Host
+  connects, on unlock, and when a credential is set or removed. Locked, it sends nothing and
+  Hosts keep what they hold.
+  - `claude`'s sign-in is Claude Code's `.credentials.json`. A Host gets its access token alone,
+    for the agent's environment as `CLAUDE_CODE_OAUTH_TOKEN`, expiring when the token does.
+  - `codex`'s is Codex's `auth.json`. A Host gets the file at `.codex/auth.json` with a
+    placeholder where the renewal token was, expiring when its access token does.
+  - A sign-in for any other agent is refused, and one that isn't that agent's file.
+  - Tokens aren't given yet.
+- **Not yet:** signing in by running a vendor's program, renewing a sign-in, so one kept today
+  goes stale when its access token dies; git credentials by Project; and changing the
+  passphrase.
 
 ## Bots
 
@@ -987,12 +999,13 @@ characters). A wrong passphrase is `unauthenticated`; one asked for before any i
 
 **`credentials/list`** `{}` → `{credentials}`
 
-Each `{name, kind, createdAt, updatedAt}`, by name, while locked too. Never a value.
+Each `{name, kind, agent?, createdAt, updatedAt}`, by name, while locked too. Never a value.
 
-**`credentials/set`** `{name, kind, value}` → `{credential}`
+**`credentials/set`** `{name, kind, value, agent?}` → `{credential}`
 
 Keeps it in place of one of that name, which keeps its `createdAt`. `credentialsLocked` unless
-unlocked.
+unlocked. A `signIn` names its `agent` and a `token` names none; invalid params otherwise, and
+for an agent the Dispatcher can't give a sign-in to or a value that isn't that agent's file.
 
 **`credentials/remove`** `{name}` → `{}`
 
@@ -1133,7 +1146,7 @@ come before it, and is newer than it.
 | `weave credentials [list] [--json]` | whether the Dispatcher can read its credentials, and each one's name, kind and age; never a value |
 | `weave credentials unlock` | asks for the passphrase without showing it, or reads a line of standard input; the first time, sets it, asking twice at a terminal |
 | `weave credentials lock` | has the Dispatcher forget the key |
-| `weave credentials set <name> [--kind token\|sign-in] [--file F]` | keeps one: its value typed without showing, piped in, or read from F; never an argument |
+| `weave credentials set <name> [--kind token\|sign-in] [--agent A] [--file F]` | keeps one: its value typed without showing, piped in, or read from F; never an argument. A sign-in is for `--agent`, or the agent called `<name>` |
 | `weave credentials remove <name>` | forgets one |
 | `weave --project <p>`, `weave run --project <p>`, `weave schedules add --project <p>` | work in the Project's location on the Host in question: `--host`'s, or this computer's without it (`schedules add` always names one), a git Project's primary worktree. Never another Host's: a Project with no location there is refused, saying where it is and `weave projects add --to <p> [--host <h>] <dir>`. Refused with `--cwd`. While the Dispatcher doesn't answer, it goes by the last list |
 | `weave threads [list] --project <p> [--host <h>]` | only the threads `containing` places in that Project on that Host, the thread's Host id from its hello |

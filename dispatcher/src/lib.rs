@@ -43,6 +43,7 @@ pub mod machines;
 pub mod paths;
 mod projects;
 mod scheduler;
+mod signins;
 pub mod socket;
 mod store;
 mod tools;
@@ -285,15 +286,14 @@ impl Dispatcher {
         &self,
         name: &str,
         kind: CredentialKind,
+        agent: Option<&str>,
         value: &str,
     ) -> Result<Credential, Error> {
-        self.shared
-            .credentials
-            .set(&self.shared.store, name, kind, value)
+        self.shared.set_credential(name, kind, agent, value)
     }
 
     pub fn remove_credential(&self, name: &str) -> Result<(), Error> {
-        credentials::Credentials::remove(&self.shared.store, name)
+        self.shared.remove_credential(name)
     }
 
     /// A credential's kind and value, as a Host is given it: for this process only, never
@@ -460,6 +460,68 @@ impl Shared {
         })
         .await
         .map_err(|error| internal(format!("unlocking the credentials: {error}")))?
+        .inspect(|_| self.sync_credentials())
+    }
+
+    /// Keep a credential, and give the Hosts what they hold again.
+    pub(crate) fn set_credential(
+        self: &Arc<Self>,
+        name: &str,
+        kind: CredentialKind,
+        agent: Option<&str>,
+        value: &str,
+    ) -> Result<Credential, Error> {
+        let kept = self
+            .credentials
+            .set(&self.store, name, kind, agent, value)?;
+        self.sync_credentials();
+        Ok(kept)
+    }
+
+    /// Forget a credential, and have the Hosts drop it.
+    pub(crate) fn remove_credential(self: &Arc<Self>, name: &str) -> Result<(), Error> {
+        credentials::Credentials::remove(&self.store, name)?;
+        self.sync_credentials();
+        Ok(())
+    }
+
+    /// Give every connected Host the credentials it is to hold, in place of those it held
+    /// (`credentials/sync`). Nothing is sent while locked: Hosts keep what they have.
+    pub(crate) fn sync_credentials(self: &Arc<Self>) {
+        let handles: Vec<(String, HostHandle)> = lock(&self.links)
+            .iter()
+            .filter_map(|(host_id, link)| Some((host_id.clone(), link.seen().handle?)))
+            .collect();
+        for (host_id, handle) in handles {
+            let shared = Arc::clone(self);
+            tokio::spawn(async move { shared.sync_credentials_to(&host_id, &handle).await });
+        }
+    }
+
+    /// [`Self::sync_credentials`], for one Host, as its link does when it connects.
+    pub(crate) async fn sync_credentials_to(&self, host_id: &str, handle: &HostHandle) {
+        let takes = handle
+            .hello()
+            .features
+            .iter()
+            .any(|feature| feature == weave_host_protocol::credentials::FEATURE);
+        if !takes {
+            return;
+        }
+        let credentials = match self.credentials.for_hosts(&self.store) {
+            Ok(Some(credentials)) => credentials,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(host = %host_id, error = %error.message, "couldn't read the credentials to give a Host");
+                return;
+            }
+        };
+        let sent = handle
+            .send(weave_host_protocol::credentials::SyncCredentialsRequest { credentials })
+            .await;
+        if let Err(error) = sent {
+            tracing::warn!(host = %host_id, error = %error.message, "a Host didn't take its credentials");
+        }
     }
 
     /// Send `host_id` the work written down for it, if it's connected.

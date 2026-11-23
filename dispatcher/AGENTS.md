@@ -257,6 +257,14 @@ keys both ways, removal, a Host paired before Hosts joined, and one joining over
   and is never answered to a client: the API has no method that returns one, and the two
   requests that carry a secret print without it. Never log a passphrase or a value, and never
   add one to a delivery, a journal or a trace. Tests pass a cheap `credential_cost`.
+  The fourteenth migration added `agent`, the agent a sign-in is for. `signins.rs` is the one
+  place that knows a vendor's sign-in file: `copy` makes what a Host holds of one, Claude Code's
+  access token for the agent's environment and Codex's `auth.json` with a placeholder for its
+  renewal token, each expiring with its access token, and `set` refuses a sign-in `copy` can't
+  make. `Credentials::for_hosts` makes every copy while unlocked, and
+  `Shared::sync_credentials` sends the set to each connected Host with the `credentials`
+  feature (`credentials/sync`): from a Host's link as it connects (`sync_credentials_to`), and
+  after an unlock, a set or a remove. Locked, nothing is sent.
 - `machines.rs`, `machines/` (WVE-238, a spike behind the `machines` cargo feature, off by
   default): computers for Hosts, made in the cloud. `Machines` is a provider of them, which knows
   nothing of Hosts (`machines/fly.rs`, Fly's Machines API; one app, a volume per machine at

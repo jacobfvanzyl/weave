@@ -34,6 +34,7 @@
 //! `docs/specs/wve-90-remote-clients.md`.
 
 pub mod agents;
+pub mod credentials;
 pub mod devices;
 pub mod dispatcher;
 pub mod errors;

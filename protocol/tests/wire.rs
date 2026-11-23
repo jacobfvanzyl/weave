@@ -3133,6 +3133,7 @@ fn credentials_wire_shapes() {
     let credential = Credential {
         name: "claude".to_owned(),
         kind: CredentialKind::SignIn,
+        agent: Some("claude".to_owned()),
         created_at: 1_795_300_000_000,
         updated_at: 1_795_380_000_000,
     };
@@ -3156,6 +3157,31 @@ fn credentials_wire_shapes() {
             name: "claude".to_owned(),
             kind: CredentialKind::SignIn,
             value: "{\"claudeAiOauth\":{}}".to_owned(),
+            agent: Some("claude".to_owned()),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "sync_credentials_request",
+        message(&weave_host_protocol::credentials::SyncCredentialsRequest {
+            credentials: vec![
+                weave_host_protocol::credentials::HeldCredential {
+                    name: "claude".to_owned(),
+                    used: weave_host_protocol::credentials::CredentialUse::Environment {
+                        agent: "claude".to_owned(),
+                        variable: "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
+                    },
+                    value: "an access token".to_owned(),
+                    expires_at: Some(1_795_400_000_000),
+                },
+                weave_host_protocol::credentials::HeldCredential {
+                    name: "codex".to_owned(),
+                    used: weave_host_protocol::credentials::CredentialUse::File {
+                        path: ".codex/auth.json".to_owned(),
+                    },
+                    value: "{}".to_owned(),
+                    expires_at: None,
+                },
+            ],
         })
     );
     insta::assert_json_snapshot!(

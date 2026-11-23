@@ -820,6 +820,22 @@ export type FilesMade =
       state: "uncommitted";
     };
 /**
+ * How a Host gives a credential to what uses it.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "CredentialUse".
+ */
+export type CredentialUse =
+  | {
+      agent: string;
+      variable: string;
+      type: "environment";
+    }
+  | {
+      path: string;
+      type: "file";
+    };
+/**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ProgramState".
  */
@@ -5579,6 +5595,35 @@ export interface InitRepositoryResponse {
   files?: FilesMade | null;
 }
 /**
+ * `credentials/sync`: every credential the Host is to hold, in place of those it held. One
+ * left out is dropped, and a file it was kept in removed. Refused for any client but the
+ * Dispatcher the Host joined ([`crate::errors::FORBIDDEN`]).
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SyncCredentialsRequest".
+ */
+export interface SyncCredentialsRequest {
+  credentials: HeldCredential[];
+}
+/**
+ * A credential for a Host to hold.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "HeldCredential".
+ */
+export interface HeldCredential {
+  /**
+   * What the Dispatcher calls it.
+   */
+  name: string;
+  use: CredentialUse;
+  value: string;
+  /**
+   * When the Host stops giving it out, if the Dispatcher hasn't sent it again by then.
+   */
+  expiresAt?: number | null;
+}
+/**
  * `terminals/list`: the terminals of the scope `directory` is in, oldest first.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -8816,6 +8861,10 @@ export interface ListCredentialsResponse {
 export interface Credential {
   name: string;
   kind: CredentialKind;
+  /**
+   * The agent a sign-in is for, by its id.
+   */
+  agent?: string | null;
   createdAt: number;
   /**
    * When its value was last set.
@@ -8825,7 +8874,9 @@ export interface Credential {
 /**
  * `credentials/set`: keep a credential under `name`, replacing the value and kind of one
  * already there. [`crate::errors::CREDENTIALS_LOCKED`] unless unlocked. The value is never
- * answered back or logged.
+ * answered back or logged. A sign-in names the agent it is for, and is the file that agent's
+ * own program wrote when the person signed in: invalid params for an agent the Dispatcher
+ * can't give a sign-in to, or a file that isn't that agent's.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SetCredentialRequest".
@@ -8834,6 +8885,7 @@ export interface SetCredentialRequest {
   name: string;
   kind: CredentialKind;
   value: string;
+  agent?: string | null;
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -9010,6 +9062,7 @@ export const HOST_PROTOCOL = {
     "rename": "thread/rename",
     "worktrees": "worktrees",
     "reposInit": "repos_init",
+    "credentials": "credentials",
     "queue": "queue",
     "getThread": "threads/get",
     "requestKeys": "requestKeys",
@@ -9102,6 +9155,7 @@ export interface HostRequests {
   "worktrees/remove": { params: RemoveWorktreeRequest; result: RemoveWorktreeResponse };
   "worktrees/release": { params: ReleaseWorktreeRequest; result: ReleaseWorktreeResponse };
   "repos/init": { params: InitRepositoryRequest; result: InitRepositoryResponse };
+  "credentials/sync": { params: SyncCredentialsRequest; result: Empty };
   "terminals/list": { params: ListTerminalsRequest; result: TerminalsResponse };
   "terminals/watch": { params: WatchTerminalsRequest; result: TerminalsResponse };
   "terminals/unwatch": { params: UnwatchTerminalsRequest; result: Empty };

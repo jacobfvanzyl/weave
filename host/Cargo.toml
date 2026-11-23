@@ -20,6 +20,7 @@ weave-remote = { workspace = true }
 agent-client-protocol = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
+chacha20poly1305 = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
 p256 = { workspace = true }

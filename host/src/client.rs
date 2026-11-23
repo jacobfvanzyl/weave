@@ -60,6 +60,8 @@ use weave_host_protocol::agents::TerminalSignInResponse;
 use weave_host_protocol::agents::UPDATES_FEATURE;
 use weave_host_protocol::agents::UpdateAgentRequest;
 use weave_host_protocol::agents::UpdateAgentResponse;
+use weave_host_protocol::credentials::FEATURE as CREDENTIALS_FEATURE;
+use weave_host_protocol::credentials::SyncCredentialsRequest;
 use weave_host_protocol::devices::DeviceInfo;
 use weave_host_protocol::dispatcher::CARRY_FEATURE;
 use weave_host_protocol::dispatcher::CarryRequest;
@@ -503,6 +505,10 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            answer!(connection, sync_credentials),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             answer!(connection, list_terminals),
             agent_client_protocol::on_receive_request!(),
         )
@@ -786,7 +792,7 @@ async fn handlers(
 /// Hosts for this Host's agents (ADR 0029) need; carrying the person's devices' connections,
 /// which only the Dispatcher the Host joined may ask (ADR 0030); and making a Bot's home, a
 /// repository of its own (`repos/init`, WVE-178).
-const FOR_SERVICES: [&str; 22] = [
+const FOR_SERVICES: [&str; 23] = [
     "host/hello",
     "host/challenge",
     "host/status",
@@ -809,6 +815,7 @@ const FOR_SERVICES: [&str; 22] = [
     "turn/cancel",
     "dispatcher/carry",
     "repos/init",
+    "credentials/sync",
 ];
 
 /// What in `request` a client allowed only `methods` may not ask, if anything: another method,
@@ -1105,6 +1112,7 @@ impl Connection {
                 SERVICE_TOOLS_FEATURE.to_owned(),
                 WORKTREES_FEATURE.to_owned(),
                 REPOS_INIT_FEATURE.to_owned(),
+                CREDENTIALS_FEATURE.to_owned(),
                 RESOLVED_REMOTES_FEATURE.to_owned(),
                 QUEUE_FEATURE.to_owned(),
                 REQUEST_KEYS_FEATURE.to_owned(),
@@ -1448,6 +1456,23 @@ impl Connection {
         // Whatever asked is about to remove it.
         self.shared.sessions.end_inside(&path);
         Ok(ReleaseWorktreeResponse { closed })
+    }
+
+    /// `credentials/sync`: hold the credentials the Dispatcher gives, in place of those held
+    /// (ADR 0036), which only the Dispatcher the Host joined may ask, over the connection the
+    /// Host opened to it.
+    async fn sync_credentials(&self, request: SyncCredentialsRequest) -> Result<Empty, Error> {
+        self.hello_info()?;
+        if !matches!(self.peer, Peer::Joined(_)) {
+            return Err(Error::new(
+                errors::FORBIDDEN,
+                "only the Dispatcher this Host joined gives it credentials",
+            ));
+        }
+        self.shared
+            .credentials
+            .sync(request.credentials)
+            .map(|()| Empty {})
     }
 
     /// `repos/init`: a repository of its own, with the client's first files committed there.

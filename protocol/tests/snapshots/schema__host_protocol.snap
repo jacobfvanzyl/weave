@@ -180,6 +180,10 @@ expression: schema()
       "params": "InitRepositoryRequest",
       "result": "InitRepositoryResponse"
     },
+    "credentials/sync": {
+      "params": "SyncCredentialsRequest",
+      "result": "Empty"
+    },
     "terminals/list": {
       "params": "ListTerminalsRequest",
       "result": "TerminalsResponse"
@@ -519,6 +523,7 @@ expression: schema()
       "rename": "thread/rename",
       "worktrees": "worktrees",
       "reposInit": "repos_init",
+      "credentials": "credentials",
       "queue": "queue",
       "getThread": "threads/get",
       "requestKeys": "requestKeys",
@@ -7476,6 +7481,94 @@ expression: schema()
       ],
       "description": "What became of the files [`InitRepositoryRequest`] named."
     },
+    "SyncCredentialsRequest": {
+      "type": "object",
+      "properties": {
+        "credentials": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HeldCredential"
+          }
+        }
+      },
+      "required": [
+        "credentials"
+      ],
+      "description": "`credentials/sync`: every credential the Host is to hold, in place of those it held. One\nleft out is dropped, and a file it was kept in removed. Refused for any client but the\nDispatcher the Host joined ([`crate::errors::FORBIDDEN`])."
+    },
+    "HeldCredential": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "What the Dispatcher calls it."
+        },
+        "use": {
+          "$ref": "#/$defs/CredentialUse"
+        },
+        "value": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When the Host stops giving it out, if the Dispatcher hasn't sent it again by then."
+        }
+      },
+      "required": [
+        "name",
+        "use",
+        "value"
+      ],
+      "description": "A credential for a Host to hold."
+    },
+    "CredentialUse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "variable": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "environment"
+            }
+          },
+          "required": [
+            "type",
+            "agent",
+            "variable"
+          ],
+          "description": "In the environment of `agent`'s process, as `variable`, when the Host starts it. Never\nwritten anywhere but the Host's own keeping of it."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "file"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "description": "As the file at `path` under the home of the Host's user, which only they can read: for\na program that reads its sign-in from a file of its own."
+        }
+      ],
+      "description": "How a Host gives a credential to what uses it."
+    },
     "ListTerminalsRequest": {
       "type": "object",
       "properties": {
@@ -13056,6 +13149,13 @@ expression: schema()
         "kind": {
           "$ref": "#/$defs/CredentialKind"
         },
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The agent a sign-in is for, by its id."
+        },
         "createdAt": {
           "type": "integer",
           "format": "uint64",
@@ -13102,6 +13202,12 @@ expression: schema()
         },
         "value": {
           "type": "string"
+        },
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -13109,7 +13215,7 @@ expression: schema()
         "kind",
         "value"
       ],
-      "description": "`credentials/set`: keep a credential under `name`, replacing the value and kind of one\nalready there. [`crate::errors::CREDENTIALS_LOCKED`] unless unlocked. The value is never\nanswered back or logged."
+      "description": "`credentials/set`: keep a credential under `name`, replacing the value and kind of one\nalready there. [`crate::errors::CREDENTIALS_LOCKED`] unless unlocked. The value is never\nanswered back or logged. A sign-in names the agent it is for, and is the file that agent's\nown program wrote when the person signed in: invalid params for an agent the Dispatcher\ncan't give a sign-in to, or a file that isn't that agent's."
     },
     "CredentialResponse": {
       "type": "object",

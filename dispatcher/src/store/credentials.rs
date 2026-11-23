@@ -105,7 +105,7 @@ impl Store {
         let connection = self.lock();
         let mut statement = connection
             .prepare(
-                "SELECT name, kind, created_at, updated_at FROM credentials
+                "SELECT name, kind, created_at, updated_at, agent FROM credentials
                  ORDER BY name COLLATE NOCASE",
             )
             .map_err(failed)?;
@@ -116,6 +116,7 @@ impl Store {
                     kind: kind_named(&row.get::<_, String>(1)?)?,
                     created_at: from_sql(row.get(2)?),
                     updated_at: from_sql(row.get(3)?),
+                    agent: row.get(4)?,
                 })
             })
             .map_err(failed)?;
@@ -128,6 +129,7 @@ impl Store {
         &self,
         name: &str,
         kind: CredentialKind,
+        agent: Option<&str>,
         nonce: &[u8],
         sealed: &[u8],
     ) -> Result<Credential, String> {
@@ -135,12 +137,12 @@ impl Store {
         let connection = self.lock();
         connection
             .execute(
-                "INSERT INTO credentials (name, kind, nonce, sealed, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+                "INSERT INTO credentials (name, kind, nonce, sealed, created_at, updated_at, agent)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
                  ON CONFLICT (name) DO UPDATE SET
                      kind = excluded.kind, nonce = excluded.nonce, sealed = excluded.sealed,
-                     updated_at = excluded.updated_at",
-                params![name, kind_name(kind), nonce, sealed, to_sql(now)],
+                     updated_at = excluded.updated_at, agent = excluded.agent",
+                params![name, kind_name(kind), nonce, sealed, to_sql(now), agent],
             )
             .map_err(failed)?;
         connection
@@ -151,6 +153,7 @@ impl Store {
                     Ok(Credential {
                         name: name.to_owned(),
                         kind,
+                        agent: agent.map(str::to_owned),
                         created_at: from_sql(row.get(0)?),
                         updated_at: from_sql(row.get(1)?),
                     })

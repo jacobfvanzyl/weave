@@ -82,6 +82,9 @@ struct SetArgs {
     /// Read the value from this file, such as a vendor's sign-in file.
     #[arg(long)]
     file: Option<PathBuf>,
+    /// The agent a sign-in is for, by its id; the credential's name without one.
+    #[arg(long)]
+    agent: Option<String>,
 }
 
 #[derive(Args)]
@@ -149,7 +152,16 @@ pub async fn command(args: CredentialsArgs) -> anyhow::Result<ExitCode> {
                 locked.map_err(said)?;
                 println!("Locked: the Dispatcher reads no credential until it's unlocked.");
             }
-            CredentialsCommand::Set(SetArgs { name, kind, file }) => {
+            CredentialsCommand::Set(SetArgs {
+                name,
+                kind,
+                file,
+                agent,
+            }) => {
+                let agent = match kind {
+                    Kind::SignIn => Some(agent.unwrap_or_else(|| name.clone())),
+                    Kind::Token => agent,
+                };
                 let value = match file {
                     Some(file) => Zeroizing::new(
                         std::fs::read_to_string(&file)
@@ -171,10 +183,15 @@ pub async fn command(args: CredentialsArgs) -> anyhow::Result<ExitCode> {
                             Kind::SignIn => CredentialKind::SignIn,
                         },
                         value: value.to_string(),
+                        agent,
                     })
                     .await;
                 let credential = kept.map_err(said)?.credential;
-                println!("Kept {}, {}.", credential.name, kind_word(credential.kind));
+                println!(
+                    "Kept {}, {}. Your Hosts are given it now.",
+                    credential.name,
+                    kind_of(&credential)
+                );
             }
             CredentialsCommand::Remove(RemoveArgs { name }) => {
                 let removed = dispatcher
@@ -230,6 +247,14 @@ fn kind_word(kind: CredentialKind) -> &'static str {
     }
 }
 
+/// A credential's kind, and the agent a sign-in is for.
+fn kind_of(credential: &Credential) -> String {
+    match &credential.agent {
+        Some(agent) => format!("{} for {agent}", kind_word(credential.kind)),
+        None => kind_word(credential.kind).to_owned(),
+    }
+}
+
 fn counted(count: u32) -> String {
     match count {
         1 => "1 credential".to_owned(),
@@ -259,9 +284,9 @@ fn describe(status: &CredentialsStatus, credentials: &[Credential], now_ms: u64)
         .unwrap_or(0);
     for credential in credentials {
         said.push_str(&format!(
-            "{:width$}  {:9}  set {}\n",
+            "{:width$}  {}, set {} ago\n",
             credential.name,
-            kind_word(credential.kind),
+            kind_of(credential),
             ago(now_ms, credential.updated_at),
         ));
     }
@@ -290,12 +315,14 @@ mod tests {
             Credential {
                 name: "claude".to_owned(),
                 kind: CredentialKind::SignIn,
+                agent: Some("claude".to_owned()),
                 created_at: 0,
                 updated_at: 0,
             },
             Credential {
                 name: "git".to_owned(),
                 kind: CredentialKind::Token,
+                agent: None,
                 created_at: 0,
                 updated_at: 0,
             },
@@ -305,7 +332,10 @@ mod tests {
             listed.starts_with("Locked: `weave credentials unlock`"),
             "{listed}"
         );
-        assert!(listed.contains("claude  a sign-in"), "{listed}");
-        assert!(listed.contains("git     a token"), "{listed}");
+        assert!(
+            listed.contains("claude  a sign-in for claude, set 0s ago"),
+            "{listed}"
+        );
+        assert!(listed.contains("git     a token, set 0s ago"), "{listed}");
     }
 }

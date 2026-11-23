@@ -911,6 +911,9 @@ pub enum CredentialKind {
 pub struct Credential {
     pub name: String,
     pub kind: CredentialKind,
+    /// The agent a sign-in is for, by its id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     pub created_at: Timestamp,
     /// When its value was last set.
     pub updated_at: Timestamp,
@@ -985,7 +988,9 @@ pub struct ListCredentialsResponse {
 
 /// `credentials/set`: keep a credential under `name`, replacing the value and kind of one
 /// already there. [`crate::errors::CREDENTIALS_LOCKED`] unless unlocked. The value is never
-/// answered back or logged.
+/// answered back or logged. A sign-in names the agent it is for, and is the file that agent's
+/// own program wrote when the person signed in: invalid params for an agent the Dispatcher
+/// can't give a sign-in to, or a file that isn't that agent's.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "credentials/set", response = CredentialResponse)]
@@ -993,6 +998,8 @@ pub struct SetCredentialRequest {
     pub name: String,
     pub kind: CredentialKind,
     pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 impl std::fmt::Debug for SetCredentialRequest {
@@ -1000,6 +1007,7 @@ impl std::fmt::Debug for SetCredentialRequest {
         f.debug_struct("SetCredentialRequest")
             .field("name", &self.name)
             .field("kind", &self.kind)
+            .field("agent", &self.agent)
             .field("value", &"…")
             .finish()
     }

@@ -53,7 +53,7 @@ use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 13] = [
+const MIGRATIONS: [&str; 14] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -307,6 +307,10 @@ const MIGRATIONS: [&str; 13] = [
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
     );
+",
+    // The agent a sign-in is for (ADR 0036), which decides how a Host is given it.
+    "
+    ALTER TABLE credentials ADD COLUMN agent TEXT;
 ",
 ];
 

@@ -968,6 +968,9 @@ Options:
       --file <FILE>
           Read the value from this file, such as a vendor's sign-in file
 
+      --agent <AGENT>
+          The agent a sign-in is for, by its id; the credential's name without one
+
   -h, --help
           Print help (see a summary with '-h')
 

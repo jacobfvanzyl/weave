@@ -738,11 +738,15 @@ async fn handlers(
         Credentials::list(&shared.store).map(|credentials| ListCredentialsResponse { credentials }));
     handle!(builder, connection, shared, request: SetCredentialRequest =>
         shared
-            .credentials
-            .set(&shared.store, &request.name, request.kind, &request.value)
+            .set_credential(
+                &request.name,
+                request.kind,
+                request.agent.as_deref(),
+                &request.value,
+            )
             .map(|credential| CredentialResponse { credential }));
     handle!(builder, connection, shared, request: RemoveCredentialRequest =>
-        Credentials::remove(&shared.store, &request.name).map(|()| Empty {}));
+        shared.remove_credential(&request.name).map(|()| Empty {}));
     handle!(builder, connection, shared, _request: ListBotsRequest =>
         shared.bots().map(|bots| ListBotsResponse { bots }));
     handle!(builder, connection, shared, request: GetBotRequest =>

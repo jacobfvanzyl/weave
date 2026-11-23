@@ -20,6 +20,7 @@ use chacha20poly1305::KeyInit as _;
 use chacha20poly1305::XChaCha20Poly1305;
 use chacha20poly1305::aead::Aead as _;
 use chacha20poly1305::aead::Payload;
+use weave_host_protocol::credentials::HeldCredential;
 use weave_host_protocol::dispatcher::Credential;
 use weave_host_protocol::dispatcher::CredentialKind;
 use weave_host_protocol::dispatcher::CredentialsState;
@@ -30,6 +31,7 @@ use zeroize::Zeroizing;
 use crate::internal;
 use crate::invalid;
 use crate::lock;
+use crate::signins;
 use crate::store::Store;
 use crate::store::credentials::SealedKey;
 
@@ -238,6 +240,7 @@ impl Credentials {
         store: &Store,
         name: &str,
         kind: CredentialKind,
+        agent: Option<&str>,
         value: &str,
     ) -> Result<Credential, Error> {
         let name = name.trim();
@@ -251,12 +254,66 @@ impl Credentials {
                 "a credential's value is 1 to {LONGEST_VALUE} bytes"
             )));
         }
+        // A sign-in is for an agent, and is that agent's own file: checked by making the copy
+        // a Host would get of it.
+        let agent = match (kind, agent) {
+            (CredentialKind::SignIn, Some(agent)) => {
+                signins::copy(name, agent, value).map_err(invalid)?;
+                Some(agent)
+            }
+            (CredentialKind::SignIn, None) => {
+                return Err(invalid("a sign-in names the agent it is for"));
+            }
+            (CredentialKind::Token, Some(_)) => {
+                return Err(invalid("only a sign-in is for an agent"));
+            }
+            (CredentialKind::Token, None) => None,
+        };
         let key = self.key()?;
         let nonce = random::<NONCE_LENGTH>()?;
         let sealed = seal(&key, &nonce, value.as_bytes(), &binding(name, kind))?;
         store
-            .set_credential(name, kind, &nonce, &sealed)
+            .set_credential(name, kind, agent, &nonce, &sealed)
             .map_err(internal)
+    }
+
+    /// The copies a Host holds: each sign-in as its agent's program takes it, unable to renew.
+    /// Tokens aren't given yet: a git credential goes with its Project. None while locked.
+    pub(crate) fn for_hosts(&self, store: &Store) -> Result<Option<Vec<HeldCredential>>, Error> {
+        let Some(key) = lock(&self.key).clone() else {
+            return Ok(None);
+        };
+        let mut copies = Vec::new();
+        for credential in store.credentials().map_err(internal)? {
+            let (CredentialKind::SignIn, Some(agent)) = (credential.kind, &credential.agent) else {
+                continue;
+            };
+            let Some(kept) = store
+                .sealed_credential(&credential.name)
+                .map_err(internal)?
+            else {
+                continue;
+            };
+            let opened = opened(
+                &key,
+                &kept.nonce,
+                &kept.sealed,
+                &binding(&kept.name, kept.kind),
+            )
+            .and_then(|plain| String::from_utf8(plain.to_vec()).ok().map(Zeroizing::new));
+            // One that won't open or isn't the agent's file any more is left out, not a
+            // reason to give Hosts none.
+            match opened.map(|value| signins::copy(&credential.name, agent, &value)) {
+                Some(Ok(copy)) => copies.push(copy),
+                Some(Err(why)) => {
+                    tracing::warn!(credential = %credential.name, %why, "a sign-in can't be given to Hosts");
+                }
+                None => {
+                    tracing::warn!(credential = %credential.name, "a sign-in doesn't open with this key");
+                }
+            }
+        }
+        Ok(Some(copies))
     }
 
     pub(crate) fn list(store: &Store) -> Result<Vec<Credential>, Error> {

@@ -332,6 +332,8 @@ async fn follow(
             tracing::warn!(host = %host.host_id, %error, "watching a Host's threads failed")
         }
     }
+    // What the Host is to hold of the person's credentials (ADR 0036), if they're unlocked.
+    shared.sync_credentials_to(&host.host_id, &handle).await;
     send_pending(shared, host, &handle, seen).await;
     settle(shared, host, &connection, None).await;
     look(shared, host, &handle, seen, None).await;

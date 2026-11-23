@@ -20,6 +20,7 @@ use serde_json::json;
 use weave_host_protocol::OLDEST_SUPPORTED_VERSION;
 use weave_host_protocol::PROTOCOL_VERSION;
 use weave_host_protocol::agents;
+use weave_host_protocol::credentials;
 use weave_host_protocol::devices;
 use weave_host_protocol::dispatcher;
 use weave_host_protocol::errors;
@@ -137,6 +138,7 @@ fn schema() -> Value {
         "worktrees/remove" => worktrees::RemoveWorktreeRequest,
         "worktrees/release" => worktrees::ReleaseWorktreeRequest,
         "repos/init" => worktrees::InitRepositoryRequest,
+        "credentials/sync" => credentials::SyncCredentialsRequest,
         "terminals/list" => terminals::ListTerminalsRequest,
         "terminals/watch" => terminals::WatchTerminalsRequest,
         "terminals/unwatch" => terminals::UnwatchTerminalsRequest,
@@ -327,6 +329,7 @@ fn schema() -> Value {
                 "rename": threads::RENAME_FEATURE,
                 "worktrees": worktrees::FEATURE,
                 "reposInit": worktrees::REPOS_INIT_FEATURE,
+                "credentials": credentials::FEATURE,
                 "queue": queue::FEATURE,
                 "getThread": threads::GET_FEATURE,
                 "requestKeys": turns::REQUEST_KEYS_FEATURE,

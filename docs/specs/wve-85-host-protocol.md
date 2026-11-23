@@ -185,6 +185,7 @@ request with `unauthenticated`.
   [Service tools](#service-tools)), and `carry` (WVE-195): `dispatcher/carry` and the
   `dispatcher` auth (see [Connections the Dispatcher carries](#connections-the-dispatcher-carries)),
   and `repos_init` (WVE-178): `repos/init` (see [A repository of its own](#a-repository-of-its-own)),
+  and `credentials` (WVE-239): `credentials/sync` (see [Credentials](#credentials)),
   and `resolved_remotes` (WVE-213): `GitLocation.remote` with git's rewrites applied and an SSH
   host resolved (see [A repository's remote](#a-repositorys-remote)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
@@ -1563,6 +1564,30 @@ stays so. Invalid params, the message saying why, for a `path` neither whole nor
 file path outside the directory or named twice, files without a message, a directory inside
 another repository, and one that can't be made or isn't a directory; `git_failed` when `git
 init` fails.
+
+## Credentials
+
+Feature `credentials`, ADR 0036, WVE-239. The Dispatcher keeps the person's credentials and
+gives each Host that joined it the ones its agents need, as copies that can't be renewed
+([Credentials](wve-175-dispatcher.md#credentials)). Only the Dispatcher the Host joined may ask,
+over the connection the Host opened to it; any other client is `forbidden`.
+
+**`credentials/sync`** `{credentials: {name, use, value, expiresAt?}[]}` → `{}`
+
+The whole set the Host is to hold, in place of what it held: one left out is dropped. `use`
+says how the Host gives it to what needs it.
+
+- `{type: "environment", agent, variable}`: in the environment of `agent`'s process when the
+  Host starts it, over the Host's own environment and under the agent's settings. It is never
+  journaled or written to a status. An agent's Host-run terminals start with it too.
+- `{type: "file", path}`: written at `path` under the home of the Host's user, readable by them
+  only, replacing the file whole; removed when the credential is dropped. `path` is made of
+  plain names: one that is whole, empty, or leaves the home is invalid params, and then none of
+  the set is taken.
+
+A credential past its `expiresAt` is no longer added to an agent's environment. The Host keeps
+the set sealed beside its record of the Dispatcher, so agents start while the Dispatcher is
+away. Nothing answers a value back.
 
 ## Sessions
 
