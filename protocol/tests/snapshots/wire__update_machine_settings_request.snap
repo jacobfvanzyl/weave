@@ -1,0 +1,13 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&UpdateMachineSettingsRequest\n{\n    fly_app: Some(Some(\"weave-hosts\".to_owned())), fly_region:\n    Some(Some(\"jnb\".to_owned())), image:\n    Some(Some(\"registry.fly.io/weave-hosts:latest\".to_owned())),\n    tailscale_client_id: Some(None), ..UpdateMachineSettingsRequest::default()\n})"
+---
+{
+  "method": "machines/configure",
+  "params": {
+    "flyApp": "weave-hosts",
+    "flyRegion": "jnb",
+    "image": "registry.fly.io/weave-hosts:latest",
+    "tailscaleClientId": null
+  }
+}

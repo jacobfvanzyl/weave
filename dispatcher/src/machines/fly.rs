@@ -34,7 +34,7 @@ const VOLUME_RETRY: Duration = Duration::from_secs(2);
 const VOLUME_TRIES: u32 = 15;
 
 /// Where and as whom machines are made.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct FlyConfig {
     /// An API token of the person's.
     pub token: String,
@@ -43,6 +43,18 @@ pub struct FlyConfig {
     pub org: String,
     pub region: String,
     pub api: String,
+}
+
+impl std::fmt::Debug for FlyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlyConfig")
+            .field("token", &"<redacted>")
+            .field("app", &self.app)
+            .field("org", &self.org)
+            .field("region", &self.region)
+            .field("api", &self.api)
+            .finish()
+    }
 }
 
 impl FlyConfig {

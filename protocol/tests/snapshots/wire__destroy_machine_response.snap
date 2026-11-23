@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&DestroyMachineResponse { machine, host_removed: true, })"
+---
+{
+  "machine": {
+    "id": "e784e524b92e83",
+    "name": "cloud-1",
+    "state": "running"
+  },
+  "hostRemoved": true
+}

@@ -11,10 +11,6 @@ name = "weave_dispatcher"
 [lints]
 workspace = true
 
-[features]
-# Making computers for Hosts in the cloud (WVE-238, a spike): off unless asked for.
-machines = ["dep:reqwest"]
-
 [dependencies]
 weave-host-client = { workspace = true }
 weave-host-protocol = { workspace = true }
@@ -27,7 +23,7 @@ croner = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
 jiff = { workspace = true }
-reqwest = { workspace = true, optional = true }
+reqwest = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

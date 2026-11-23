@@ -717,10 +717,13 @@ Your Hosts the Dispatcher starts work on: list them, have one join it, or remove
 Usage: weave hosts [COMMAND]
 
 Commands:
-  list    The Hosts that joined the Dispatcher, and whether each is connected (the default)
-  add     Have a Host join the Dispatcher, so it starts work there: this computer's, another's over SSH (`weave hosts add studio`), or, on the Host's computer, with the URL and code `weave hosts add --code` shows
-  remove  Remove a Host, and the work waiting for it. A Host connected now forgets the Dispatcher; one that isn't is refused when it next connects
-  help    Print this message or the help of the given subcommand(s)
+  list      The Hosts that joined the Dispatcher, and whether each is connected (the default)
+  add       Have a Host join the Dispatcher, so it starts work there: this computer's, another's over SSH (`weave hosts add studio`), or, on the Host's computer, with the URL and code `weave hosts add --code` shows
+  remove    Remove a Host, and the work waiting for it. A Host connected now forgets the Dispatcher; one that isn't is refused when it next connects
+  launch    Make a machine in the cloud using credentials stored in the Dispatcher and have a Host on it join
+  machines  Cloud machines `weave hosts launch` made, and their non-secret provider settings
+  destroy   Destroy a machine `weave hosts launch` made, and remove its Host
+  help      Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help
@@ -773,6 +776,113 @@ Arguments:
           The Host's id or name
 
 Options:
+  -h, --help
+          Print help
+
+$ weave hosts launch --help
+Make a machine in the cloud using credentials stored in the Dispatcher and have a Host on it join
+
+Usage: weave hosts launch [OPTIONS] --name <NAME>
+
+Options:
+      --name <NAME>
+          What the Dispatcher calls the Host, and the provider the machine
+
+      --image <IMAGE>
+          The image the machine boots; uses the Dispatcher's configured default without one
+
+      --memory <MEMORY>
+          Its memory, in megabytes
+          
+          [default: 1024]
+
+      --cpus <CPUS>
+          [default: 1]
+
+      --disk <DISK>
+          The size of the disk the Host keeps its state on, in gigabytes
+          
+          [default: 1]
+
+      --wait <WAIT>
+          How long to wait for the Host to join, in seconds, before destroying the machine
+          
+          [default: 240]
+
+      --json
+          Print what the Dispatcher answered as JSON
+
+  -h, --help
+          Print help
+
+$ weave hosts machines --help
+Cloud machines `weave hosts launch` made, and their non-secret provider settings
+
+Usage: weave hosts machines [OPTIONS] [COMMAND]
+
+Commands:
+  config  Show or update the Dispatcher's non-secret cloud machine settings (Fly app/region/org, default image, Tailscale OAuth client ID/tag, and credential names). Secrets stay in `weave credentials`
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --json
+          Print the machines as JSON
+
+  -h, --help
+          Print help
+
+$ weave hosts machines config --help
+Show or update the Dispatcher's non-secret cloud machine settings (Fly app/region/org, default image, Tailscale OAuth client ID/tag, and credential names). Secrets stay in `weave credentials`
+
+Usage: weave hosts machines config [OPTIONS]
+
+Options:
+      --fly-app <FLY_APP>
+          The Fly app that holds the machines, made in `--fly-org` if absent
+
+      --fly-org <FLY_ORG>
+          The Fly organisation a new app goes in (`personal` by default)
+
+      --fly-region <FLY_REGION>
+          Where Fly machines are made (`jnb` by default)
+
+      --fly-credential <FLY_CREDENTIAL>
+          Name of the `token` credential in `weave credentials` holding the Fly API token (`fly` by default)
+
+      --image <IMAGE>
+          Default container image launched machines boot
+
+      --tailscale-client-id <TAILSCALE_CLIENT_ID>
+          Tailscale OAuth client ID (non-secret), paired with `--tailscale-credential` to mint single-use ephemeral keys
+
+      --clear-tailscale-client-id
+          Stop minting Tailscale auth keys on launch
+
+      --tailscale-credential <TAILSCALE_CREDENTIAL>
+          Name of the `token` credential in `weave credentials` holding the Tailscale OAuth client secret (`tailscale` by default)
+
+      --tailscale-tag <TAILSCALE_TAG>
+          The tag minted Tailscale keys give their nodes (`tag:weave-host` by default)
+
+      --json
+          Print the settings as JSON
+
+  -h, --help
+          Print help
+
+$ weave hosts destroy --help
+Destroy a machine `weave hosts launch` made, and remove its Host
+
+Usage: weave hosts destroy [OPTIONS] <MACHINE>
+
+Arguments:
+  <MACHINE>
+          The machine's name or id, as `weave hosts machines` lists them
+
+Options:
+      --json
+          Print what the Dispatcher answered as JSON
+
   -h, --help
           Print help
 

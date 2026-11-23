@@ -8,6 +8,7 @@ mod bots;
 mod calls;
 pub(crate) mod credentials;
 mod devices;
+mod machines;
 mod projects;
 mod schedules;
 
@@ -53,7 +54,7 @@ use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 16] = [
+const MIGRATIONS: [&str; 17] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -322,6 +323,22 @@ const MIGRATIONS: [&str; 16] = [
     // location on, for that Project's remote only. Removing the credential detaches it.
     "
     ALTER TABLE projects ADD COLUMN git_credential TEXT REFERENCES credentials (name) ON DELETE SET NULL;
+",
+    // Non-secret cloud machine settings (ADR 0036, WVE-238, WVE-239): Fly app/org/region,
+    // default image, Tailscale OAuth client ID/tag, and the credential names holding the
+    // provider secrets. Single row (id = 1).
+    "
+    CREATE TABLE machine_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        fly_app TEXT,
+        fly_org TEXT,
+        fly_region TEXT,
+        fly_credential TEXT,
+        image TEXT,
+        tailscale_client_id TEXT,
+        tailscale_credential TEXT,
+        tailscale_tag TEXT
+    );
 ",
 ];
 

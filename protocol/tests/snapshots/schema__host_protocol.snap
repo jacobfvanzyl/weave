@@ -445,6 +445,26 @@ expression: schema()
     "credentials/renew": {
       "params": "RenewCredentialRequest",
       "result": "CredentialResponse"
+    },
+    "machines/config": {
+      "params": "GetMachineSettingsRequest",
+      "result": "MachineSettingsResponse"
+    },
+    "machines/configure": {
+      "params": "UpdateMachineSettingsRequest",
+      "result": "MachineSettingsResponse"
+    },
+    "machines/list": {
+      "params": "ListMachinesRequest",
+      "result": "ListMachinesResponse"
+    },
+    "machines/launch": {
+      "params": "LaunchMachineRequest",
+      "result": "LaunchMachineResponse"
+    },
+    "machines/destroy": {
+      "params": "DestroyMachineRequest",
+      "result": "DestroyMachineResponse"
     }
   },
   "x-weave-dispatcher-notifications": {
@@ -13313,6 +13333,283 @@ expression: schema()
         "name"
       ],
       "description": "`credentials/renew`: renew a sign-in now by running its vendor's own program, save what it\nwrote, and send every connected Host its new copy (ADR 0036).\n[`crate::errors::CREDENTIALS_LOCKED`] unless unlocked; invalid params for anything that\nisn't a sign-in."
+    },
+    "GetMachineSettingsRequest": {
+      "type": "object",
+      "description": "`machines/config`: read the Dispatcher's non-secret cloud machine settings. Works while\ncredentials are locked."
+    },
+    "MachineSettingsResponse": {
+      "type": "object",
+      "properties": {
+        "settings": {
+          "$ref": "#/$defs/MachineSettings"
+        }
+      },
+      "required": [
+        "settings"
+      ]
+    },
+    "MachineSettings": {
+      "type": "object",
+      "properties": {
+        "flyApp": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The Fly app that holds the machines, made in `flyOrg` if absent."
+        },
+        "flyOrg": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The Fly organisation a new app goes in (`personal` by default)."
+        },
+        "flyRegion": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Where machines are made (`jnb` by default)."
+        },
+        "flyCredential": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Name of the `token` credential in `weave credentials` holding the Fly API token\n(`fly` by default)."
+        },
+        "image": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default container image launched machines boot (`scripts/host-image`)."
+        },
+        "tailscaleClientId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Tailscale OAuth client ID (non-secret), paired with `tailscaleCredential` to mint\nsingle-use ephemeral keys. Absent when no tailnet key is minted."
+        },
+        "tailscaleCredential": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Name of the `token` credential in `weave credentials` holding the Tailscale OAuth\nclient secret (`tailscale` by default)."
+        },
+        "tailscaleTag": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The tag minted Tailscale keys give their nodes (`tag:weave-host` by default)."
+        }
+      },
+      "description": "Non-secret settings for cloud machines launched by the Dispatcher (ADR 0036, WVE-239).\nSecrets (the Fly API token and Tailscale OAuth client secret) stay in `weave credentials`\nand are referenced only by credential name here."
+    },
+    "UpdateMachineSettingsRequest": {
+      "type": "object",
+      "properties": {
+        "flyApp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "flyOrg": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "flyRegion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "flyCredential": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "image": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tailscaleClientId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tailscaleCredential": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tailscaleTag": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "`machines/configure`: update the Dispatcher's non-secret cloud machine settings. Omitted\nfields stay as they are; `null` clears a field back to unset/default."
+    },
+    "ListMachinesRequest": {
+      "type": "object",
+      "description": "`machines/list`: list the cloud machines weave made in the configured Fly app.\n[`crate::errors::CREDENTIALS_LOCKED`] while credentials are locked."
+    },
+    "ListMachinesResponse": {
+      "type": "object",
+      "properties": {
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CloudMachine"
+          }
+        }
+      },
+      "required": [
+        "machines"
+      ]
+    },
+    "CloudMachine": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The provider's id for it."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name with the provider, and the Host's with the Dispatcher."
+        },
+        "state": {
+          "type": "string",
+          "description": "`\"starting\"`, `\"running\"`, `\"stopped\"`, `\"gone\"`, or a state of the provider's own."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "state"
+      ],
+      "description": "A cloud machine the Dispatcher made (ADR 0036, WVE-238, WVE-239)."
+    },
+    "LaunchMachineRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "What the Dispatcher calls the Host, and the provider the machine."
+        },
+        "image": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Image override; uses configured `MachineSettings.image` when absent."
+        },
+        "cpus": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "memoryMb": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "stateGb": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Persistent volume size in GB (0 for none; 1 by default)."
+        },
+        "waitSecs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Seconds to wait for the Host to join before destroying the machine (240 by default)."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "description": "`machines/launch`: make a cloud machine using the Dispatcher's stored Fly and Tailscale\ncredentials, wait for its Host to join, and destroy the machine if it never joins.\n[`crate::errors::CREDENTIALS_LOCKED`] while credentials are locked."
+    },
+    "LaunchMachineResponse": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "$ref": "#/$defs/CloudMachine"
+        },
+        "host": {
+          "$ref": "#/$defs/DispatcherHost"
+        },
+        "tookMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Milliseconds from offering the join code to the Host being connected."
+        }
+      },
+      "required": [
+        "machine",
+        "host",
+        "tookMs"
+      ]
+    },
+    "DestroyMachineRequest": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "type": "string",
+          "description": "The machine's id or name."
+        }
+      },
+      "required": [
+        "machine"
+      ],
+      "description": "`machines/destroy`: destroy a cloud machine weave made (and its volume), and remove its Host\nfrom the Dispatcher. [`crate::errors::CREDENTIALS_LOCKED`] while credentials are locked."
+    },
+    "DestroyMachineResponse": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "$ref": "#/$defs/CloudMachine"
+        },
+        "hostRemoved": {
+          "type": "boolean",
+          "description": "Whether a Host of that name was also removed from the Dispatcher."
+        }
+      },
+      "required": [
+        "machine",
+        "hostRemoved"
+      ]
     },
     "DevicePairedNotification": {
       "type": "object",

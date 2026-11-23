@@ -1,0 +1,13 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&ListMachinesResponse { machines: vec![machine.clone()], })"
+---
+{
+  "machines": [
+    {
+      "id": "e784e524b92e83",
+      "name": "cloud-1",
+      "state": "running"
+    }
+  ]
+}

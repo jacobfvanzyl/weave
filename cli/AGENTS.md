@@ -293,11 +293,12 @@ through the shared Host, `--trace` has the Host write it in its `traces/` and sa
 `smoke`, `RUST_LOG=agent_stderr=debug` shows agent stderr. Traces contain prompts and
 agent output, so keep them out of the repository.
 
-Built with `--features weave-cli/machines` (WVE-238, a spike, off by default), `weave hosts`
-gains `launch --name <name>`, `machines` and `destroy <machine>` (`commands/hosts/machines.rs`):
-a Host on a Fly Machine, from nothing to joined, and gone again. They read the provider's token,
-the app, the image and a Tailscale OAuth client from the environment, which the file's head
-lists; `scripts/host-image/build` builds and pushes the image.
+`weave hosts` includes cloud machine subcommands (`commands/hosts/machines.rs`; ADR 0036,
+WVE-238, WVE-239): `launch --name <name>`, `machines` (`machines config` shows or updates the
+Dispatcher's non-secret Fly/Tailscale settings), and `destroy <machine>`. All three talk to the
+Dispatcher's `machines/*` API — no provider tokens or Tailscale secrets are read from the CLI's
+environment; they live in `weave credentials` (`fly` and `tailscale` by default).
+`scripts/host-image/build` builds and pushes the Host container image.
 
 
 `weave credentials` (`commands/credentials.rs`; ADR 0036, WVE-239) manages what the Dispatcher

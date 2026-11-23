@@ -12,10 +12,6 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
-[features]
-# `weave hosts launch`: a Host on a machine made in the cloud (WVE-238, a spike).
-machines = ["weave-dispatcher/machines"]
-
 [dependencies]
 weave-acp-core = { workspace = true }
 weave-agents = { workspace = true }

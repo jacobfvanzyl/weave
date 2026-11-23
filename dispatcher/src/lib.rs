@@ -38,7 +38,6 @@ mod devices;
 mod follows;
 mod joins;
 mod link;
-#[cfg(feature = "machines")]
 pub mod machines;
 pub mod paths;
 mod projects;
@@ -135,6 +134,11 @@ pub struct DispatcherConfig {
     /// How the Dispatcher renews sign-ins by running the vendors' programs (ADR 0036); tests
     /// swap in a fake.
     pub renewer: Arc<dyn signins::Renewer>,
+    /// Cloud machine provider and Tailscale auth key minter (ADR 0036, WVE-238); tests swap in
+    /// a fake.
+    pub machines: Arc<dyn machines::MachineBackend>,
+    /// How often `machines/launch` polls for the new Host to connect; tests shorten it.
+    pub machine_poll: Duration,
 }
 
 impl DispatcherConfig {
@@ -152,6 +156,8 @@ impl DispatcherConfig {
             remote: None,
             credential_cost: credentials::KdfCost::default(),
             renewer,
+            machines: Arc::new(machines::LiveBackend),
+            machine_poll: machines::DEFAULT_POLL,
         }
     }
 
@@ -356,6 +362,45 @@ impl Dispatcher {
     /// Forget the Host `host` names, by id or name, and the work written down for it.
     pub async fn remove_host(&self, host: &str) -> Result<(), Error> {
         self.shared.remove_host(host).await
+    }
+
+    /// Non-secret cloud machine settings (ADR 0036).
+    pub fn machine_settings(
+        &self,
+    ) -> Result<weave_host_protocol::dispatcher::MachineSettings, Error> {
+        self.shared.machine_settings()
+    }
+
+    /// Update the non-secret cloud machine settings.
+    pub fn update_machine_settings(
+        &self,
+        request: &weave_host_protocol::dispatcher::UpdateMachineSettingsRequest,
+    ) -> Result<weave_host_protocol::dispatcher::MachineSettings, Error> {
+        self.shared.update_machine_settings(request)
+    }
+
+    /// Cloud machines weave made in the configured Fly app.
+    pub async fn list_machines(
+        &self,
+    ) -> Result<Vec<weave_host_protocol::dispatcher::CloudMachine>, Error> {
+        self.shared.list_machines().await
+    }
+
+    /// Launch a cloud machine using the Dispatcher's stored credentials and wait for its Host
+    /// to join.
+    pub async fn launch_machine(
+        &self,
+        request: weave_host_protocol::dispatcher::LaunchMachineRequest,
+    ) -> Result<weave_host_protocol::dispatcher::LaunchMachineResponse, Error> {
+        self.shared.launch_machine(request).await
+    }
+
+    /// Destroy a cloud machine weave made and remove its Host from the Dispatcher.
+    pub async fn destroy_machine(
+        &self,
+        machine: &str,
+    ) -> Result<weave_host_protocol::dispatcher::DestroyMachineResponse, Error> {
+        self.shared.destroy_machine(machine).await
     }
 
     /// Write `work` down for `host_id` and send it as soon as the Host is connected.

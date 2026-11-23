@@ -1,0 +1,16 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&MachineSettingsResponse { settings })"
+---
+{
+  "settings": {
+    "flyApp": "weave-hosts",
+    "flyOrg": "personal",
+    "flyRegion": "jnb",
+    "flyCredential": "fly",
+    "image": "registry.fly.io/weave-hosts:latest",
+    "tailscaleClientId": "k123456CNTRL",
+    "tailscaleCredential": "tailscale",
+    "tailscaleTag": "tag:weave-host"
+  }
+}

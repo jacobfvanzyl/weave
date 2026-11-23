@@ -10,7 +10,6 @@
 //! shows one for a computer SSH doesn't reach. `weave dispatcher connect` offers the first
 //! ([`join_from`]).
 
-#[cfg(feature = "machines")]
 mod machines;
 
 use std::process::ExitCode;
@@ -64,14 +63,12 @@ enum HostsCommand {
     /// Remove a Host, and the work waiting for it. A Host connected now forgets the Dispatcher;
     /// one that isn't is refused when it next connects.
     Remove(RemoveArgs),
-    /// Make a machine in the cloud and have a Host on it join the Dispatcher (WVE-238).
-    #[cfg(feature = "machines")]
+    /// Make a machine in the cloud using credentials stored in the Dispatcher and have a Host
+    /// on it join.
     Launch(machines::LaunchArgs),
-    /// The machines `weave hosts launch` made.
-    #[cfg(feature = "machines")]
-    Machines,
+    /// Cloud machines `weave hosts launch` made, and their non-secret provider settings.
+    Machines(machines::MachinesArgs),
     /// Destroy a machine `weave hosts launch` made, and remove its Host.
-    #[cfg(feature = "machines")]
     Destroy(machines::DestroyArgs),
 }
 
@@ -114,11 +111,8 @@ pub async fn command(args: HostsArgs) -> anyhow::Result<ExitCode> {
         HostsCommand::List(ListArgs { json }) => list(&dispatcher::paths()?, json).await,
         HostsCommand::Add(args) => add(args).await,
         HostsCommand::Remove(args) => remove(&dispatcher::paths()?, args).await,
-        #[cfg(feature = "machines")]
         HostsCommand::Launch(args) => machines::launch_host(&dispatcher::paths()?, args).await,
-        #[cfg(feature = "machines")]
-        HostsCommand::Machines => machines::list_machines().await,
-        #[cfg(feature = "machines")]
+        HostsCommand::Machines(args) => machines::machines(&dispatcher::paths()?, args).await,
         HostsCommand::Destroy(args) => machines::destroy_machine(&dispatcher::paths()?, args).await,
     };
     done.map(|()| ExitCode::SUCCESS)

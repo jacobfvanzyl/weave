@@ -1,0 +1,14 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&LaunchMachineRequest\n{\n    name: \"cloud-1\".to_owned(), image: None, cpus: Some(2), memory_mb:\n    Some(2048), state_gb: Some(5), wait_secs: Some(240),\n})"
+---
+{
+  "method": "machines/launch",
+  "params": {
+    "name": "cloud-1",
+    "cpus": 2,
+    "memoryMb": 2048,
+    "stateGb": 5,
+    "waitSecs": 240
+  }
+}

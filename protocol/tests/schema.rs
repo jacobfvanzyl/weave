@@ -222,6 +222,11 @@ fn schema() -> Value {
         "credentials/set" => dispatcher::SetCredentialRequest,
         "credentials/remove" => dispatcher::RemoveCredentialRequest,
         "credentials/renew" => dispatcher::RenewCredentialRequest,
+        "machines/config" => dispatcher::GetMachineSettingsRequest,
+        "machines/configure" => dispatcher::UpdateMachineSettingsRequest,
+        "machines/list" => dispatcher::ListMachinesRequest,
+        "machines/launch" => dispatcher::LaunchMachineRequest,
+        "machines/destroy" => dispatcher::DestroyMachineRequest,
     };
     let dispatcher_notifications = notifications! { generator, inlined;
         "devices/paired" => devices::DevicePairedNotification,

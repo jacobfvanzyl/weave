@@ -8944,6 +8944,182 @@ export interface RenewCredentialRequest {
   name: string;
 }
 /**
+ * `machines/config`: read the Dispatcher's non-secret cloud machine settings. Works while
+ * credentials are locked.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "GetMachineSettingsRequest".
+ */
+export interface GetMachineSettingsRequest {}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "MachineSettingsResponse".
+ */
+export interface MachineSettingsResponse {
+  settings: MachineSettings;
+}
+/**
+ * Non-secret settings for cloud machines launched by the Dispatcher (ADR 0036, WVE-239).
+ * Secrets (the Fly API token and Tailscale OAuth client secret) stay in `weave credentials`
+ * and are referenced only by credential name here.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "MachineSettings".
+ */
+export interface MachineSettings {
+  /**
+   * The Fly app that holds the machines, made in `flyOrg` if absent.
+   */
+  flyApp?: string | null;
+  /**
+   * The Fly organisation a new app goes in (`personal` by default).
+   */
+  flyOrg?: string | null;
+  /**
+   * Where machines are made (`jnb` by default).
+   */
+  flyRegion?: string | null;
+  /**
+   * Name of the `token` credential in `weave credentials` holding the Fly API token
+   * (`fly` by default).
+   */
+  flyCredential?: string | null;
+  /**
+   * Default container image launched machines boot (`scripts/host-image`).
+   */
+  image?: string | null;
+  /**
+   * Tailscale OAuth client ID (non-secret), paired with `tailscaleCredential` to mint
+   * single-use ephemeral keys. Absent when no tailnet key is minted.
+   */
+  tailscaleClientId?: string | null;
+  /**
+   * Name of the `token` credential in `weave credentials` holding the Tailscale OAuth
+   * client secret (`tailscale` by default).
+   */
+  tailscaleCredential?: string | null;
+  /**
+   * The tag minted Tailscale keys give their nodes (`tag:weave-host` by default).
+   */
+  tailscaleTag?: string | null;
+}
+/**
+ * `machines/configure`: update the Dispatcher's non-secret cloud machine settings. Omitted
+ * fields stay as they are; `null` clears a field back to unset/default.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "UpdateMachineSettingsRequest".
+ */
+export interface UpdateMachineSettingsRequest {
+  flyApp?: string | null;
+  flyOrg?: string | null;
+  flyRegion?: string | null;
+  flyCredential?: string | null;
+  image?: string | null;
+  tailscaleClientId?: string | null;
+  tailscaleCredential?: string | null;
+  tailscaleTag?: string | null;
+}
+/**
+ * `machines/list`: list the cloud machines weave made in the configured Fly app.
+ * [`crate::errors::CREDENTIALS_LOCKED`] while credentials are locked.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListMachinesRequest".
+ */
+export interface ListMachinesRequest {}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListMachinesResponse".
+ */
+export interface ListMachinesResponse {
+  machines: CloudMachine[];
+}
+/**
+ * A cloud machine the Dispatcher made (ADR 0036, WVE-238, WVE-239).
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "CloudMachine".
+ */
+export interface CloudMachine {
+  /**
+   * The provider's id for it.
+   */
+  id: string;
+  /**
+   * Its name with the provider, and the Host's with the Dispatcher.
+   */
+  name: string;
+  /**
+   * `"starting"`, `"running"`, `"stopped"`, `"gone"`, or a state of the provider's own.
+   */
+  state: string;
+}
+/**
+ * `machines/launch`: make a cloud machine using the Dispatcher's stored Fly and Tailscale
+ * credentials, wait for its Host to join, and destroy the machine if it never joins.
+ * [`crate::errors::CREDENTIALS_LOCKED`] while credentials are locked.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "LaunchMachineRequest".
+ */
+export interface LaunchMachineRequest {
+  /**
+   * What the Dispatcher calls the Host, and the provider the machine.
+   */
+  name: string;
+  /**
+   * Image override; uses configured `MachineSettings.image` when absent.
+   */
+  image?: string | null;
+  cpus?: number | null;
+  memoryMb?: number | null;
+  /**
+   * Persistent volume size in GB (0 for none; 1 by default).
+   */
+  stateGb?: number | null;
+  /**
+   * Seconds to wait for the Host to join before destroying the machine (240 by default).
+   */
+  waitSecs?: number | null;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "LaunchMachineResponse".
+ */
+export interface LaunchMachineResponse {
+  machine: CloudMachine;
+  host: DispatcherHost;
+  /**
+   * Milliseconds from offering the join code to the Host being connected.
+   */
+  tookMs: number;
+}
+/**
+ * `machines/destroy`: destroy a cloud machine weave made (and its volume), and remove its Host
+ * from the Dispatcher. [`crate::errors::CREDENTIALS_LOCKED`] while credentials are locked.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DestroyMachineRequest".
+ */
+export interface DestroyMachineRequest {
+  /**
+   * The machine's id or name.
+   */
+  machine: string;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DestroyMachineResponse".
+ */
+export interface DestroyMachineResponse {
+  machine: CloudMachine;
+  /**
+   * Whether a Host of that name was also removed from the Dispatcher.
+   */
+  hostRemoved: boolean;
+}
+/**
  * `devices/paired`: a device took the offer this connection made.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -9282,6 +9458,11 @@ export interface DispatcherRequests {
   "credentials/set": { params: SetCredentialRequest; result: CredentialResponse };
   "credentials/remove": { params: RemoveCredentialRequest; result: Empty };
   "credentials/renew": { params: RenewCredentialRequest; result: CredentialResponse };
+  "machines/config": { params: GetMachineSettingsRequest; result: MachineSettingsResponse };
+  "machines/configure": { params: UpdateMachineSettingsRequest; result: MachineSettingsResponse };
+  "machines/list": { params: ListMachinesRequest; result: ListMachinesResponse };
+  "machines/launch": { params: LaunchMachineRequest; result: LaunchMachineResponse };
+  "machines/destroy": { params: DestroyMachineRequest; result: DestroyMachineResponse };
 }
 
 /** What each notification the Dispatcher sends carries. */

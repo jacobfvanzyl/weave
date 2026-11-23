@@ -1035,6 +1035,33 @@ Renews the named sign-in now by running its vendor's program, saves the new sign
 `renewalError`, and syncs every connected Host. `credentialsLocked` unless unlocked; invalid
 params for a name that doesn't exist or isn't a `signIn`.
 
+**`machines/config`** `{}` → `{settings: MachineSettings}`
+
+Non-secret cloud machine settings (`flyApp`, `flyOrg`, `flyRegion`, `flyCredential`, `image`,
+`tailscaleClientId`, `tailscaleCredential`, `tailscaleTag`). Only with the `machines` feature,
+as are the rest. Works while credentials are locked; secrets stay in `credentials`.
+
+**`machines/configure`** `{flyApp?, flyOrg?, flyRegion?, flyCredential?, image?, tailscaleClientId?, tailscaleCredential?, tailscaleTag?}` → `{settings}`
+
+Updates any given setting (`null` clears back to unset/default).
+
+**`machines/list`** `{}` → `{machines: CloudMachine[]}`
+
+Lists the cloud machines weave made in the configured Fly app. `credentialsLocked` while locked.
+
+**`machines/launch`** `{name, image?, cpus?, memoryMb?, stateGb?, waitSecs?}` → `{machine, host, tookMs}`
+
+Reads the Fly API token (`fly` by default) and optional Tailscale OAuth client secret
+(`tailscale` by default, when `tailscaleClientId` is set) from the encrypted credential store,
+mints a single-use ephemeral Tailscale key if configured, creates the machine, waits for its Host
+to join (which then receives its synced credentials), and destroys the machine if it never joins.
+`credentialsLocked` while locked.
+
+**`machines/destroy`** `{machine}` → `{machine, hostRemoved}`
+
+Destroys the named cloud machine (by id or name) and its volume, and removes its Host from the
+Dispatcher. `credentialsLocked` while locked.
+
 **`bots/list`** `{}` → `{bots: Bot[]}`
 
 ```ts

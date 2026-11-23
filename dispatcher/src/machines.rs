@@ -1,14 +1,14 @@
-//! Computers for Hosts, made in the cloud (WVE-238, a spike behind the `machines` feature).
+//! Computers for Hosts, made in the cloud (ADR 0036, WVE-238, WVE-239).
 //!
 //! The Dispatcher runs no agents, and this doesn't change that: it makes the computer a Host
-//! runs on, and the Host there joins like any other, over the connection it opens (ADR 0030).
-//! Two seams keep the parts apart:
+//! runs on using provider tokens kept in its encrypted credential store, and the Host there
+//! joins like any other, over the connection it opens (ADR 0030), receiving its agent sign-ins
+//! as soon as it connects. Two seams keep the parts apart:
 //!
 //! - [`Machines`]: a provider of computers, which knows nothing of Hosts. [`fly::Fly`] is the
-//!   first, over Fly's Machines API.
+//!   first, over Fly's Machines API, behind [`MachineBackend`] so tests can swap in a fake.
 //! - [`Joining`]: what a launch asks of the Dispatcher, a code to join with and the Hosts that
-//!   joined. The [`Dispatcher`](crate::Dispatcher) answers it in its own process, and a
-//!   [`DispatcherConnection`] over its API, which is how the CLI launches one today.
+//!   joined.
 //!
 //! [`launch`] goes from nothing to a Host that joined: a code, a machine whose image joins with
 //! it (`scripts/host-image`), and a wait for the Host to connect. A machine whose Host never
@@ -19,17 +19,42 @@ pub mod tailscale;
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::Error;
+use futures::future::BoxFuture;
+use weave_host_protocol::dispatcher::CloudMachine;
+use weave_host_protocol::dispatcher::CredentialKind;
+use weave_host_protocol::dispatcher::DestroyMachineResponse;
 use weave_host_protocol::dispatcher::DispatcherAddress;
 use weave_host_protocol::dispatcher::DispatcherHost;
+use weave_host_protocol::dispatcher::LaunchMachineRequest;
+use weave_host_protocol::dispatcher::LaunchMachineResponse;
 use weave_host_protocol::dispatcher::ListHostsRequest;
+use weave_host_protocol::dispatcher::MachineSettings;
 use weave_host_protocol::dispatcher::OfferHostRequest;
 use weave_host_protocol::dispatcher::OfferHostResponse;
+use weave_host_protocol::dispatcher::UpdateMachineSettingsRequest;
 
 use crate::Dispatcher;
+use crate::Shared;
 use crate::client::DispatcherConnection;
+use crate::internal;
+use crate::invalid;
+use crate::machines::fly::Fly;
+use crate::machines::fly::FlyConfig;
+use crate::machines::tailscale::DEFAULT_TAG;
+use crate::machines::tailscale::TailscaleClient;
+
+/// Default credential name for the Fly API token in `weave credentials`.
+pub const DEFAULT_FLY_CREDENTIAL: &str = "fly";
+/// Default credential name for the Tailscale OAuth client secret in `weave credentials`.
+pub const DEFAULT_TAILSCALE_CREDENTIAL: &str = "tailscale";
+/// Default Fly organisation for a newly created app.
+pub const DEFAULT_FLY_ORG: &str = "personal";
+/// Default Fly region where new machines are created.
+pub const DEFAULT_FLY_REGION: &str = "jnb";
 
 /// The Dispatcher's URL, for the image's entrypoint to join.
 pub const ENV_DISPATCHER_URL: &str = "WEAVE_DISPATCHER_URL";
@@ -67,6 +92,16 @@ pub struct Machine {
     pub id: String,
     pub name: String,
     pub state: MachineState,
+}
+
+impl From<Machine> for CloudMachine {
+    fn from(machine: Machine) -> Self {
+        Self {
+            id: machine.id,
+            name: machine.name,
+            state: machine.state.to_string(),
+        }
+    }
 }
 
 /// How a machine stands, as far as starting work on it goes.
@@ -128,6 +163,71 @@ pub trait Machines: Send + Sync {
 
     /// Destroy a machine and its disk.
     fn destroy(&self, id: &str) -> impl Future<Output = Result<(), MachineError>> + Send;
+}
+
+/// Object-safe form of [`Machines`], used by [`MachineBackend`].
+pub trait DynMachines: Send + Sync {
+    fn create<'a>(&'a self, spec: &'a MachineSpec) -> BoxFuture<'a, Result<Machine, MachineError>>;
+    fn list<'a>(&'a self) -> BoxFuture<'a, Result<Vec<Machine>, MachineError>>;
+    fn get<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Machine, MachineError>>;
+    fn start<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), MachineError>>;
+    fn stop<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), MachineError>>;
+    fn destroy<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), MachineError>>;
+}
+
+impl<M: Machines> DynMachines for M {
+    fn create<'a>(&'a self, spec: &'a MachineSpec) -> BoxFuture<'a, Result<Machine, MachineError>> {
+        Box::pin(Machines::create(self, spec))
+    }
+
+    fn list<'a>(&'a self) -> BoxFuture<'a, Result<Vec<Machine>, MachineError>> {
+        Box::pin(Machines::list(self))
+    }
+
+    fn get<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Machine, MachineError>> {
+        Box::pin(Machines::get(self, id))
+    }
+
+    fn start<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), MachineError>> {
+        Box::pin(Machines::start(self, id))
+    }
+
+    fn stop<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), MachineError>> {
+        Box::pin(Machines::stop(self, id))
+    }
+
+    fn destroy<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), MachineError>> {
+        Box::pin(Machines::destroy(self, id))
+    }
+}
+
+/// Seam between the Dispatcher's `machines/*` API and the external cloud APIs (Fly Machines and
+/// Tailscale OAuth). Production uses [`LiveBackend`]; tests swap in a fake.
+pub trait MachineBackend: Send + Sync {
+    fn machines(&self, config: &FlyConfig) -> Result<Box<dyn DynMachines>, MachineError>;
+    fn mint_tailscale_key<'a>(
+        &'a self,
+        client: &'a TailscaleClient,
+        description: &'a str,
+    ) -> BoxFuture<'a, Result<String, MachineError>>;
+}
+
+/// Calls Fly's Machines API and Tailscale's OAuth API over HTTPS.
+#[derive(Default)]
+pub struct LiveBackend;
+
+impl MachineBackend for LiveBackend {
+    fn machines(&self, config: &FlyConfig) -> Result<Box<dyn DynMachines>, MachineError> {
+        Ok(Box::new(Fly::new(config.clone())?))
+    }
+
+    fn mint_tailscale_key<'a>(
+        &'a self,
+        client: &'a TailscaleClient,
+        description: &'a str,
+    ) -> BoxFuture<'a, Result<String, MachineError>> {
+        Box::pin(client.mint_key(description))
+    }
 }
 
 /// What a launch asks of the Dispatcher.
@@ -254,6 +354,15 @@ pub async fn launch(
     machines: &impl Machines,
     launch: Launch,
 ) -> Result<Launched, LaunchError> {
+    launch_dyn(joining, machines, launch).await
+}
+
+/// Same as [`launch`], over a trait-object [`DynMachines`].
+pub async fn launch_dyn(
+    joining: &impl Joining,
+    machines: &dyn DynMachines,
+    launch: Launch,
+) -> Result<Launched, LaunchError> {
     let began = tokio::time::Instant::now();
     let taken = joining
         .hosts()
@@ -320,4 +429,195 @@ pub async fn launch(
         waited: began.elapsed(),
         left,
     })
+}
+
+struct SharedJoining(Arc<Shared>);
+
+impl Joining for SharedJoining {
+    async fn offer(&self) -> Result<OfferHostResponse, Error> {
+        crate::api::offer_host(&self.0, false).await
+    }
+
+    async fn hosts(&self) -> Result<Vec<DispatcherHost>, Error> {
+        self.0.hosts()
+    }
+}
+
+impl Shared {
+    pub(crate) fn machine_settings(&self) -> Result<MachineSettings, Error> {
+        self.store.machine_settings().map_err(internal)
+    }
+
+    pub(crate) fn update_machine_settings(
+        &self,
+        request: &UpdateMachineSettingsRequest,
+    ) -> Result<MachineSettings, Error> {
+        self.store.update_machine_settings(request).map_err(invalid)
+    }
+
+    /// Read a `token` credential from the encrypted store for cloud provider calls. Fails with
+    /// `credentialsLocked` while locked, or invalid params when missing or not a token.
+    fn token_credential(&self, name: &str, what: &str) -> Result<String, Error> {
+        let Some((kind, value)) = self.credentials.value(&self.store, name)? else {
+            return Err(invalid(format!(
+                "no credential called {name}: `weave credentials set {name}` keeps {what}"
+            )));
+        };
+        if kind != CredentialKind::Token {
+            return Err(invalid(format!(
+                "{name} isn't a token credential, so it can't be used for {what}"
+            )));
+        }
+        let trimmed = value.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            return Err(invalid(format!("credential {name} is empty")));
+        }
+        Ok(trimmed.to_owned())
+    }
+
+    fn fly_client(&self, settings: &MachineSettings) -> Result<Box<dyn DynMachines>, Error> {
+        let app = settings.fly_app.as_deref().ok_or_else(|| {
+            invalid(
+                "no Fly app is configured: `weave hosts machines config --fly-app <app>` sets it",
+            )
+        })?;
+        let cred_name = settings
+            .fly_credential
+            .as_deref()
+            .unwrap_or(DEFAULT_FLY_CREDENTIAL);
+        let token = self.token_credential(cred_name, "your Fly API token")?;
+        let mut config = FlyConfig::new(token, app);
+        config.org = settings
+            .fly_org
+            .as_deref()
+            .unwrap_or(DEFAULT_FLY_ORG)
+            .to_owned();
+        config.region = settings
+            .fly_region
+            .as_deref()
+            .unwrap_or(DEFAULT_FLY_REGION)
+            .to_owned();
+        self.config
+            .machines
+            .machines(&config)
+            .map_err(|error| internal(error.0))
+    }
+
+    async fn mint_tailscale_key(
+        &self,
+        settings: &MachineSettings,
+        host_name: &str,
+    ) -> Result<Option<String>, Error> {
+        let Some(client_id) = settings.tailscale_client_id.as_deref() else {
+            return Ok(None);
+        };
+        let cred_name = settings
+            .tailscale_credential
+            .as_deref()
+            .unwrap_or(DEFAULT_TAILSCALE_CREDENTIAL);
+        let secret = self.token_credential(cred_name, "your Tailscale OAuth client secret")?;
+        let mut client = TailscaleClient::new(client_id, secret);
+        client.tag = settings
+            .tailscale_tag
+            .as_deref()
+            .unwrap_or(DEFAULT_TAG)
+            .to_owned();
+        let key = self
+            .config
+            .machines
+            .mint_tailscale_key(&client, &format!("weave host {host_name}"))
+            .await
+            .map_err(|error| internal(error.0))?;
+        Ok(Some(key))
+    }
+
+    pub(crate) async fn list_machines(&self) -> Result<Vec<CloudMachine>, Error> {
+        let settings = self.machine_settings()?;
+        let machines = self.fly_client(&settings)?;
+        let listed = machines.list().await.map_err(|error| internal(error.0))?;
+        Ok(listed.into_iter().map(CloudMachine::from).collect())
+    }
+
+    pub(crate) async fn launch_machine(
+        self: &Arc<Self>,
+        request: LaunchMachineRequest,
+    ) -> Result<LaunchMachineResponse, Error> {
+        let name = request.name.trim().to_owned();
+        if name.is_empty() || name.chars().any(char::is_control) {
+            return Err(invalid("a machine needs a single-line name"));
+        }
+        let settings = self.machine_settings()?;
+        let image = request
+            .image
+            .or_else(|| settings.image.clone())
+            .filter(|image| !image.trim().is_empty())
+            .ok_or_else(|| {
+                invalid(
+                    "no image given: pass --image or set a default with `weave hosts machines \
+                     config --image <image>`",
+                )
+            })?;
+        let machines = self.fly_client(&settings)?;
+        // Check before minting a Tailscale key so a duplicate name never wastes one.
+        let taken = self
+            .hosts()?
+            .into_iter()
+            .any(|host| host.name.eq_ignore_ascii_case(&name));
+        if taken {
+            return Err(invalid(format!(
+                "a Host called {name} joined the Dispatcher already"
+            )));
+        }
+        let tailscale_key = self.mint_tailscale_key(&settings, &name).await?;
+        let defaults = Launch::new(name, image);
+        let launched = launch_dyn(
+            &SharedJoining(Arc::clone(self)),
+            machines.as_ref(),
+            Launch {
+                tailscale_key,
+                cpus: request.cpus.unwrap_or(defaults.cpus),
+                memory_mb: request.memory_mb.unwrap_or(defaults.memory_mb),
+                state_gb: request.state_gb.unwrap_or(defaults.state_gb),
+                wait: request
+                    .wait_secs
+                    .map(Duration::from_secs)
+                    .unwrap_or(defaults.wait),
+                poll: self.config.machine_poll,
+                ..defaults
+            },
+        )
+        .await
+        .map_err(|error| match error {
+            LaunchError::Refused(why) => invalid(why),
+            LaunchError::Dispatcher(error) => error,
+            other => internal(other.to_string()),
+        })?;
+        Ok(LaunchMachineResponse {
+            machine: launched.machine.into(),
+            host: launched.host,
+            took_ms: u64::try_from(launched.took.as_millis()).unwrap_or(u64::MAX),
+        })
+    }
+
+    pub(crate) async fn destroy_machine(
+        self: &Arc<Self>,
+        by: &str,
+    ) -> Result<DestroyMachineResponse, Error> {
+        let settings = self.machine_settings()?;
+        let machines = self.fly_client(&settings)?;
+        let listed = machines.list().await.map_err(|error| internal(error.0))?;
+        let machine = listed
+            .into_iter()
+            .find(|machine| machine.id == by || machine.name == by)
+            .ok_or_else(|| invalid(format!("no machine {by} that weave made")))?;
+        machines
+            .destroy(&machine.id)
+            .await
+            .map_err(|error| internal(error.0))?;
+        let host_removed = self.remove_host(&machine.name).await.is_ok();
+        Ok(DestroyMachineResponse {
+            machine: machine.into(),
+            host_removed,
+        })
+    }
 }

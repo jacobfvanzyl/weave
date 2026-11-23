@@ -629,6 +629,28 @@ mod tests {
             "personal-git"
         ]));
         assert!(parses(&["weave", "git-credential", "get"]));
+        assert!(parses(&["weave", "hosts", "launch", "--name", "cloud-1"]));
+        assert!(parses(&["weave", "hosts", "machines"]));
+        assert!(parses(&[
+            "weave",
+            "hosts",
+            "machines",
+            "config",
+            "--fly-app",
+            "weave-hosts",
+            "--tailscale-client-id",
+            "k123456CNTRL"
+        ]));
+        assert!(!parses(&[
+            "weave",
+            "hosts",
+            "machines",
+            "config",
+            "--tailscale-client-id",
+            "k123456CNTRL",
+            "--clear-tailscale-client-id"
+        ]));
+        assert!(parses(&["weave", "hosts", "destroy", "cloud-1"]));
         // A Bot is named in place of where a schedule runs, and a time in place of a cron
         // expression (WVE-118).
         let schedule = |more: &[&str]| {

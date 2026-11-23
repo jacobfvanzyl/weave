@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&DestroyMachineRequest { machine: \"cloud-1\".to_owned(), })"
+---
+{
+  "method": "machines/destroy",
+  "params": {
+    "machine": "cloud-1"
+  }
+}

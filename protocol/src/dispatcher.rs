@@ -95,6 +95,11 @@ pub const PROJECTS_FEATURE: &str = "projects";
 /// (ADR 0036, WVE-239): it answers `credentials/*`.
 pub const CREDENTIALS_FEATURE: &str = "credentials";
 
+/// The [`DispatcherHello::features`] entry of a Dispatcher that launches and manages cloud
+/// machines using tokens from its credential store (ADR 0036, WVE-238, WVE-239): it answers
+/// `machines/*`.
+pub const MACHINES_FEATURE: &str = "machines";
+
 /// The [`DispatcherHello::features`] entry of a Dispatcher that keeps Bots (ADR 0028, WVE-118):
 /// it answers `bots/*`, and `schedules/add` takes `bot`, and `at` for a one-off.
 pub const BOTS_FEATURE: &str = "bots";
@@ -1497,4 +1502,198 @@ pub struct JoinedDispatcher {
     /// Why the last connection failed or closed, when it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
+}
+
+/// A cloud machine the Dispatcher made (ADR 0036, WVE-238, WVE-239).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct CloudMachine {
+    /// The provider's id for it.
+    pub id: String,
+    /// Its name with the provider, and the Host's with the Dispatcher.
+    pub name: String,
+    /// `"starting"`, `"running"`, `"stopped"`, `"gone"`, or a state of the provider's own.
+    pub state: String,
+}
+
+/// Non-secret settings for cloud machines launched by the Dispatcher (ADR 0036, WVE-239).
+/// Secrets (the Fly API token and Tailscale OAuth client secret) stay in `weave credentials`
+/// and are referenced only by credential name here.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct MachineSettings {
+    /// The Fly app that holds the machines, made in `flyOrg` if absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fly_app: Option<String>,
+    /// The Fly organisation a new app goes in (`personal` by default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fly_org: Option<String>,
+    /// Where machines are made (`jnb` by default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fly_region: Option<String>,
+    /// Name of the `token` credential in `weave credentials` holding the Fly API token
+    /// (`fly` by default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fly_credential: Option<String>,
+    /// Default container image launched machines boot (`scripts/host-image`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Tailscale OAuth client ID (non-secret), paired with `tailscaleCredential` to mint
+    /// single-use ephemeral keys. Absent when no tailnet key is minted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale_client_id: Option<String>,
+    /// Name of the `token` credential in `weave credentials` holding the Tailscale OAuth
+    /// client secret (`tailscale` by default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale_credential: Option<String>,
+    /// The tag minted Tailscale keys give their nodes (`tag:weave-host` by default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale_tag: Option<String>,
+}
+
+/// `machines/config`: read the Dispatcher's non-secret cloud machine settings. Works while
+/// credentials are locked.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "machines/config", response = MachineSettingsResponse)]
+pub struct GetMachineSettingsRequest {}
+
+/// `machines/configure`: update the Dispatcher's non-secret cloud machine settings. Omitted
+/// fields stay as they are; `null` clears a field back to unset/default.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "machines/configure", response = MachineSettingsResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMachineSettingsRequest {
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub fly_app: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub fly_org: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub fly_region: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub fly_credential: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub image: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub tailscale_client_id: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub tailscale_credential: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub tailscale_tag: Option<Option<String>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MachineSettingsResponse {
+    pub settings: MachineSettings,
+}
+
+/// `machines/list`: list the cloud machines weave made in the configured Fly app.
+/// [`crate::errors::CREDENTIALS_LOCKED`] while credentials are locked.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "machines/list", response = ListMachinesResponse)]
+pub struct ListMachinesRequest {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ListMachinesResponse {
+    pub machines: Vec<CloudMachine>,
+}
+
+/// `machines/launch`: make a cloud machine using the Dispatcher's stored Fly and Tailscale
+/// credentials, wait for its Host to join, and destroy the machine if it never joins.
+/// [`crate::errors::CREDENTIALS_LOCKED`] while credentials are locked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "machines/launch", response = LaunchMachineResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchMachineRequest {
+    /// What the Dispatcher calls the Host, and the provider the machine.
+    pub name: String,
+    /// Image override; uses configured `MachineSettings.image` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpus: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_mb: Option<u32>,
+    /// Persistent volume size in GB (0 for none; 1 by default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_gb: Option<u32>,
+    /// Seconds to wait for the Host to join before destroying the machine (240 by default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_secs: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchMachineResponse {
+    pub machine: CloudMachine,
+    pub host: DispatcherHost,
+    /// Milliseconds from offering the join code to the Host being connected.
+    pub took_ms: u64,
+}
+
+/// `machines/destroy`: destroy a cloud machine weave made (and its volume), and remove its Host
+/// from the Dispatcher. [`crate::errors::CREDENTIALS_LOCKED`] while credentials are locked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "machines/destroy", response = DestroyMachineResponse)]
+pub struct DestroyMachineRequest {
+    /// The machine's id or name.
+    pub machine: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DestroyMachineResponse {
+    pub machine: CloudMachine,
+    /// Whether a Host of that name was also removed from the Dispatcher.
+    pub host_removed: bool,
 }

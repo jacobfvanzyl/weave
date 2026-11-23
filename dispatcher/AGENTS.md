@@ -280,14 +280,19 @@ keys both ways, removal, a Host paired before Hosts joined, and one joining over
   that Project's remote as `CredentialUse::Git`). `Shared::sync_credentials` sends each Host its
   set (`credentials/sync`): from a Host's link as it connects (`sync_credentials_to`), and after
   an unlock, a set, a renewal, a remove, or a Project change. Locked, nothing is sent.
-- `machines.rs`, `machines/` (WVE-238, a spike behind the `machines` cargo feature, off by
-  default): computers for Hosts, made in the cloud. `Machines` is a provider of them, which knows
-  nothing of Hosts (`machines/fly.rs`, Fly's Machines API; one app, a volume per machine at
-  `/data`, and only machines whose metadata says weave made them are listed or destroyed).
-  `Joining` is what a launch asks of the Dispatcher, a code and the Hosts that joined, answered
-  by `Dispatcher` in its own process and by `DispatcherConnection` over the API, which is how
-  the CLI launches one: the Dispatcher's own process is unchanged and has no wire methods for
-  this yet. `launch` asks for a code, makes a machine whose image joins with it
-  (`scripts/host-image`), waits for a Host of that name to connect, and destroys a machine whose
-  Host never does. `machines/tailscale.rs` mints the key a machine joins the tailnet with, once
-  and ephemeral, from an OAuth client of the person's. The Dispatcher still runs no agents.
+- `machines.rs`, `machines/`, `store/machines.rs` (ADR 0036, WVE-238, WVE-239, feature
+  `machines`): computers for Hosts, made in the cloud by the Dispatcher itself using provider
+  tokens from its encrypted credential store. `Machines` / `DynMachines` is a provider of
+  computers that knows nothing of Hosts (`machines/fly.rs`, Fly's Machines API; one app, a volume
+  per machine at `/data`, only machines whose metadata says `made_by = weave` are listed or
+  destroyed), behind `MachineBackend` on `DispatcherConfig` (`LiveBackend` in production; tests
+  swap in a fake). The seventeenth migration's `machine_settings` table keeps non-secret settings
+  (Fly app/org/region, default image, Tailscale OAuth client ID/tag, and the credential names
+  holding the Fly API token and Tailscale OAuth client secret, `fly` and `tailscale` by default).
+  `machines/config`, `machines/configure`, `machines/list`, `machines/launch` and
+  `machines/destroy` expose them on the Dispatcher API; `list`, `launch` and `destroy` require
+  unlocked credentials (`credentialsLocked` while locked). `launch` checks the name, mints a
+  single-use ephemeral Tailscale key when `tailscaleClientId` is set (`machines/tailscale.rs`),
+  offers a join code, creates the machine, waits for its Host to connect (which then receives its
+  synced agent sign-ins automatically), and destroys any machine whose Host never joins. The
+  Dispatcher still runs no agents.

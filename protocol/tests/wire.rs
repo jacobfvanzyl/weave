@@ -3238,3 +3238,106 @@ fn credentials_wire_shapes() {
         })
     );
 }
+
+#[test]
+fn machines_wire_shapes() {
+    use weave_host_protocol::dispatcher::CloudMachine;
+    use weave_host_protocol::dispatcher::DestroyMachineRequest;
+    use weave_host_protocol::dispatcher::DestroyMachineResponse;
+    use weave_host_protocol::dispatcher::DispatcherHost;
+    use weave_host_protocol::dispatcher::GetMachineSettingsRequest;
+    use weave_host_protocol::dispatcher::LaunchMachineRequest;
+    use weave_host_protocol::dispatcher::LaunchMachineResponse;
+    use weave_host_protocol::dispatcher::ListMachinesRequest;
+    use weave_host_protocol::dispatcher::ListMachinesResponse;
+    use weave_host_protocol::dispatcher::MachineSettings;
+    use weave_host_protocol::dispatcher::MachineSettingsResponse;
+    use weave_host_protocol::dispatcher::Reachability;
+    use weave_host_protocol::dispatcher::UpdateMachineSettingsRequest;
+
+    let settings = MachineSettings {
+        fly_app: Some("weave-hosts".to_owned()),
+        fly_org: Some("personal".to_owned()),
+        fly_region: Some("jnb".to_owned()),
+        fly_credential: Some("fly".to_owned()),
+        image: Some("registry.fly.io/weave-hosts:latest".to_owned()),
+        tailscale_client_id: Some("k123456CNTRL".to_owned()),
+        tailscale_credential: Some("tailscale".to_owned()),
+        tailscale_tag: Some("tag:weave-host".to_owned()),
+    };
+    let machine = CloudMachine {
+        id: "e784e524b92e83".to_owned(),
+        name: "cloud-1".to_owned(),
+        state: "running".to_owned(),
+    };
+    insta::assert_json_snapshot!(
+        "get_machine_settings_request",
+        message(&GetMachineSettingsRequest {})
+    );
+    insta::assert_json_snapshot!(
+        "update_machine_settings_request",
+        message(&UpdateMachineSettingsRequest {
+            fly_app: Some(Some("weave-hosts".to_owned())),
+            fly_region: Some(Some("jnb".to_owned())),
+            image: Some(Some("registry.fly.io/weave-hosts:latest".to_owned())),
+            tailscale_client_id: Some(None),
+            ..UpdateMachineSettingsRequest::default()
+        })
+    );
+    insta::assert_json_snapshot!(
+        "machine_settings_response",
+        round_trip(&MachineSettingsResponse { settings })
+    );
+    insta::assert_json_snapshot!("list_machines_request", message(&ListMachinesRequest {}));
+    insta::assert_json_snapshot!(
+        "list_machines_response",
+        round_trip(&ListMachinesResponse {
+            machines: vec![machine.clone()],
+        })
+    );
+    insta::assert_json_snapshot!(
+        "launch_machine_request",
+        message(&LaunchMachineRequest {
+            name: "cloud-1".to_owned(),
+            image: None,
+            cpus: Some(2),
+            memory_mb: Some(2048),
+            state_gb: Some(5),
+            wait_secs: Some(240),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "launch_machine_response",
+        round_trip(&LaunchMachineResponse {
+            machine: machine.clone(),
+            host: DispatcherHost {
+                host_id: "8ZpX3kqW1m0aLr9TQv2cYw".to_owned(),
+                name: "cloud-1".to_owned(),
+                url: String::new(),
+                device_id: "D7qK2mN4pR8sT1vX".to_owned(),
+                paired_at: 1_795_400_000_000,
+                joined_at: Some(1_795_400_000_000),
+                here: false,
+                connected: true,
+                status: Reachability::Reachable,
+                why: None,
+                connected_at: Some(1_795_400_000_000),
+                pending: 0,
+            },
+            took_ms: 26_000,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "destroy_machine_request",
+        message(&DestroyMachineRequest {
+            machine: "cloud-1".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "destroy_machine_response",
+        round_trip(&DestroyMachineResponse {
+            machine,
+            host_removed: true,
+        })
+    );
+}

@@ -60,6 +60,7 @@ use weave_host_protocol::dispatcher::DISPATCHER_CARRY_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_HOST_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_PROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_SUBPROTOCOL;
+use weave_host_protocol::dispatcher::DestroyMachineRequest;
 use weave_host_protocol::dispatcher::DispatcherAddress;
 use weave_host_protocol::dispatcher::DispatcherChallenge;
 use weave_host_protocol::dispatcher::DispatcherChallengeRequest;
@@ -67,13 +68,17 @@ use weave_host_protocol::dispatcher::DispatcherHello;
 use weave_host_protocol::dispatcher::DispatcherHelloRequest;
 use weave_host_protocol::dispatcher::DispatcherStatusRequest;
 use weave_host_protocol::dispatcher::GetBotRequest;
+use weave_host_protocol::dispatcher::GetMachineSettingsRequest;
 use weave_host_protocol::dispatcher::GetProjectRequest;
+use weave_host_protocol::dispatcher::LaunchMachineRequest;
 use weave_host_protocol::dispatcher::ListBotsRequest;
 use weave_host_protocol::dispatcher::ListBotsResponse;
 use weave_host_protocol::dispatcher::ListCredentialsRequest;
 use weave_host_protocol::dispatcher::ListCredentialsResponse;
 use weave_host_protocol::dispatcher::ListHostsRequest;
 use weave_host_protocol::dispatcher::ListHostsResponse;
+use weave_host_protocol::dispatcher::ListMachinesRequest;
+use weave_host_protocol::dispatcher::ListMachinesResponse;
 use weave_host_protocol::dispatcher::ListOccurrencesRequest;
 use weave_host_protocol::dispatcher::ListOccurrencesResponse;
 use weave_host_protocol::dispatcher::ListProjectsRequest;
@@ -81,6 +86,8 @@ use weave_host_protocol::dispatcher::ListProjectsResponse;
 use weave_host_protocol::dispatcher::ListSchedulesRequest;
 use weave_host_protocol::dispatcher::ListSchedulesResponse;
 use weave_host_protocol::dispatcher::LockCredentialsRequest;
+use weave_host_protocol::dispatcher::MACHINES_FEATURE;
+use weave_host_protocol::dispatcher::MachineSettingsResponse;
 use weave_host_protocol::dispatcher::NewBotThreadRequest;
 use weave_host_protocol::dispatcher::OccurrenceResponse;
 use weave_host_protocol::dispatcher::OfferHostRequest;
@@ -103,6 +110,7 @@ use weave_host_protocol::dispatcher::SetCredentialRequest;
 use weave_host_protocol::dispatcher::UnlockCredentialsRequest;
 use weave_host_protocol::dispatcher::UnwatchBotsRequest;
 use weave_host_protocol::dispatcher::UpdateBotRequest;
+use weave_host_protocol::dispatcher::UpdateMachineSettingsRequest;
 use weave_host_protocol::dispatcher::UpdateProjectRequest;
 use weave_host_protocol::dispatcher::WatchBotsRequest;
 use weave_host_protocol::errors;
@@ -229,6 +237,7 @@ pub(crate) fn features() -> Vec<String> {
         BOTS_WATCH_FEATURE.to_owned(),
         BOTS_AVATAR_FEATURE.to_owned(),
         CREDENTIALS_FEATURE.to_owned(),
+        MACHINES_FEATURE.to_owned(),
     ]
 }
 
@@ -753,6 +762,23 @@ async fn handlers(
             .renew_credential(&request.name)
             .await
             .map(|credential| CredentialResponse { credential }));
+    handle!(builder, connection, shared, _request: GetMachineSettingsRequest =>
+        shared
+            .machine_settings()
+            .map(|settings| MachineSettingsResponse { settings }));
+    handle!(builder, connection, shared, request: UpdateMachineSettingsRequest =>
+        shared
+            .update_machine_settings(&request)
+            .map(|settings| MachineSettingsResponse { settings }));
+    handle!(builder, connection, shared, _request: ListMachinesRequest =>
+        shared
+            .list_machines()
+            .await
+            .map(|machines| ListMachinesResponse { machines }));
+    handle!(builder, connection, shared, request: LaunchMachineRequest =>
+        shared.launch_machine(request).await);
+    handle!(builder, connection, shared, request: DestroyMachineRequest =>
+        shared.destroy_machine(&request.machine).await);
     handle!(builder, connection, shared, _request: ListBotsRequest =>
         shared.bots().map(|bots| ListBotsResponse { bots }));
     handle!(builder, connection, shared, request: GetBotRequest =>
