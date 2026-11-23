@@ -303,7 +303,30 @@ pub fn take_macos_claude_keychain(
     }
     let text = String::from_utf8(output.stdout).ok()?;
     let trimmed = text.trim();
-    (!trimmed.is_empty()).then(|| Zeroizing::new(trimmed.to_owned()))
+    if trimmed.is_empty() {
+        return None;
+    }
+    // `security -w` prints raw hex when the stored bytes contain newlines or non-ASCII.
+    if !trimmed.starts_with('{')
+        && trimmed.len().is_multiple_of(2)
+        && trimmed.bytes().all(|b| b.is_ascii_hexdigit())
+        && let Some(decoded) = decode_hex(trimmed)
+        && let Ok(utf8) = String::from_utf8(decoded)
+    {
+        return Some(Zeroizing::new(utf8));
+    }
+    Some(Zeroizing::new(trimmed.to_owned()))
+}
+
+#[cfg(target_os = "macos")]
+fn decode_hex(hex: &str) -> Option<Vec<u8>> {
+    let bytes = hex.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        let s = std::str::from_utf8(pair).ok()?;
+        out.push(u8::from_str_radix(s, 16).ok()?);
+    }
+    Some(out)
 }
 
 #[cfg(target_os = "macos")]
@@ -352,6 +375,7 @@ async fn renew_claude(renewer: &VendorRenewer, current: &str) -> Result<Zeroizin
     let config_dir = dir.path().join(".claude");
     std::fs::create_dir(&config_dir).map_err(|error| format!("creating renewal dir: {error}"))?;
     set_mode(&config_dir, 0o700)?;
+    let config_dir = std::fs::canonicalize(&config_dir).unwrap_or(config_dir);
     let creds_path = config_dir.join(".credentials.json");
     let seed = Zeroizing::new(parsed.to_string());
     write_private(&creds_path, seed.as_bytes())?;
@@ -362,6 +386,9 @@ async fn renew_claude(renewer: &VendorRenewer, current: &str) -> Result<Zeroizin
         "ANTHROPIC_AUTH_TOKEN",
         "CLAUDE_SECURESTORAGE_CONFIG_DIR",
     ]);
+    // On macOS keep HOME intact so Security.framework finds ~/Library/Keychains/login.keychain-db;
+    // CLAUDE_CONFIG_DIR isolates both files and the Keychain service name (hashed from it).
+    #[cfg(not(target_os = "macos"))]
     env.insert("HOME".to_owned(), dir.path().display().to_string());
     env.insert(
         "CLAUDE_CONFIG_DIR".to_owned(),
@@ -465,6 +492,7 @@ async fn renew_codex(renewer: &VendorRenewer, current: &str) -> Result<Zeroizing
     write_private(&auth_path, current.as_bytes())?;
 
     let mut env = renewer.base_env(&["OPENAI_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_API_KEY"]);
+    #[cfg(not(target_os = "macos"))]
     env.insert("HOME".to_owned(), dir.path().display().to_string());
     env.insert("CODEX_HOME".to_owned(), codex_home.display().to_string());
 
@@ -603,6 +631,7 @@ fn sign_in_claude(work_root: &Path) -> Result<Zeroizing<String>, String> {
     let config_dir = dir.path().join(".claude");
     std::fs::create_dir(&config_dir).map_err(|error| format!("creating sign-in dir: {error}"))?;
     set_mode(&config_dir, 0o700)?;
+    let config_dir = std::fs::canonicalize(&config_dir).unwrap_or(config_dir);
     let creds_path = config_dir.join(".credentials.json");
 
     let mut env: BTreeMap<String, String> = std::env::vars().collect();
@@ -614,6 +643,9 @@ fn sign_in_claude(work_root: &Path) -> Result<Zeroizing<String>, String> {
     ] {
         env.remove(stripped);
     }
+    // On macOS keep HOME intact so Security.framework finds ~/Library/Keychains/login.keychain-db
+    // and the browser opens normally; CLAUDE_CONFIG_DIR isolates both files and Keychain service.
+    #[cfg(not(target_os = "macos"))]
     env.insert("HOME".to_owned(), dir.path().display().to_string());
     env.insert(
         "CLAUDE_CONFIG_DIR".to_owned(),
@@ -677,6 +709,7 @@ fn sign_in_codex(work_root: &Path, device_auth: bool) -> Result<Zeroizing<String
     for stripped in ["OPENAI_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_API_KEY"] {
         env.remove(stripped);
     }
+    #[cfg(not(target_os = "macos"))]
     env.insert("HOME".to_owned(), dir.path().display().to_string());
     env.insert("CODEX_HOME".to_owned(), codex_home.display().to_string());
 
