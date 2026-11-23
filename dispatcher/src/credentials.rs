@@ -6,8 +6,9 @@
 //! sealed under a key Argon2id makes from the person's passphrase, so the passphrase could be
 //! changed without sealing every value again. The passphrase and the data key are never
 //! written down: the Dispatcher holds the data key in memory from `credentials/unlock` until it
-//! stops or `credentials/lock`, and a stolen database gives up names and kinds and nothing
-//! else. Names and kinds are plain, so listing and removing work while locked.
+//! stops or `credentials/lock`, and a stolen database gives up names, kinds, expiry times and
+//! renewal errors and nothing else. Names and kinds are plain, so listing and removing work
+//! while locked.
 
 use std::sync::Mutex;
 
@@ -20,6 +21,7 @@ use chacha20poly1305::KeyInit as _;
 use chacha20poly1305::XChaCha20Poly1305;
 use chacha20poly1305::aead::Aead as _;
 use chacha20poly1305::aead::Payload;
+use weave_host_protocol::Timestamp;
 use weave_host_protocol::credentials::HeldCredential;
 use weave_host_protocol::dispatcher::Credential;
 use weave_host_protocol::dispatcher::CredentialKind;
@@ -45,7 +47,7 @@ const KEY_LENGTH: usize = 32;
 const NONCE_LENGTH: usize = 24;
 const SALT_LENGTH: usize = 16;
 
-type Key = Zeroizing<[u8; KEY_LENGTH]>;
+pub(crate) type Key = Zeroizing<[u8; KEY_LENGTH]>;
 
 /// What Argon2id costs: the memory in kibibytes, the passes over it, and the lanes. Kept with
 /// the sealed key, so a Dispatcher that raises its own later still opens what it sealed before.
@@ -71,6 +73,15 @@ impl Default for KdfCost {
 #[derive(Default)]
 pub(crate) struct Credentials {
     key: Mutex<Option<Key>>,
+}
+
+/// A sign-in opened for renewal: holds a clone of the data key so a rotated refresh token can
+/// still be sealed back into SQLite even if the person locks the Dispatcher mid-flight.
+pub(crate) struct OpenedSignIn {
+    pub(crate) key: Key,
+    pub(crate) agent: String,
+    pub(crate) value: Zeroizing<String>,
+    pub(crate) updated_at: Timestamp,
 }
 
 fn random<const N: usize>() -> Result<[u8; N], Error> {
@@ -146,6 +157,10 @@ fn locked() -> Error {
 }
 
 impl Credentials {
+    pub(crate) fn is_unlocked(&self) -> bool {
+        lock(&self.key).is_some()
+    }
+
     pub(crate) fn status(&self, store: &Store) -> Result<CredentialsStatus, Error> {
         let state = if lock(&self.key).is_some() {
             CredentialsState::Unlocked
@@ -256,10 +271,10 @@ impl Credentials {
         }
         // A sign-in is for an agent, and is that agent's own file: checked by making the copy
         // a Host would get of it.
-        let agent = match (kind, agent) {
+        let (agent, expires_at) = match (kind, agent) {
             (CredentialKind::SignIn, Some(agent)) => {
-                signins::copy(name, agent, value).map_err(invalid)?;
-                Some(agent)
+                let held = signins::copy(name, agent, value).map_err(invalid)?;
+                (Some(agent), held.expires_at)
             }
             (CredentialKind::SignIn, None) => {
                 return Err(invalid("a sign-in names the agent it is for"));
@@ -267,13 +282,74 @@ impl Credentials {
             (CredentialKind::Token, Some(_)) => {
                 return Err(invalid("only a sign-in is for an agent"));
             }
-            (CredentialKind::Token, None) => None,
+            (CredentialKind::Token, None) => (None, None),
         };
         let key = self.key()?;
         let nonce = random::<NONCE_LENGTH>()?;
         let sealed = seal(&key, &nonce, value.as_bytes(), &binding(name, kind))?;
         store
-            .set_credential(name, kind, agent, &nonce, &sealed)
+            .set_credential(name, kind, agent, expires_at, &nonce, &sealed)
+            .map_err(internal)
+    }
+
+    /// Open a sign-in for renewal. Fails with `credentialsLocked` while locked, or invalid
+    /// params when `name` doesn't exist or isn't a sign-in.
+    pub(crate) fn open_for_renewal(
+        &self,
+        store: &Store,
+        name: &str,
+    ) -> Result<OpenedSignIn, Error> {
+        let key = self.key()?;
+        let kept = store
+            .sealed_credential(name)
+            .map_err(internal)?
+            .ok_or_else(|| invalid(format!("no credential called {name}")))?;
+        if kept.kind != CredentialKind::SignIn {
+            return Err(invalid(format!(
+                "{name} isn't a sign-in, so it isn't renewed"
+            )));
+        }
+        let agent = kept
+            .agent
+            .ok_or_else(|| invalid(format!("sign-in {name} names no agent")))?;
+        let plain = opened(
+            &key,
+            &kept.nonce,
+            &kept.sealed,
+            &binding(&kept.name, kept.kind),
+        )
+        .ok_or_else(|| internal(format!("credential {name} doesn't open with this key")))?;
+        let value = std::str::from_utf8(&plain)
+            .map_err(|_| internal(format!("credential {name} isn't text")))?
+            .to_owned();
+        Ok(OpenedSignIn {
+            key,
+            agent,
+            value: Zeroizing::new(value),
+            updated_at: kept.updated_at,
+        })
+    }
+
+    /// Seal a renewed sign-in back under `name` if it hasn't been replaced or removed since
+    /// `expected_updated_at`.
+    pub(crate) fn save_renewed(
+        store: &Store,
+        key: &Key,
+        name: &str,
+        agent: &str,
+        expected_updated_at: Timestamp,
+        value: &str,
+    ) -> Result<Option<Credential>, Error> {
+        let held = signins::copy(name, agent, value).map_err(internal)?;
+        let nonce = random::<NONCE_LENGTH>()?;
+        let sealed = seal(
+            key,
+            &nonce,
+            value.as_bytes(),
+            &binding(name, CredentialKind::SignIn),
+        )?;
+        store
+            .replace_renewed_credential(name, expected_updated_at, held.expires_at, &nonce, &sealed)
             .map_err(internal)
     }
 
@@ -304,7 +380,14 @@ impl Credentials {
             // One that won't open or isn't the agent's file any more is left out, not a
             // reason to give Hosts none.
             match opened.map(|value| signins::copy(&credential.name, agent, &value)) {
-                Some(Ok(copy)) => copies.push(copy),
+                Some(Ok(copy)) => {
+                    if credential.expires_at.is_none()
+                        && let Some(expires_at) = copy.expires_at
+                    {
+                        let _ = store.set_credential_expiry(&credential.name, expires_at);
+                    }
+                    copies.push(copy);
+                }
                 Some(Err(why)) => {
                     tracing::warn!(credential = %credential.name, %why, "a sign-in can't be given to Hosts");
                 }

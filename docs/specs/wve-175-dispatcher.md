@@ -472,9 +472,18 @@ Dispatcher keeps them, and says so with the `credentials` feature.
     placeholder where the renewal token was, expiring when its access token does.
   - A sign-in for any other agent is refused, and one that isn't that agent's file.
   - Tokens aren't given yet.
-- **Not yet:** signing in by running a vendor's program, renewing a sign-in, so one kept today
-  goes stale when its access token dies; git credentials by Project; and changing the
-  passphrase.
+- **Sign-ins stay fresh.** While unlocked, the Dispatcher watches each sign-in's `expiresAt`
+  and renews it before expiry (1 hour before for `claude`, 24 hours before for `codex`) by
+  running the vendor's unmodified program in a private temporary directory inside its own state
+  directory: `claude -p ""` with `expiresAt` set to 0 for Claude Code, and `codex app-server`
+  `account/read` with `refreshToken: true` and file storage for Codex. Neither spends model
+  tokens. Renewals are serialized so two never race on a rotating refresh token; a saved
+  renewal pushes the new copy to every connected Host, and a replacement made while renewal is
+  in flight isn't overwritten. Failures record `renewalError` on the credential and back off
+  (1m, 5m, 15m, 1h). `credentials/renew` runs the same renewal on demand, and `weave
+  credentials login <agent>` runs the vendor's sign-in program interactively in a private
+  temporary directory and sends the resulting file to the Dispatcher.
+- **Not yet:** git credentials by Project; and changing the passphrase.
 
 ## Bots
 
@@ -999,17 +1008,23 @@ characters). A wrong passphrase is `unauthenticated`; one asked for before any i
 
 **`credentials/list`** `{}` → `{credentials}`
 
-Each `{name, kind, agent?, createdAt, updatedAt}`, by name, while locked too. Never a value.
+Each `{name, kind, agent?, expiresAt?, renewalError?, createdAt, updatedAt}`, by name, while locked too. Never a value.
 
 **`credentials/set`** `{name, kind, value, agent?}` → `{credential}`
 
-Keeps it in place of one of that name, which keeps its `createdAt`. `credentialsLocked` unless
+Keeps it in place of one of that name, which keeps its `createdAt` and clears any `renewalError`. `credentialsLocked` unless
 unlocked. A `signIn` names its `agent` and a `token` names none; invalid params otherwise, and
 for an agent the Dispatcher can't give a sign-in to or a value that isn't that agent's file.
 
 **`credentials/remove`** `{name}` → `{}`
 
 While locked too.
+
+**`credentials/renew`** `{name}` → `{credential}`
+
+Renews the named sign-in now by running its vendor's program, saves the new sign-in, clears
+`renewalError`, and syncs every connected Host. `credentialsLocked` unless unlocked; invalid
+params for a name that doesn't exist or isn't a `signIn`.
 
 **`bots/list`** `{}` → `{bots: Bot[]}`
 
@@ -1143,9 +1158,11 @@ come before it, and is newer than it.
 | `weave projects rename <project> <name> [--json]` | `projects/update` with `name` |
 | `weave projects update <project> --remove-host <host> [--json]` | removes its location on one Host |
 | `weave projects remove <project> [--json]` | forgets it; `--json` prints `{}` |
-| `weave credentials [list] [--json]` | whether the Dispatcher can read its credentials, and each one's name, kind and age; never a value |
+| `weave credentials [list] [--json]` | whether the Dispatcher can read its credentials, and each one's name, kind, age, expiry and renewal error; never a value |
 | `weave credentials unlock` | asks for the passphrase without showing it, or reads a line of standard input; the first time, sets it, asking twice at a terminal |
 | `weave credentials lock` | has the Dispatcher forget the key |
+| `weave credentials login <agent> [--name N] [--device-auth]` | signs in through `<agent>`'s own program in a private temporary directory and keeps the result on the Dispatcher |
+| `weave credentials renew [name]` | renews the named sign-in now on the Dispatcher, or every sign-in when omitted |
 | `weave credentials set <name> [--kind token\|sign-in] [--agent A] [--file F]` | keeps one: its value typed without showing, piped in, or read from F; never an argument. A sign-in is for `--agent`, or the agent called `<name>` |
 | `weave credentials remove <name>` | forgets one |
 | `weave --project <p>`, `weave run --project <p>`, `weave schedules add --project <p>` | work in the Project's location on the Host in question: `--host`'s, or this computer's without it (`schedules add` always names one), a git Project's primary worktree. Never another Host's: a Project with no location there is refused, saying where it is and `weave projects add --to <p> [--host <h>] <dir>`. Refused with `--cwd`. While the Dispatcher doesn't answer, it goes by the last list |

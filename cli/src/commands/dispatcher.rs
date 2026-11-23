@@ -20,6 +20,8 @@ use anyhow::Context as _;
 use anyhow::bail;
 use clap::Args;
 use clap::Subcommand;
+use weave_agents::environment::CAPTURE_TIMEOUT;
+use weave_agents::environment::Environment;
 use weave_dispatcher::DEFAULT_LISTEN;
 use weave_dispatcher::Dispatcher;
 use weave_dispatcher::DispatcherConfig;
@@ -177,7 +179,8 @@ async fn run(paths: DispatcherPaths, args: RunArgs) -> anyhow::Result<()> {
     let remote = remote_settings(&args)?;
     let listening = socket::listen(&paths)
         .with_context(|| format!("listening on {}", paths.socket().display()))?;
-    let mut config = DispatcherConfig::new(paths.clone());
+    let environment = Environment::capture(CAPTURE_TIMEOUT).await;
+    let mut config = DispatcherConfig::new(paths.clone()).with_environment(environment.vars);
     config.remote = Some(remote);
     let dispatcher = Dispatcher::open(config)
         .map_err(anyhow::Error::msg)

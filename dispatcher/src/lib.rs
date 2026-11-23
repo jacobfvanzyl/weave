@@ -42,12 +42,14 @@ mod link;
 pub mod machines;
 pub mod paths;
 mod projects;
+mod renewer;
 mod scheduler;
-mod signins;
+pub mod signins;
 pub mod socket;
 mod store;
 mod tools;
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -130,10 +132,17 @@ pub struct DispatcherConfig {
     /// What making the credentials' key from a new passphrase costs (ADR 0036); tests make it
     /// cheap.
     pub credential_cost: credentials::KdfCost,
+    /// How the Dispatcher renews sign-ins by running the vendors' programs (ADR 0036); tests
+    /// swap in a fake.
+    pub renewer: Arc<dyn signins::Renewer>,
 }
 
 impl DispatcherConfig {
     pub fn new(paths: DispatcherPaths) -> Self {
+        let renewer = Arc::new(signins::VendorRenewer::new(
+            paths.dir.join("renew"),
+            std::env::vars().collect(),
+        ));
         Self {
             paths,
             name: format!("Dispatcher on {}", computer_name()),
@@ -142,7 +151,18 @@ impl DispatcherConfig {
             clock: Arc::new(SystemClock),
             remote: None,
             credential_cost: credentials::KdfCost::default(),
+            renewer,
         }
+    }
+
+    /// Use `environment` when running vendor programs to renew sign-ins, such as the login
+    /// shell's captured when the Dispatcher starts as a service.
+    pub fn with_environment(mut self, environment: BTreeMap<String, String>) -> Self {
+        self.renewer = Arc::new(signins::VendorRenewer::new(
+            self.paths.dir.join("renew"),
+            environment,
+        ));
+        self
     }
 }
 
@@ -178,7 +198,14 @@ pub(crate) struct Shared {
     pub(crate) bot_watchers: bots::Watchers,
     /// The key to the person's credentials, while it is unlocked (ADR 0036).
     pub(crate) credentials: credentials::Credentials,
+    /// Rung when credentials are unlocked, locked, set, renewed or removed.
+    pub(crate) credentials_changed: Notify,
+    /// Serializes sign-in renewals so two never race on a vendor's rotating refresh token.
+    pub(crate) renewing: tokio::sync::Mutex<()>,
+    /// Per-credential renewal retry backoff.
+    pub(crate) renew_backoffs: renewer::Backoffs,
     scheduler: Mutex<Option<JoinHandle<()>>>,
+    renewer_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Dispatcher {
@@ -209,10 +236,16 @@ impl Dispatcher {
             schedules_changed: Notify::new(),
             bot_watchers: bots::Watchers::default(),
             credentials: credentials::Credentials::default(),
+            credentials_changed: Notify::new(),
+            renewing: tokio::sync::Mutex::new(()),
+            renew_backoffs: renewer::Backoffs::default(),
             scheduler: Mutex::new(None),
+            renewer_task: Mutex::new(None),
         });
         let scheduler = tokio::spawn(scheduler::run(Arc::clone(&shared)));
         *lock(&shared.scheduler) = Some(scheduler);
+        let renewer_task = tokio::spawn(renewer::run(Arc::clone(&shared)));
+        *lock(&shared.renewer_task) = Some(renewer_task);
         Ok(Self { shared })
     }
 
@@ -238,6 +271,10 @@ impl Dispatcher {
         let scheduler = lock(&self.shared.scheduler).take();
         if let Some(scheduler) = scheduler {
             let _ = scheduler.await;
+        }
+        let renewer_task = lock(&self.shared.renewer_task).take();
+        if let Some(renewer_task) = renewer_task {
+            let _ = renewer_task.await;
         }
         let links: Vec<Link> = lock(&self.shared.links)
             .drain()
@@ -273,7 +310,7 @@ impl Dispatcher {
 
     /// Forget the key to the credentials.
     pub fn lock_credentials(&self) -> Result<CredentialsStatus, Error> {
-        self.shared.credentials.lock(&self.shared.store)
+        self.shared.lock_credentials()
     }
 
     /// The credentials it keeps, without their values.
@@ -294,6 +331,11 @@ impl Dispatcher {
 
     pub fn remove_credential(&self, name: &str) -> Result<(), Error> {
         self.shared.remove_credential(name)
+    }
+
+    /// Renew a sign-in now by running its vendor's program, save it, and sync connected Hosts.
+    pub async fn renew_credential(&self, name: &str) -> Result<Credential, Error> {
+        self.shared.renew_credential(name).await
     }
 
     /// A credential's kind and value, as a Host is given it: for this process only, never
@@ -460,7 +502,17 @@ impl Shared {
         })
         .await
         .map_err(|error| internal(format!("unlocking the credentials: {error}")))?
-        .inspect(|_| self.sync_credentials())
+        .inspect(|_| {
+            self.renew_backoffs.clear_all();
+            self.sync_credentials();
+            self.credentials_changed.notify_one();
+        })
+    }
+
+    pub(crate) fn lock_credentials(&self) -> Result<CredentialsStatus, Error> {
+        let status = self.credentials.lock(&self.store)?;
+        self.credentials_changed.notify_one();
+        Ok(status)
     }
 
     /// Keep a credential, and give the Hosts what they hold again.
@@ -474,15 +526,27 @@ impl Shared {
         let kept = self
             .credentials
             .set(&self.store, name, kind, agent, value)?;
+        self.renew_backoffs.clear(&kept.name);
         self.sync_credentials();
+        self.credentials_changed.notify_one();
         Ok(kept)
     }
 
     /// Forget a credential, and have the Hosts drop it.
     pub(crate) fn remove_credential(self: &Arc<Self>, name: &str) -> Result<(), Error> {
         credentials::Credentials::remove(&self.store, name)?;
+        self.renew_backoffs.clear(name);
         self.sync_credentials();
+        self.credentials_changed.notify_one();
         Ok(())
+    }
+
+    /// Renew a sign-in now by running its vendor's program, save it, and sync connected Hosts.
+    pub(crate) async fn renew_credential(
+        self: &Arc<Self>,
+        name: &str,
+    ) -> Result<Credential, Error> {
+        renewer::renew_one(self, name).await
     }
 
     /// Give every connected Host the credentials it is to hold, in place of those it held

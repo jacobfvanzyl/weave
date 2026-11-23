@@ -257,14 +257,25 @@ keys both ways, removal, a Host paired before Hosts joined, and one joining over
   and is never answered to a client: the API has no method that returns one, and the two
   requests that carry a secret print without it. Never log a passphrase or a value, and never
   add one to a delivery, a journal or a trace. Tests pass a cheap `credential_cost`.
-  The fourteenth migration added `agent`, the agent a sign-in is for. `signins.rs` is the one
-  place that knows a vendor's sign-in file: `copy` makes what a Host holds of one, Claude Code's
-  access token for the agent's environment and Codex's `auth.json` with a placeholder for its
-  renewal token, each expiring with its access token, and `set` refuses a sign-in `copy` can't
-  make. `Credentials::for_hosts` makes every copy while unlocked, and
+  The fourteenth migration added `agent`, the agent a sign-in is for, and the fifteenth
+  `expires_at` and `renewal_error` (plain metadata so listing shows them while locked too).
+  `signins.rs` is the one place that knows a vendor's sign-in file: `copy` makes what a Host
+  holds of one, Claude Code's access token for the agent's environment and Codex's `auth.json`
+  with a placeholder for its renewal token, each expiring with its access token, and `set`
+  refuses a sign-in `copy` can't make. `VendorRenewer` (`Renewer`, swappable on
+  `DispatcherConfig`) renews by running the vendor's unmodified program in a private `0700`
+  directory inside `paths.dir/renew` (removed on drop): `claude -p ""` with `expiresAt: 0` (and
+  macOS Keychain read-and-delete for that temp `CLAUDE_CONFIG_DIR`), and `codex app-server`
+  `account/read` with `refreshToken: true` and `cli_auth_credentials_store = "file"`.
+  `sign_in_interactive` runs `claude auth login` or `codex login` the same way for the CLI.
+  `renewer.rs` runs a background task on `Clock` that renews each sign-in before expiry (1 hour
+  before for Claude, 24 hours before for Codex) while unlocked, serialized by `Shared::renewing`
+  with per-credential backoff (`Backoffs`: 1m, 5m, 15m, 1h), and `credentials/renew` runs the
+  same path on demand; `replace_renewed_credential` guards against overwriting a concurrent
+  `set` or `remove`. `Credentials::for_hosts` makes every copy while unlocked, and
   `Shared::sync_credentials` sends the set to each connected Host with the `credentials`
   feature (`credentials/sync`): from a Host's link as it connects (`sync_credentials_to`), and
-  after an unlock, a set or a remove. Locked, nothing is sent.
+  after an unlock, a set, a renewal or a remove. Locked, nothing is sent.
 - `machines.rs`, `machines/` (WVE-238, a spike behind the `machines` cargo feature, off by
   default): computers for Hosts, made in the cloud. `Machines` is a provider of them, which knows
   nothing of Hosts (`machines/fly.rs`, Fly's Machines API; one app, a volume per machine at

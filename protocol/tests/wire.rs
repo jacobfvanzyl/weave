@@ -3127,6 +3127,7 @@ fn credentials_wire_shapes() {
     use weave_host_protocol::dispatcher::CredentialsStatus;
     use weave_host_protocol::dispatcher::ListCredentialsResponse;
     use weave_host_protocol::dispatcher::RemoveCredentialRequest;
+    use weave_host_protocol::dispatcher::RenewCredentialRequest;
     use weave_host_protocol::dispatcher::SetCredentialRequest;
     use weave_host_protocol::dispatcher::UnlockCredentialsRequest;
 
@@ -3134,6 +3135,8 @@ fn credentials_wire_shapes() {
         name: "claude".to_owned(),
         kind: CredentialKind::SignIn,
         agent: Some("claude".to_owned()),
+        expires_at: Some(1_795_408_800_000),
+        renewal_error: None,
         created_at: 1_795_300_000_000,
         updated_at: 1_795_380_000_000,
     };
@@ -3199,6 +3202,12 @@ fn credentials_wire_shapes() {
     insta::assert_json_snapshot!(
         "remove_credential_request",
         message(&RemoveCredentialRequest {
+            name: "claude".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "renew_credential_request",
+        message(&RenewCredentialRequest {
             name: "claude".to_owned(),
         })
     );

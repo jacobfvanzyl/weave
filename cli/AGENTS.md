@@ -301,7 +301,11 @@ lists; `scripts/host-image/build` builds and pushes the image.
 
 
 `weave credentials` (`commands/credentials.rs`; ADR 0036, WVE-239) manages what the Dispatcher
-keeps encrypted: `unlock` (which sets the passphrase the first time), `lock`, `set`, `remove`
-and the default `list`. A passphrase or a value is read by `ask::secret`, with nothing echoed
-at a terminal and one line of standard input otherwise, or from `--file`; none is ever an
-argument, and nothing prints one.
+keeps encrypted: `unlock` (which sets the passphrase the first time), `lock`, `login` (runs
+`claude auth login` or `codex login` in a private temporary directory and sends the resulting
+sign-in to the Dispatcher), `renew` (renews one or all sign-ins now), `set`, `remove` and the
+default `list` (showing expiry and any renewal error). A passphrase or a value is read by
+`ask::secret`, with nothing echoed at a terminal and one line of standard input otherwise, or
+from `--file`; none is ever an argument, and nothing prints one. `weave dispatcher run`
+captures the login shell's environment so the Dispatcher finds `claude` and `codex` on `PATH`
+when run as a service.

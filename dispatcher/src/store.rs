@@ -53,7 +53,7 @@ use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 14] = [
+const MIGRATIONS: [&str; 15] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -311,6 +311,12 @@ const MIGRATIONS: [&str; 14] = [
     // The agent a sign-in is for (ADR 0036), which decides how a Host is given it.
     "
     ALTER TABLE credentials ADD COLUMN agent TEXT;
+",
+    // A sign-in's access-token expiry and last renewal error (ADR 0036): plain metadata so
+    // listing shows how each sign-in stands even while locked.
+    "
+    ALTER TABLE credentials ADD COLUMN expires_at INTEGER;
+    ALTER TABLE credentials ADD COLUMN renewal_error TEXT;
 ",
 ];
 

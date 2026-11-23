@@ -38,6 +38,15 @@ On 2026-11-22, on homelab, in throwaway containers with Claude Code 2.1.330 and 
 | Codex, access token the server rejects, placeholder to renew with | Failed in 6 seconds: "Your access token could not be refreshed" |
 | Claude Code, access token marked expired in the file but still valid | A turn ran: only the server's answer counts |
 
+On 2026-11-23, on homelab, in throwaway containers with Claude Code 2.1.330, Codex CLI 0.171.0 and `weave-host`:
+
+| Case | Result |
+| --- | --- |
+| Claude Code, `expiresAt` 4 min vs 6 min ahead (dummy renewal token) | Renewed at 4 min, did not at 6 min: its refresh window is 5 minutes |
+| Claude Code, `expiresAt: 0`, `claude -p ""` against a mock OAuth endpoint | Refreshed synchronously at startup before the empty-prompt error, wrote fresh `.credentials.json` with zero API tokens spent |
+| Codex, `codex app-server` `account/read` with `refreshToken: true` (5 days left, file store) against a mock OAuth endpoint | Sent `refresh_reason: "forced"` immediately, wrote fresh `auth.json` with zero API tokens spent |
+| Running Codex ACP thread behind an HTTPS proxy: Turn 1 on token A, then proxy returns 401 for token A and `~/.codex/auth.json` is replaced with token B (placeholder renewal token) | Turn 2 on the same open thread got 401 on token A, reloaded `~/.codex/auth.json`, retried with token B and answered OK without restarting |
+
 Lives seen: Claude's access token is issued for about 8 hours, and Codex's for about 10 days. That is how long a Host can run each agent with the Dispatcher away.
 
 ## Considered options
@@ -60,8 +69,6 @@ Lives seen: Claude's access token is issued for about 8 hours, and Codex's for a
 
 ## Still to find out
 
-- **How the Dispatcher makes Claude Code renew when asked.** It has no command for it, and renews through ordinary use near expiry, which homelab's own file shows.
-- **Codex renews only at the end.** Its source (`codex-rs/login/src/auth/manager.rs`, `main` on 2026-11-21) renews when the access token is within five minutes of expiry, or when the server answers 401, and on a 401 it first reads its sign-in file again in case something newer was written there. So the Dispatcher can't renew Codex early: it runs Codex in those last minutes or once a Host reports its copy refused, and a Host that writes the newer copy to disk is picked up by a Codex already running. The 401 path is from the source and untested. Its `CODEX_ACCESS_TOKEN` variable is not a way in: Codex 0.171.0 refused a ChatGPT access token given there.
-- **What a turn in progress does when its access token dies**, and what the Host tells the person.
+- **What a turn in progress does when its access token dies** (especially for a running Claude Code thread whose `CLAUDE_CODE_OAUTH_TOKEN` lives in its process environment), and what the Host tells the person.
 - **Whether several Hosts on one access token at once draws a limit** from either vendor. Neither states one.
 - **Whether the vendors' terms mind.** The person's own subscription, on the person's own machines, in the vendors' unmodified programs, is the reading taken here; neither vendor's terms were read in full.

@@ -221,6 +221,7 @@ fn schema() -> Value {
         "credentials/list" => dispatcher::ListCredentialsRequest,
         "credentials/set" => dispatcher::SetCredentialRequest,
         "credentials/remove" => dispatcher::RemoveCredentialRequest,
+        "credentials/renew" => dispatcher::RenewCredentialRequest,
     };
     let dispatcher_notifications = notifications! { generator, inlined;
         "devices/paired" => devices::DevicePairedNotification,

@@ -914,8 +914,14 @@ pub struct Credential {
     /// The agent a sign-in is for, by its id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// When a sign-in's current access token expires, if the Dispatcher could read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<Timestamp>,
+    /// Why renewing this sign-in last failed; absent once renewed or replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renewal_error: Option<String>,
     pub created_at: Timestamp,
-    /// When its value was last set.
+    /// When its value was last set or renewed.
     pub updated_at: Timestamp,
 }
 
@@ -1024,6 +1030,17 @@ pub struct CredentialResponse {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "credentials/remove", response = Empty)]
 pub struct RemoveCredentialRequest {
+    pub name: String,
+}
+
+/// `credentials/renew`: renew a sign-in now by running its vendor's own program, save what it
+/// wrote, and send every connected Host its new copy (ADR 0036).
+/// [`crate::errors::CREDENTIALS_LOCKED`] unless unlocked; invalid params for anything that
+/// isn't a sign-in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "credentials/renew", response = CredentialResponse)]
+pub struct RenewCredentialRequest {
     pub name: String,
 }
 

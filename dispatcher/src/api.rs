@@ -94,6 +94,7 @@ use weave_host_protocol::dispatcher::RemoveCredentialRequest;
 use weave_host_protocol::dispatcher::RemoveHostRequest;
 use weave_host_protocol::dispatcher::RemoveProjectRequest;
 use weave_host_protocol::dispatcher::RemoveScheduleRequest;
+use weave_host_protocol::dispatcher::RenewCredentialRequest;
 use weave_host_protocol::dispatcher::ResumeScheduleRequest;
 use weave_host_protocol::dispatcher::RunScheduleRequest;
 use weave_host_protocol::dispatcher::ScheduleResponse;
@@ -733,7 +734,7 @@ async fn handlers(
     handle!(builder, connection, shared, request: UnlockCredentialsRequest =>
         shared.unlock_credentials(request.passphrase, request.create).await);
     handle!(builder, connection, shared, _request: LockCredentialsRequest =>
-        shared.credentials.lock(&shared.store));
+        shared.lock_credentials());
     handle!(builder, connection, shared, _request: ListCredentialsRequest =>
         Credentials::list(&shared.store).map(|credentials| ListCredentialsResponse { credentials }));
     handle!(builder, connection, shared, request: SetCredentialRequest =>
@@ -747,6 +748,11 @@ async fn handlers(
             .map(|credential| CredentialResponse { credential }));
     handle!(builder, connection, shared, request: RemoveCredentialRequest =>
         shared.remove_credential(&request.name).map(|()| Empty {}));
+    handle!(builder, connection, shared, request: RenewCredentialRequest =>
+        shared
+            .renew_credential(&request.name)
+            .await
+            .map(|credential| CredentialResponse { credential }));
     handle!(builder, connection, shared, _request: ListBotsRequest =>
         shared.bots().map(|bots| ListBotsResponse { bots }));
     handle!(builder, connection, shared, request: GetBotRequest =>

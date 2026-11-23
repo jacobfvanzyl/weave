@@ -8865,9 +8865,17 @@ export interface Credential {
    * The agent a sign-in is for, by its id.
    */
   agent?: string | null;
+  /**
+   * When a sign-in's current access token expires, if the Dispatcher could read it.
+   */
+  expiresAt?: number | null;
+  /**
+   * Why renewing this sign-in last failed; absent once renewed or replaced.
+   */
+  renewalError?: string | null;
   createdAt: number;
   /**
-   * When its value was last set.
+   * When its value was last set or renewed.
    */
   updatedAt: number;
 }
@@ -8901,6 +8909,18 @@ export interface CredentialResponse {
  * via the `definition` "RemoveCredentialRequest".
  */
 export interface RemoveCredentialRequest {
+  name: string;
+}
+/**
+ * `credentials/renew`: renew a sign-in now by running its vendor's own program, save what it
+ * wrote, and send every connected Host its new copy (ADR 0036).
+ * [`crate::errors::CREDENTIALS_LOCKED`] unless unlocked; invalid params for anything that
+ * isn't a sign-in.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "RenewCredentialRequest".
+ */
+export interface RenewCredentialRequest {
   name: string;
 }
 /**
@@ -9241,6 +9261,7 @@ export interface DispatcherRequests {
   "credentials/list": { params: ListCredentialsRequest; result: ListCredentialsResponse };
   "credentials/set": { params: SetCredentialRequest; result: CredentialResponse };
   "credentials/remove": { params: RemoveCredentialRequest; result: Empty };
+  "credentials/renew": { params: RenewCredentialRequest; result: CredentialResponse };
 }
 
 /** What each notification the Dispatcher sends carries. */
