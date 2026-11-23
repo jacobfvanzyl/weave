@@ -246,6 +246,17 @@ answers at its address, a terminal's stream through a fake owner that echoes
 many times a Host's backlog limit (`World::with_websocket`) reaching a device whole. `tests/dispatcher.rs` drives the Dispatcher through
 its socket across Host and Dispatcher restarts. `tests/joins.rs` checks joining: a code once,
 keys both ways, removal, a Host paired before Hosts joined, and one joining over the WebSocket.
+- `credentials.rs`, `store/credentials.rs` (ADR 0036, WVE-239): the person's credentials,
+  behind the `credentials` feature. The thirteenth migration's `credential_key` holds the data
+  key sealed under the key Argon2id makes from the passphrase, with the cost it was made at, and
+  `credentials` each value sealed under the data key with XChaCha20-Poly1305, bound to its name
+  and kind. `Credentials` holds the data key in memory from `unlock` until `lock` or the
+  Dispatcher stops; the passphrase is never kept, and `Shared::unlock_credentials` makes the key
+  off the async threads. Names and kinds are plain, so listing and removing work while locked;
+  setting and `value` don't (`credentialsLocked`). `value` is for giving a Host a credential
+  and is never answered to a client: the API has no method that returns one, and the two
+  requests that carry a secret print without it. Never log a passphrase or a value, and never
+  add one to a delivery, a journal or a trace. Tests pass a cheap `credential_cost`.
 - `machines.rs`, `machines/` (WVE-238, a spike behind the `machines` cargo feature, off by
   default): computers for Hosts, made in the cloud. `Machines` is a provider of them, which knows
   nothing of Hosts (`machines/fly.rs`, Fly's Machines API; one app, a volume per machine at

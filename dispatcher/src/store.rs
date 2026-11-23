@@ -6,6 +6,7 @@
 
 mod bots;
 mod calls;
+pub(crate) mod credentials;
 mod devices;
 mod projects;
 mod schedules;
@@ -52,7 +53,7 @@ use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 12] = [
+const MIGRATIONS: [&str; 13] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -283,6 +284,29 @@ const MIGRATIONS: [&str; 12] = [
     // rewrites (WVE-213), which a git Project's `remote` follows: none until one does.
     "
     ALTER TABLE project_locations ADD COLUMN remote TEXT;
+",
+    // The person's credentials (ADR 0036, WVE-239): the data key, sealed under the key their
+    // passphrase makes, and each credential's value sealed under the data key. One row of the
+    // first at most.
+    "
+    CREATE TABLE credential_key (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        salt BLOB NOT NULL,
+        memory_kib INTEGER NOT NULL,
+        passes INTEGER NOT NULL,
+        lanes INTEGER NOT NULL,
+        nonce BLOB NOT NULL,
+        sealed BLOB NOT NULL,
+        created_at INTEGER NOT NULL
+    );
+    CREATE TABLE credentials (
+        name TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        nonce BLOB NOT NULL,
+        sealed BLOB NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
 ",
 ];
 

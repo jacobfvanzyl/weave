@@ -33,6 +33,7 @@ mod bots;
 mod calls;
 mod carry;
 pub mod client;
+pub mod credentials;
 mod devices;
 mod follows;
 mod joins;
@@ -64,6 +65,9 @@ use weave_host_protocol::dispatcher::AddBotResponse;
 use weave_host_protocol::dispatcher::AddProjectRequest;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
 use weave_host_protocol::dispatcher::Bot;
+use weave_host_protocol::dispatcher::Credential;
+use weave_host_protocol::dispatcher::CredentialKind;
+use weave_host_protocol::dispatcher::CredentialsStatus;
 use weave_host_protocol::dispatcher::DispatcherHost;
 use weave_host_protocol::dispatcher::DispatcherStatus;
 use weave_host_protocol::dispatcher::Occurrence;
@@ -122,6 +126,9 @@ pub struct DispatcherConfig {
     /// How it serves the person's devices once one pairs ([`DEFAULT_LISTEN`] and its own
     /// Tailscale Serve entry, as `weave dispatcher run` gives it); none serves only the socket.
     pub remote: Option<RemoteSettings>,
+    /// What making the credentials' key from a new passphrase costs (ADR 0036); tests make it
+    /// cheap.
+    pub credential_cost: credentials::KdfCost,
 }
 
 impl DispatcherConfig {
@@ -133,6 +140,7 @@ impl DispatcherConfig {
             reach_timeout: DEFAULT_REACH_TIMEOUT,
             clock: Arc::new(SystemClock),
             remote: None,
+            credential_cost: credentials::KdfCost::default(),
         }
     }
 }
@@ -167,6 +175,8 @@ pub(crate) struct Shared {
     schedules_changed: Notify,
     /// The API's connections watching the Bots (`bots/watch`).
     pub(crate) bot_watchers: bots::Watchers,
+    /// The key to the person's credentials, while it is unlocked (ADR 0036).
+    pub(crate) credentials: credentials::Credentials,
     scheduler: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -197,6 +207,7 @@ impl Dispatcher {
             links: Mutex::new(HashMap::new()),
             schedules_changed: Notify::new(),
             bot_watchers: bots::Watchers::default(),
+            credentials: credentials::Credentials::default(),
             scheduler: Mutex::new(None),
         });
         let scheduler = tokio::spawn(scheduler::run(Arc::clone(&shared)));
@@ -243,6 +254,55 @@ impl Dispatcher {
     /// The Hosts that joined it, and how each stands.
     pub fn hosts(&self) -> Result<Vec<DispatcherHost>, Error> {
         self.shared.hosts()
+    }
+
+    /// Whether it can read the credentials it keeps, and how many there are (ADR 0036).
+    pub fn credentials_status(&self) -> Result<CredentialsStatus, Error> {
+        self.shared.credentials.status(&self.shared.store)
+    }
+
+    /// Open the credentials with the person's passphrase, or with `create` set it.
+    pub async fn unlock_credentials(
+        &self,
+        passphrase: String,
+        create: bool,
+    ) -> Result<CredentialsStatus, Error> {
+        self.shared.unlock_credentials(passphrase, create).await
+    }
+
+    /// Forget the key to the credentials.
+    pub fn lock_credentials(&self) -> Result<CredentialsStatus, Error> {
+        self.shared.credentials.lock(&self.shared.store)
+    }
+
+    /// The credentials it keeps, without their values.
+    pub fn credentials(&self) -> Result<Vec<Credential>, Error> {
+        credentials::Credentials::list(&self.shared.store)
+    }
+
+    /// Keep a credential, in place of one of that name.
+    pub fn set_credential(
+        &self,
+        name: &str,
+        kind: CredentialKind,
+        value: &str,
+    ) -> Result<Credential, Error> {
+        self.shared
+            .credentials
+            .set(&self.shared.store, name, kind, value)
+    }
+
+    pub fn remove_credential(&self, name: &str) -> Result<(), Error> {
+        credentials::Credentials::remove(&self.shared.store, name)
+    }
+
+    /// A credential's kind and value, as a Host is given it: for this process only, never
+    /// answered to a client.
+    pub fn credential_value(
+        &self,
+        name: &str,
+    ) -> Result<Option<(CredentialKind, zeroize::Zeroizing<String>)>, Error> {
+        self.shared.credentials.value(&self.shared.store, name)
     }
 
     /// A code a Host joins with, and where it connects: the WebSocket, turned on if it isn't,
@@ -381,6 +441,27 @@ impl Dispatcher {
 }
 
 impl Shared {
+    /// Open the credentials with `passphrase`, off the async threads: making the key from it
+    /// is meant to be slow.
+    pub(crate) async fn unlock_credentials(
+        self: &Arc<Self>,
+        passphrase: String,
+        create: bool,
+    ) -> Result<CredentialsStatus, Error> {
+        let shared = Arc::clone(self);
+        let passphrase = zeroize::Zeroizing::new(passphrase);
+        tokio::task::spawn_blocking(move || {
+            shared.credentials.unlock(
+                &shared.store,
+                &passphrase,
+                create,
+                shared.config.credential_cost,
+            )
+        })
+        .await
+        .map_err(|error| internal(format!("unlocking the credentials: {error}")))?
+    }
+
     /// Send `host_id` the work written down for it, if it's connected.
     pub(crate) fn wake(&self, host_id: &str) {
         if let Some(link) = lock(&self.links).get(host_id) {

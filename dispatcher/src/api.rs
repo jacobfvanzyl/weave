@@ -53,6 +53,9 @@ use weave_host_protocol::dispatcher::BOTS_FEATURE;
 use weave_host_protocol::dispatcher::BOTS_HOME_FEATURE;
 use weave_host_protocol::dispatcher::BOTS_WATCH_FEATURE;
 use weave_host_protocol::dispatcher::BotResponse;
+use weave_host_protocol::dispatcher::CREDENTIALS_FEATURE;
+use weave_host_protocol::dispatcher::CredentialResponse;
+use weave_host_protocol::dispatcher::CredentialsStatusRequest;
 use weave_host_protocol::dispatcher::DISPATCHER_CARRY_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_HOST_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_PROTOCOL;
@@ -67,6 +70,8 @@ use weave_host_protocol::dispatcher::GetBotRequest;
 use weave_host_protocol::dispatcher::GetProjectRequest;
 use weave_host_protocol::dispatcher::ListBotsRequest;
 use weave_host_protocol::dispatcher::ListBotsResponse;
+use weave_host_protocol::dispatcher::ListCredentialsRequest;
+use weave_host_protocol::dispatcher::ListCredentialsResponse;
 use weave_host_protocol::dispatcher::ListHostsRequest;
 use weave_host_protocol::dispatcher::ListHostsResponse;
 use weave_host_protocol::dispatcher::ListOccurrencesRequest;
@@ -75,6 +80,7 @@ use weave_host_protocol::dispatcher::ListProjectsRequest;
 use weave_host_protocol::dispatcher::ListProjectsResponse;
 use weave_host_protocol::dispatcher::ListSchedulesRequest;
 use weave_host_protocol::dispatcher::ListSchedulesResponse;
+use weave_host_protocol::dispatcher::LockCredentialsRequest;
 use weave_host_protocol::dispatcher::NewBotThreadRequest;
 use weave_host_protocol::dispatcher::OccurrenceResponse;
 use weave_host_protocol::dispatcher::OfferHostRequest;
@@ -84,6 +90,7 @@ use weave_host_protocol::dispatcher::PROJECTS_FEATURE;
 use weave_host_protocol::dispatcher::PauseScheduleRequest;
 use weave_host_protocol::dispatcher::ProjectResponse;
 use weave_host_protocol::dispatcher::RemoveBotRequest;
+use weave_host_protocol::dispatcher::RemoveCredentialRequest;
 use weave_host_protocol::dispatcher::RemoveHostRequest;
 use weave_host_protocol::dispatcher::RemoveProjectRequest;
 use weave_host_protocol::dispatcher::RemoveScheduleRequest;
@@ -91,6 +98,8 @@ use weave_host_protocol::dispatcher::ResumeScheduleRequest;
 use weave_host_protocol::dispatcher::RunScheduleRequest;
 use weave_host_protocol::dispatcher::ScheduleResponse;
 use weave_host_protocol::dispatcher::SendToBotRequest;
+use weave_host_protocol::dispatcher::SetCredentialRequest;
+use weave_host_protocol::dispatcher::UnlockCredentialsRequest;
 use weave_host_protocol::dispatcher::UnwatchBotsRequest;
 use weave_host_protocol::dispatcher::UpdateBotRequest;
 use weave_host_protocol::dispatcher::UpdateProjectRequest;
@@ -105,6 +114,7 @@ use weave_remote::websocket::Link;
 use weave_remote::websocket::RemoteConfig;
 
 use crate::Shared;
+use crate::credentials::Credentials;
 use crate::lock;
 use crate::socket;
 
@@ -217,6 +227,7 @@ pub(crate) fn features() -> Vec<String> {
         BOTS_HOME_FEATURE.to_owned(),
         BOTS_WATCH_FEATURE.to_owned(),
         BOTS_AVATAR_FEATURE.to_owned(),
+        CREDENTIALS_FEATURE.to_owned(),
     ]
 }
 
@@ -717,6 +728,21 @@ async fn handlers(
         shared.update_project(request).map(|project| ProjectResponse { project }));
     handle!(builder, connection, shared, request: RemoveProjectRequest =>
         shared.remove_project(&request.project).map(|()| Empty {}));
+    handle!(builder, connection, shared, _request: CredentialsStatusRequest =>
+        shared.credentials.status(&shared.store));
+    handle!(builder, connection, shared, request: UnlockCredentialsRequest =>
+        shared.unlock_credentials(request.passphrase, request.create).await);
+    handle!(builder, connection, shared, _request: LockCredentialsRequest =>
+        shared.credentials.lock(&shared.store));
+    handle!(builder, connection, shared, _request: ListCredentialsRequest =>
+        Credentials::list(&shared.store).map(|credentials| ListCredentialsResponse { credentials }));
+    handle!(builder, connection, shared, request: SetCredentialRequest =>
+        shared
+            .credentials
+            .set(&shared.store, &request.name, request.kind, &request.value)
+            .map(|credential| CredentialResponse { credential }));
+    handle!(builder, connection, shared, request: RemoveCredentialRequest =>
+        Credentials::remove(&shared.store, &request.name).map(|()| Empty {}));
     handle!(builder, connection, shared, _request: ListBotsRequest =>
         shared.bots().map(|bots| ListBotsResponse { bots }));
     handle!(builder, connection, shared, request: GetBotRequest =>

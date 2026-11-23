@@ -6,6 +6,8 @@
 //! file.
 
 #![allow(clippy::expect_used)]
+// The constants are one `json!`, which has grown past the default limit of 128.
+#![recursion_limit = "256"]
 
 use agent_client_protocol::JsonRpcMessage;
 use agent_client_protocol::JsonRpcRequest;
@@ -211,6 +213,12 @@ fn schema() -> Value {
         "bots/newThread" => dispatcher::NewBotThreadRequest,
         "bots/watch" => dispatcher::WatchBotsRequest,
         "bots/unwatch" => dispatcher::UnwatchBotsRequest,
+        "credentials/status" => dispatcher::CredentialsStatusRequest,
+        "credentials/unlock" => dispatcher::UnlockCredentialsRequest,
+        "credentials/lock" => dispatcher::LockCredentialsRequest,
+        "credentials/list" => dispatcher::ListCredentialsRequest,
+        "credentials/set" => dispatcher::SetCredentialRequest,
+        "credentials/remove" => dispatcher::RemoveCredentialRequest,
     };
     let dispatcher_notifications = notifications! { generator, inlined;
         "devices/paired" => devices::DevicePairedNotification,
@@ -268,6 +276,7 @@ fn schema() -> Value {
                     "botsHome": dispatcher::BOTS_HOME_FEATURE,
                     "botsWatch": dispatcher::BOTS_WATCH_FEATURE,
                     "botsAvatar": dispatcher::BOTS_AVATAR_FEATURE,
+                    "credentials": dispatcher::CREDENTIALS_FEATURE,
                 },
                 "defaultPauseAfter": dispatcher::DEFAULT_PAUSE_AFTER,
             },
@@ -307,6 +316,7 @@ fn schema() -> Value {
                 "noSession": errors::NO_SESSION,
                 "revisionConflict": errors::REVISION_CONFLICT,
                 "sessionBusy": errors::SESSION_BUSY,
+                "credentialsLocked": errors::CREDENTIALS_LOCKED,
             },
             "features": {
                 "steer": turns::STEER_FEATURE,

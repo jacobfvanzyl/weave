@@ -20,7 +20,9 @@ weave-host-client = { workspace = true }
 weave-host-protocol = { workspace = true }
 weave-remote = { workspace = true }
 agent-client-protocol = { workspace = true }
+argon2 = { workspace = true }
 base64 = { workspace = true }
+chacha20poly1305 = { workspace = true }
 croner = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
@@ -34,6 +36,7 @@ tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"
 tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true, features = ["compat"] }
 tracing = { workspace = true }
+zeroize = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

@@ -4,6 +4,7 @@
 
 pub mod agents;
 pub mod bots;
+pub mod credentials;
 pub mod daemon;
 pub mod devices;
 pub mod dispatcher;

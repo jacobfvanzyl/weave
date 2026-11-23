@@ -298,3 +298,10 @@ gains `launch --name <name>`, `machines` and `destroy <machine>` (`commands/host
 a Host on a Fly Machine, from nothing to joined, and gone again. They read the provider's token,
 the app, the image and a Tailscale OAuth client from the environment, which the file's head
 lists; `scripts/host-image/build` builds and pushes the image.
+
+
+`weave credentials` (`commands/credentials.rs`; ADR 0036, WVE-239) manages what the Dispatcher
+keeps encrypted: `unlock` (which sets the passphrase the first time), `lock`, `set`, `remove`
+and the default `list`. A passphrase or a value is read by `ask::secret`, with nothing echoed
+at a terminal and one line of standard input otherwise, or from `--file`; none is ever an
+argument, and nothing prints one.

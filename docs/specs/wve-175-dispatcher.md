@@ -442,6 +442,28 @@ every Host; Hosts know nothing of them, and the Host protocol is unchanged.
 - **Not yet:** `projects/watch`; clients list once, so one client's change shows in another
   when it next lists.
 
+## Credentials
+
+The person's credentials (ADR 0036, WVE-239): what lets their agents and git act as them. The
+Dispatcher keeps them, and says so with the `credentials` feature.
+
+- **A credential** is a name, a kind and a value. A `token` doesn't change until the person
+  replaces it; a `signIn` is what a vendor's own program wrote when they signed in to it. The
+  API takes a value and never answers one.
+- **At rest** each value is sealed with XChaCha20-Poly1305 under a random data key, bound to its
+  name and kind, so one row can't be passed off as another. The data key is sealed under a key
+  Argon2id makes from the person's passphrase (64 MiB, three passes), with the cost kept beside
+  it. Names, kinds and times are plain.
+- **The passphrase is never written down.** The Dispatcher holds the data key in memory from
+  `credentials/unlock` until it stops or `credentials/lock`, so each start begins locked. It has
+  three states: `unset` (no passphrase yet), `locked` and `unlocked`.
+- **While locked** the Dispatcher runs as ever. Credentials are listed and removed; none is set
+  or read (`credentialsLocked`).
+- **A new passphrase** has at least 12 characters. Nothing recovers one: a forgotten
+  passphrase means removing the credentials and setting them again.
+- **Not yet:** giving credentials to Hosts, a Host's cache of them, signing in by running a
+  vendor's program, renewing a sign-in, git credentials by Project, and changing the passphrase.
+
 ## Bots
 
 A Bot (ADR 0028, as WVE-118 and WVE-178 settled it there) is a named assistant the person comes back to over
@@ -950,6 +972,32 @@ location again changes nothing. `updatedAt` moves when anything changed.
 
 Forgets it and its locations; what's in its directories stays.
 
+**`credentials/status`** `{}` → `{state, count}`
+
+`state` is `unset`, `locked` or `unlocked`; `count`, how many it keeps.
+
+**`credentials/unlock`** `{passphrase, create?}` → `{state, count}`
+
+Takes the passphrase and holds the key it opens. With `create` it sets the passphrase, which
+only a Dispatcher with none takes (invalid params otherwise, and for one shorter than 12
+characters). A wrong passphrase is `unauthenticated`; one asked for before any is set,
+`credentialsLocked`.
+
+**`credentials/lock`** `{}` → `{state, count}`
+
+**`credentials/list`** `{}` → `{credentials}`
+
+Each `{name, kind, createdAt, updatedAt}`, by name, while locked too. Never a value.
+
+**`credentials/set`** `{name, kind, value}` → `{credential}`
+
+Keeps it in place of one of that name, which keeps its `createdAt`. `credentialsLocked` unless
+unlocked.
+
+**`credentials/remove`** `{name}` → `{}`
+
+While locked too.
+
 **`bots/list`** `{}` → `{bots: Bot[]}`
 
 ```ts
@@ -1082,6 +1130,11 @@ come before it, and is newer than it.
 | `weave projects rename <project> <name> [--json]` | `projects/update` with `name` |
 | `weave projects update <project> --remove-host <host> [--json]` | removes its location on one Host |
 | `weave projects remove <project> [--json]` | forgets it; `--json` prints `{}` |
+| `weave credentials [list] [--json]` | whether the Dispatcher can read its credentials, and each one's name, kind and age; never a value |
+| `weave credentials unlock` | asks for the passphrase without showing it, or reads a line of standard input; the first time, sets it, asking twice at a terminal |
+| `weave credentials lock` | has the Dispatcher forget the key |
+| `weave credentials set <name> [--kind token\|sign-in] [--file F]` | keeps one: its value typed without showing, piped in, or read from F; never an argument |
+| `weave credentials remove <name>` | forgets one |
 | `weave --project <p>`, `weave run --project <p>`, `weave schedules add --project <p>` | work in the Project's location on the Host in question: `--host`'s, or this computer's without it (`schedules add` always names one), a git Project's primary worktree. Never another Host's: a Project with no location there is refused, saying where it is and `weave projects add --to <p> [--host <h>] <dir>`. Refused with `--cwd`. While the Dispatcher doesn't answer, it goes by the last list |
 | `weave threads [list] --project <p> [--host <h>]` | only the threads `containing` places in that Project on that Host, the thread's Host id from its hello |
 | `weave bots [list] [--json]` | the Bots, a line each: its state, agent, Host, and thread or none yet, and "made by" the Bot that made it, if one did |

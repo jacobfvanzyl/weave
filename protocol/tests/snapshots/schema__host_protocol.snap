@@ -413,6 +413,30 @@ expression: schema()
     "bots/unwatch": {
       "params": "UnwatchBotsRequest",
       "result": "Empty"
+    },
+    "credentials/status": {
+      "params": "CredentialsStatusRequest",
+      "result": "CredentialsStatus"
+    },
+    "credentials/unlock": {
+      "params": "UnlockCredentialsRequest",
+      "result": "CredentialsStatus"
+    },
+    "credentials/lock": {
+      "params": "LockCredentialsRequest",
+      "result": "CredentialsStatus"
+    },
+    "credentials/list": {
+      "params": "ListCredentialsRequest",
+      "result": "ListCredentialsResponse"
+    },
+    "credentials/set": {
+      "params": "SetCredentialRequest",
+      "result": "CredentialResponse"
+    },
+    "credentials/remove": {
+      "params": "RemoveCredentialRequest",
+      "result": "Empty"
     }
   },
   "x-weave-dispatcher-notifications": {
@@ -443,7 +467,8 @@ expression: schema()
         "bots": "bots",
         "botsHome": "bots_home",
         "botsWatch": "bots_watch",
-        "botsAvatar": "bots_avatar"
+        "botsAvatar": "bots_avatar",
+        "credentials": "credentials"
       },
       "defaultPauseAfter": 43200000
     },
@@ -482,7 +507,8 @@ expression: schema()
       "interrupted": -32082,
       "noSession": -32083,
       "revisionConflict": -32084,
-      "sessionBusy": -32085
+      "sessionBusy": -32085,
+      "credentialsLocked": -32086
     },
     "features": {
       "steer": "turn/steer",
@@ -12940,6 +12966,173 @@ expression: schema()
     "UnwatchBotsRequest": {
       "type": "object",
       "description": "`bots/unwatch`: stop what `bots/watch` sends."
+    },
+    "CredentialsStatusRequest": {
+      "type": "object",
+      "description": "`credentials/status`."
+    },
+    "CredentialsStatus": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/CredentialsState"
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How many it keeps."
+        }
+      },
+      "required": [
+        "state",
+        "count"
+      ]
+    },
+    "CredentialsState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unlocked"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "unset",
+          "description": "No passphrase has been set, so it keeps none."
+        },
+        {
+          "type": "string",
+          "const": "locked",
+          "description": "It keeps them and has no key to read them with: each start begins so."
+        }
+      ],
+      "description": "Whether the Dispatcher can read the credentials it keeps."
+    },
+    "UnlockCredentialsRequest": {
+      "type": "object",
+      "properties": {
+        "passphrase": {
+          "type": "string"
+        },
+        "create": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "passphrase"
+      ],
+      "description": "`credentials/unlock`: give the Dispatcher the passphrase its credentials are encrypted\nunder, which it keeps in memory until it stops or `credentials/lock`. With `create`, set the\npassphrase, which only a Dispatcher with none takes. A wrong passphrase is\n[`crate::errors::UNAUTHENTICATED`]. The passphrase is never stored or logged."
+    },
+    "LockCredentialsRequest": {
+      "type": "object",
+      "description": "`credentials/lock`: forget the key, so the Dispatcher reads none until it's unlocked again."
+    },
+    "ListCredentialsRequest": {
+      "type": "object",
+      "description": "`credentials/list`: the credentials it keeps, by name, without their values; answered\nwhile locked too."
+    },
+    "ListCredentialsResponse": {
+      "type": "object",
+      "properties": {
+        "credentials": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Credential"
+          }
+        }
+      },
+      "required": [
+        "credentials"
+      ]
+    },
+    "Credential": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/CredentialKind"
+        },
+        "createdAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "updatedAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When its value was last set."
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "createdAt",
+        "updatedAt"
+      ],
+      "description": "A credential the Dispatcher keeps, without its value: nothing in the API answers one."
+    },
+    "CredentialKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "token",
+          "description": "A value that doesn't change until the person replaces it, such as a git token."
+        },
+        {
+          "type": "string",
+          "const": "signIn",
+          "description": "What a vendor's own program wrote when the person signed in to it, which only the\nDispatcher renews."
+        }
+      ],
+      "description": "What a credential is, which decides how a Host is given it (ADR 0036)."
+    },
+    "SetCredentialRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/CredentialKind"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "value"
+      ],
+      "description": "`credentials/set`: keep a credential under `name`, replacing the value and kind of one\nalready there. [`crate::errors::CREDENTIALS_LOCKED`] unless unlocked. The value is never\nanswered back or logged."
+    },
+    "CredentialResponse": {
+      "type": "object",
+      "properties": {
+        "credential": {
+          "$ref": "#/$defs/Credential"
+        }
+      },
+      "required": [
+        "credential"
+      ]
+    },
+    "RemoveCredentialRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "description": "`credentials/remove`: forget a credential, by name; answered while locked too."
     },
     "DevicePairedNotification": {
       "type": "object",

@@ -451,6 +451,12 @@ pub fn dispatcher_config_with(dir: &std::path::Path, clock: Arc<dyn Clock>) -> D
         name: "Dispatcher".to_owned(),
         secure_enclave: false,
         reach_timeout: Duration::from_secs(2),
+        // The real cost takes seconds in a debug build.
+        credential_cost: weave_dispatcher::credentials::KdfCost {
+            memory_kib: 64,
+            passes: 1,
+            lanes: 1,
+        },
         ..DispatcherConfig::new(DispatcherPaths::in_dir(dir.join("dispatcher")))
     }
 }

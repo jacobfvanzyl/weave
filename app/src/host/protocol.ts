@@ -1282,6 +1282,20 @@ export type BotColor =
  */
 export type BotState = "working" | "needsYou" | "idle";
 /**
+ * Whether the Dispatcher can read the credentials it keeps.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "CredentialsState".
+ */
+export type CredentialsState = "unlocked" | "unset" | "locked";
+/**
+ * What a credential is, which decides how a Host is given it (ADR 0036).
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "CredentialKind".
+ */
+export type CredentialKind = "token" | "signIn";
+/**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "TerminalRestore".
  */
@@ -8741,6 +8755,103 @@ export interface WatchBotsRequest {}
  */
 export interface UnwatchBotsRequest {}
 /**
+ * `credentials/status`.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "CredentialsStatusRequest".
+ */
+export interface CredentialsStatusRequest {}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "CredentialsStatus".
+ */
+export interface CredentialsStatus {
+  state: CredentialsState;
+  /**
+   * How many it keeps.
+   */
+  count: number;
+}
+/**
+ * `credentials/unlock`: give the Dispatcher the passphrase its credentials are encrypted
+ * under, which it keeps in memory until it stops or `credentials/lock`. With `create`, set the
+ * passphrase, which only a Dispatcher with none takes. A wrong passphrase is
+ * [`crate::errors::UNAUTHENTICATED`]. The passphrase is never stored or logged.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "UnlockCredentialsRequest".
+ */
+export interface UnlockCredentialsRequest {
+  passphrase: string;
+  create?: boolean;
+}
+/**
+ * `credentials/lock`: forget the key, so the Dispatcher reads none until it's unlocked again.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "LockCredentialsRequest".
+ */
+export interface LockCredentialsRequest {}
+/**
+ * `credentials/list`: the credentials it keeps, by name, without their values; answered
+ * while locked too.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListCredentialsRequest".
+ */
+export interface ListCredentialsRequest {}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListCredentialsResponse".
+ */
+export interface ListCredentialsResponse {
+  credentials: Credential[];
+}
+/**
+ * A credential the Dispatcher keeps, without its value: nothing in the API answers one.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Credential".
+ */
+export interface Credential {
+  name: string;
+  kind: CredentialKind;
+  createdAt: number;
+  /**
+   * When its value was last set.
+   */
+  updatedAt: number;
+}
+/**
+ * `credentials/set`: keep a credential under `name`, replacing the value and kind of one
+ * already there. [`crate::errors::CREDENTIALS_LOCKED`] unless unlocked. The value is never
+ * answered back or logged.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SetCredentialRequest".
+ */
+export interface SetCredentialRequest {
+  name: string;
+  kind: CredentialKind;
+  value: string;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "CredentialResponse".
+ */
+export interface CredentialResponse {
+  credential: Credential;
+}
+/**
+ * `credentials/remove`: forget a credential, by name; answered while locked too.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "RemoveCredentialRequest".
+ */
+export interface RemoveCredentialRequest {
+  name: string;
+}
+/**
  * `devices/paired`: a device took the offer this connection made.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -8847,7 +8958,8 @@ export const HOST_PROTOCOL = {
       "bots": "bots",
       "botsHome": "bots_home",
       "botsWatch": "bots_watch",
-      "botsAvatar": "bots_avatar"
+      "botsAvatar": "bots_avatar",
+      "credentials": "credentials"
     },
     "defaultPauseAfter": 43200000
   },
@@ -8886,7 +8998,8 @@ export const HOST_PROTOCOL = {
     "interrupted": -32082,
     "noSession": -32083,
     "revisionConflict": -32084,
-    "sessionBusy": -32085
+    "sessionBusy": -32085,
+    "credentialsLocked": -32086
   },
   "features": {
     "steer": "turn/steer",
@@ -9068,6 +9181,12 @@ export interface DispatcherRequests {
   "bots/newThread": { params: NewBotThreadRequest; result: BotResponse };
   "bots/watch": { params: WatchBotsRequest; result: ListBotsResponse };
   "bots/unwatch": { params: UnwatchBotsRequest; result: Empty };
+  "credentials/status": { params: CredentialsStatusRequest; result: CredentialsStatus };
+  "credentials/unlock": { params: UnlockCredentialsRequest; result: CredentialsStatus };
+  "credentials/lock": { params: LockCredentialsRequest; result: CredentialsStatus };
+  "credentials/list": { params: ListCredentialsRequest; result: ListCredentialsResponse };
+  "credentials/set": { params: SetCredentialRequest; result: CredentialResponse };
+  "credentials/remove": { params: RemoveCredentialRequest; result: Empty };
 }
 
 /** What each notification the Dispatcher sends carries. */

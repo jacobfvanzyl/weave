@@ -62,6 +62,9 @@ pub const REVISION_CONFLICT: i32 = -32084;
 /// A thread in the Session runs a turn or waits on a request, or a terminal in it runs a
 /// command; `data.threads` and `data.terminals` say which.
 pub const SESSION_BUSY: i32 = -32085;
+/// The Dispatcher's credentials are locked, or it has no passphrase for them yet (ADR 0036):
+/// `credentials/unlock` opens them.
+pub const CREDENTIALS_LOCKED: i32 = -32086;
 
 pub fn unauthenticated(why: impl Into<String>) -> Error {
     Error::new(UNAUTHENTICATED, why)
@@ -261,6 +264,10 @@ pub fn session_busy(threads: &[ThreadId], terminals: &[String]) -> Error {
     }
     Error::new(SESSION_BUSY, busy.join("; "))
         .data(serde_json::json!({"threads": ids, "terminals": terminals}))
+}
+
+pub fn credentials_locked(why: impl Into<String>) -> Error {
+    Error::new(CREDENTIALS_LOCKED, why.into())
 }
 
 /// Whether `error` carries `code`.

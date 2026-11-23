@@ -23,7 +23,11 @@ weave-tui = { path = "tui" }
 # uses; see AGENTS.md. app/src-tauri/Cargo.toml pins the same version.
 agent-client-protocol = { version = "=5.2.0", features = ["process", "unstable_mcp_over_acp", "unstable_subagents"] }
 anyhow = "1"
+# The Dispatcher's credentials at rest (ADR 0036): a key from the person's passphrase, and
+# authenticated encryption under it.
+argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
 base64 = "0.22"
+chacha20poly1305 = "0.11"
 # weave-holder's libghostty-vt bindings, regenerated with its `bindgen` feature.
 bindgen = "0.72"
 # Unpacking ACP registry agents' binary archives, as Codex unpacks its downloads.
@@ -71,6 +75,7 @@ security-framework-sys = "2.17"
 serde = "1"
 serde_json = "1"
 sha2 = "0.10"
+zeroize = "1"
 # Codex's syntax highlighting: syntect with two-face's grammars and themes.
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "plist-load", "regex-onig"] }
 tar = "0.4.46"

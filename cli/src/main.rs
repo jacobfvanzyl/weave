@@ -109,6 +109,10 @@ enum Command {
     /// Your Projects, which the Dispatcher keeps, each with a location on one or more of your
     /// Hosts: list them, register a directory as one, rename one, or remove one.
     Projects(commands::projects::ProjectsArgs),
+    /// Your credentials, which the Dispatcher keeps encrypted: what lets your agents and git
+    /// act as you. Unlock them after the Dispatcher starts, lock them, or keep, list and remove
+    /// one.
+    Credentials(commands::credentials::CredentialsArgs),
     /// Your Bots, which the Dispatcher keeps: assistants with a home of their own on one of
     /// your Hosts, working there in one thread at a time. List them, add, show, change or
     /// remove one, send one a prompt, or start its new thread.
@@ -164,6 +168,13 @@ async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Hosts(args) => logged(hosts::LOG, hosts::command(args)).await,
         Command::Projects(args) => {
             logged(commands::projects::LOG, commands::projects::command(args)).await
+        }
+        Command::Credentials(args) => {
+            logged(
+                commands::credentials::LOG,
+                commands::credentials::command(args),
+            )
+            .await
         }
         Command::Bots(args) => logged(commands::bots::LOG, commands::bots::command(args)).await,
         Command::Pair(args) => logged(devices::LOG, devices::pair(args)).await,
@@ -232,8 +243,18 @@ fn log_to_stderr(default: &str) {
 }
 
 fn env_filter(default: &str) -> EnvFilter {
-    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default))
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
+    // At TRACE the SDK logs every line on the wire, with only environment and header values
+    // taken out. A passphrase or a credential's value is on the Dispatcher's (ADR 0036), so
+    // those lines are never logged, whatever `RUST_LOG` asks for.
+    match WIRE_LINES_BELOW_TRACE.parse() {
+        Ok(directive) => filter.add_directive(directive),
+        Err(_) => filter,
+    }
 }
+
+/// The filter directive that keeps the SDK's log of raw wire lines off.
+const WIRE_LINES_BELOW_TRACE: &str = "agent_client_protocol::jsonrpc::transport_actor=debug";
 
 async fn run_tui(mut cli: Cli) -> anyhow::Result<()> {
     let mode = cli.thread.mode();
@@ -497,6 +518,7 @@ mod tests {
             "devices",
             "projects",
             "bots",
+            "credentials",
         ] {
             assert!(parses(&["weave", noun]), "{noun}");
             assert!(parses(&["weave", noun, "list"]), "{noun}");

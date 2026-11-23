@@ -91,6 +91,10 @@ pub const CARRY_FEATURE: &str = "carry";
 /// WVE-189): it answers `projects/*`.
 pub const PROJECTS_FEATURE: &str = "projects";
 
+/// The [`DispatcherHello::features`] entry of a Dispatcher that keeps the person's credentials
+/// (ADR 0036, WVE-239): it answers `credentials/*`.
+pub const CREDENTIALS_FEATURE: &str = "credentials";
+
 /// The [`DispatcherHello::features`] entry of a Dispatcher that keeps Bots (ADR 0028, WVE-118):
 /// it answers `bots/*`, and `schedules/add` takes `bot`, and `at` for a one-off.
 pub const BOTS_FEATURE: &str = "bots";
@@ -886,6 +890,133 @@ pub struct UpdateProjectRequest {
 #[request(method = "projects/remove", response = Empty)]
 pub struct RemoveProjectRequest {
     pub project: String,
+}
+
+/// What a credential is, which decides how a Host is given it (ADR 0036).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum CredentialKind {
+    /// A value that doesn't change until the person replaces it, such as a git token.
+    Token,
+    /// What a vendor's own program wrote when the person signed in to it, which only the
+    /// Dispatcher renews.
+    SignIn,
+}
+
+/// A credential the Dispatcher keeps, without its value: nothing in the API answers one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct Credential {
+    pub name: String,
+    pub kind: CredentialKind,
+    pub created_at: Timestamp,
+    /// When its value was last set.
+    pub updated_at: Timestamp,
+}
+
+/// Whether the Dispatcher can read the credentials it keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum CredentialsState {
+    /// No passphrase has been set, so it keeps none.
+    Unset,
+    /// It keeps them and has no key to read them with: each start begins so.
+    Locked,
+    Unlocked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CredentialsStatus {
+    pub state: CredentialsState,
+    /// How many it keeps.
+    pub count: u32,
+}
+
+/// `credentials/status`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "credentials/status", response = CredentialsStatus)]
+pub struct CredentialsStatusRequest {}
+
+/// `credentials/unlock`: give the Dispatcher the passphrase its credentials are encrypted
+/// under, which it keeps in memory until it stops or `credentials/lock`. With `create`, set the
+/// passphrase, which only a Dispatcher with none takes. A wrong passphrase is
+/// [`crate::errors::UNAUTHENTICATED`]. The passphrase is never stored or logged.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "credentials/unlock", response = CredentialsStatus)]
+pub struct UnlockCredentialsRequest {
+    pub passphrase: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub create: bool,
+}
+
+impl std::fmt::Debug for UnlockCredentialsRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnlockCredentialsRequest")
+            .field("passphrase", &"…")
+            .field("create", &self.create)
+            .finish()
+    }
+}
+
+/// `credentials/lock`: forget the key, so the Dispatcher reads none until it's unlocked again.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "credentials/lock", response = CredentialsStatus)]
+pub struct LockCredentialsRequest {}
+
+/// `credentials/list`: the credentials it keeps, by name, without their values; answered
+/// while locked too.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "credentials/list", response = ListCredentialsResponse)]
+pub struct ListCredentialsRequest {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ListCredentialsResponse {
+    pub credentials: Vec<Credential>,
+}
+
+/// `credentials/set`: keep a credential under `name`, replacing the value and kind of one
+/// already there. [`crate::errors::CREDENTIALS_LOCKED`] unless unlocked. The value is never
+/// answered back or logged.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "credentials/set", response = CredentialResponse)]
+pub struct SetCredentialRequest {
+    pub name: String,
+    pub kind: CredentialKind,
+    pub value: String,
+}
+
+impl std::fmt::Debug for SetCredentialRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetCredentialRequest")
+            .field("name", &self.name)
+            .field("kind", &self.kind)
+            .field("value", &"…")
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CredentialResponse {
+    pub credential: Credential,
+}
+
+/// `credentials/remove`: forget a credential, by name; answered while locked too.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "credentials/remove", response = Empty)]
+pub struct RemoveCredentialRequest {
+    pub name: String,
 }
 
 /// What a Bot's current thread is doing, as the Dispatcher last saw it on the Bot's Host.

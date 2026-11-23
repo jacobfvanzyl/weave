@@ -3116,3 +3116,64 @@ fn sessions() {
         ])
     );
 }
+
+/// The Dispatcher's credentials (ADR 0036, WVE-239): a value goes in and never comes out.
+#[test]
+fn credentials_wire_shapes() {
+    use weave_host_protocol::dispatcher::Credential;
+    use weave_host_protocol::dispatcher::CredentialKind;
+    use weave_host_protocol::dispatcher::CredentialResponse;
+    use weave_host_protocol::dispatcher::CredentialsState;
+    use weave_host_protocol::dispatcher::CredentialsStatus;
+    use weave_host_protocol::dispatcher::ListCredentialsResponse;
+    use weave_host_protocol::dispatcher::RemoveCredentialRequest;
+    use weave_host_protocol::dispatcher::SetCredentialRequest;
+    use weave_host_protocol::dispatcher::UnlockCredentialsRequest;
+
+    let credential = Credential {
+        name: "claude".to_owned(),
+        kind: CredentialKind::SignIn,
+        created_at: 1_795_300_000_000,
+        updated_at: 1_795_380_000_000,
+    };
+    insta::assert_json_snapshot!(
+        "unlock_credentials_request",
+        message(&UnlockCredentialsRequest {
+            passphrase: "a passphrase of the person's".to_owned(),
+            create: true,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "credentials_status",
+        round_trip(&CredentialsStatus {
+            state: CredentialsState::Locked,
+            count: 2,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "set_credential_request",
+        message(&SetCredentialRequest {
+            name: "claude".to_owned(),
+            kind: CredentialKind::SignIn,
+            value: "{\"claudeAiOauth\":{}}".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "credential_response",
+        round_trip(&CredentialResponse {
+            credential: credential.clone(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "list_credentials_response",
+        round_trip(&ListCredentialsResponse {
+            credentials: vec![credential],
+        })
+    );
+    insta::assert_json_snapshot!(
+        "remove_credential_request",
+        message(&RemoveCredentialRequest {
+            name: "claude".to_owned(),
+        })
+    );
+}

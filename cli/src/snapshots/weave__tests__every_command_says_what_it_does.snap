@@ -9,20 +9,21 @@ Usage: weave [OPTIONS] [-- <COMMAND>...]
        weave <COMMAND>
 
 Commands:
-  run         Run one prompt in a headless thread in the weave Host, printing the reply
-  threads     Threads open in the weave Host: list, read, prompt or steer them, stop a turn, or close one
-  agents      The agents weave launches: list them, move them to their newest releases, sign in to or out of one, or try one with a prompt
-  schedules   The Dispatcher's schedules, which start a headless turn on one of your Hosts, or prompt one of your Bots, at the times a cron expression gives or once: list, add, remove, pause, resume or run one, or see what they did
-  hosts       Your Hosts the Dispatcher starts work on: list them, have one join it, or remove one
-  projects    Your Projects, which the Dispatcher keeps, each with a location on one or more of your Hosts: list them, register a directory as one, rename one, or remove one
-  bots        Your Bots, which the Dispatcher keeps: assistants with a home of their own on one of your Hosts, working there in one thread at a time. List them, add, show, change or remove one, send one a prompt, or start its new thread
-  pair        Pair one of your devices, or another computer, with the Dispatcher, through which it reaches your Hosts. Run it where the Dispatcher runs
-  devices     Devices paired with the Dispatcher: list them, or revoke one
-  terminals   The weave Host's terminals: show one here, as the TUI does in a Rex pane
-  worktrees   Git worktrees: what worktrunk asks the weave Host before it removes one
-  daemon      Manage the weave Host, which runs agents so their threads outlive the TUI
-  dispatcher  The Dispatcher, which starts work on your Hosts while you're away: run, start, stop or install it, or pair this computer with it where it runs on another
-  help        Print this message or the help of the given subcommand(s)
+  run          Run one prompt in a headless thread in the weave Host, printing the reply
+  threads      Threads open in the weave Host: list, read, prompt or steer them, stop a turn, or close one
+  agents       The agents weave launches: list them, move them to their newest releases, sign in to or out of one, or try one with a prompt
+  schedules    The Dispatcher's schedules, which start a headless turn on one of your Hosts, or prompt one of your Bots, at the times a cron expression gives or once: list, add, remove, pause, resume or run one, or see what they did
+  hosts        Your Hosts the Dispatcher starts work on: list them, have one join it, or remove one
+  projects     Your Projects, which the Dispatcher keeps, each with a location on one or more of your Hosts: list them, register a directory as one, rename one, or remove one
+  credentials  Your credentials, which the Dispatcher keeps encrypted: what lets your agents and git act as you. Unlock them after the Dispatcher starts, lock them, or keep, list and remove one
+  bots         Your Bots, which the Dispatcher keeps: assistants with a home of their own on one of your Hosts, working there in one thread at a time. List them, add, show, change or remove one, send one a prompt, or start its new thread
+  pair         Pair one of your devices, or another computer, with the Dispatcher, through which it reaches your Hosts. Run it where the Dispatcher runs
+  devices      Devices paired with the Dispatcher: list them, or revoke one
+  terminals    The weave Host's terminals: show one here, as the TUI does in a Rex pane
+  worktrees    Git worktrees: what worktrunk asks the weave Host before it removes one
+  daemon       Manage the weave Host, which runs agents so their threads outlive the TUI
+  dispatcher   The Dispatcher, which starts work on your Hosts while you're away: run, start, stop or install it, or pair this computer with it where it runs on another
+  help         Print this message or the help of the given subcommand(s)
 
 Arguments:
   [COMMAND]...
@@ -897,6 +898,89 @@ Options:
       --json
           Print what the Dispatcher answered as JSON
 
+  -h, --help
+          Print help
+
+$ weave credentials --help
+Your credentials, which the Dispatcher keeps encrypted: what lets your agents and git act as you. Unlock them after the Dispatcher starts, lock them, or keep, list and remove one
+
+Usage: weave credentials [COMMAND]
+
+Commands:
+  list    The credentials the Dispatcher keeps, without their values, and whether it can read them (the default)
+  unlock  Give the Dispatcher the passphrase its credentials are encrypted under, which it holds in memory until it stops; the first time, set the passphrase
+  lock    Have the Dispatcher forget the passphrase, so it reads no credential until unlocked
+  set     Keep a credential, in place of one of that name. Its value is typed without showing, piped in, or read from a file
+  remove  Forget a credential
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave credentials list --help
+The credentials the Dispatcher keeps, without their values, and whether it can read them (the default)
+
+Usage: weave credentials list [OPTIONS]
+
+Options:
+      --json
+          Print them as JSON
+
+  -h, --help
+          Print help
+
+$ weave credentials unlock --help
+Give the Dispatcher the passphrase its credentials are encrypted under, which it holds in memory until it stops; the first time, set the passphrase
+
+Usage: weave credentials unlock
+
+Options:
+  -h, --help
+          Print help
+
+$ weave credentials lock --help
+Have the Dispatcher forget the passphrase, so it reads no credential until unlocked
+
+Usage: weave credentials lock
+
+Options:
+  -h, --help
+          Print help
+
+$ weave credentials set --help
+Keep a credential, in place of one of that name. Its value is typed without showing, piped in, or read from a file
+
+Usage: weave credentials set [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          What the credential is called
+
+Options:
+      --kind <KIND>
+          Possible values:
+          - token:   A value that doesn't change until you replace it, such as a git token
+          - sign-in: What a vendor's own program wrote when you signed in to it
+          
+          [default: token]
+
+      --file <FILE>
+          Read the value from this file, such as a vendor's sign-in file
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ weave credentials remove --help
+Forget a credential
+
+Usage: weave credentials remove <NAME>
+
+Arguments:
+  <NAME>
+          
+
+Options:
   -h, --help
           Print help
 
