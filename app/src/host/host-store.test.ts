@@ -407,17 +407,36 @@ describe("HostStore, a thread's failures", () => {
   });
 
   it('updates the agent of a thread nothing was sent in without asking its Host to move it', async () => {
-    const host = twoThreads({
-      'agents/update': () => ({ result: { version: '0.94.0' } }),
+    let launches = '0.86.0';
+    const host = scriptedHost(() => [{ id: 'claude', name: 'Claude', version: launches } as AgentSummary], {
+      'threads/list': () => ({
+        result: {
+          threads: [THREAD, OTHER].map((sessionId) => ({ info: { sessionId, cwd: '/work' }, agentId: 'claude', state: 'open', activity: 'idle', clients: 1, headless: false })),
+        },
+      }),
+      'thread/attach': (given) => ({ result: { ...host.state, blank: true, threadId: (given as { threadId: string }).threadId, replay: { from: 1, reset: true } } }),
+      'agents/update': () => {
+        launches = '0.94.0';
+        return { result: { version: '0.94.0' } };
+      },
       'thread/reopen': () => ({ error: { code: -32600, message: 'Invalid request', data: refusal } }),
-    }, { blank: true });
+    });
     const store = await both(host);
     expect(store.snapshot().open?.[threadKey(HOST, OTHER)]?.update).toMatchObject({ running: '0.86.0', latest: '0.94.0', blank: true });
+    expect(store.snapshot().open?.[threadKey(HOST, OTHER)]?.update?.available).toBeUndefined();
     await store.actions.forThread!(threadKey(HOST, OTHER)).updateAgent();
     expect(host.asked).toContain('agents/update');
     expect(host.asked).not.toContain('thread/reopen');
     expect(store.snapshot().threadErrors).toBeUndefined();
     expect(store.snapshot().open?.[threadKey(HOST, OTHER)]?.updating).toBeUndefined();
+    // Even without a second `agents/updateAvailable`, refreshing `agents/list` flips both open
+    // threads to `available: '0.94.0'` so the blank notice says new threads launch it now.
+    expect(store.snapshot().open?.[threadKey(HOST, OTHER)]?.update).toMatchObject({
+      running: '0.86.0', latest: '0.94.0', available: '0.94.0', blank: true,
+    });
+    expect(store.snapshot().open?.[threadKey(HOST, THREAD)]?.update).toMatchObject({
+      running: '0.86.0', latest: '0.94.0', available: '0.94.0', blank: true,
+    });
     store.stop();
   });
 

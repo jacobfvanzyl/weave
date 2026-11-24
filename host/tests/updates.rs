@@ -641,6 +641,34 @@ async fn a_blank_thread_stays_as_it_was_with_nothing_to_move() {
 }
 
 #[tokio::test]
+async fn agents_update_reannounces_to_open_threads_that_already_knew_the_version() {
+    let world = World::new(Ok("98.0.0"), None);
+    let daemon = world.daemon();
+    let mut client = Client::new(&daemon).await;
+    let thread_id = client.create(&world, "claude").await.thread_id;
+
+    // Background lookup tells the open thread about 98.0.0 before it's installed.
+    let first = client.update_available().await;
+    assert_eq!(first.thread_id, thread_id);
+    assert_eq!(first.update.latest, "98.0.0");
+
+    // Installing 98.0.0 via `agents/update` must notify open threads again even though `latest`
+    // didn't change, so attached clients refresh `agents/list` and learn new threads launch it.
+    let updated = client
+        .connection
+        .send(UpdateAgentRequest {
+            agent_id: "claude".to_owned(),
+        })
+        .await
+        .expect("agents/update");
+    assert_eq!(updated.version, "98.0.0");
+
+    let second = client.update_available().await;
+    assert_eq!(second.thread_id, thread_id);
+    assert_eq!(second.update.latest, "98.0.0");
+}
+
+#[tokio::test]
 async fn an_agent_that_cant_resume_or_load_keeps_its_process() {
     let world = World::new(Ok("98.0.0"), None);
     world.versions.lock().expect("lock").minimal = true;

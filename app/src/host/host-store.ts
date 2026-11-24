@@ -2250,6 +2250,7 @@ export class HostStore {
   async #updateAgent(followed: Followed | undefined) {
     const agentId = followed?.update?.agentId;
     if (!followed || !agentId) return;
+    const entry = this.#hosts.get(followed.hostId);
     const connection = this.#connection(followed);
     followed.updating = true;
     this.#changed();
@@ -2257,9 +2258,15 @@ export class HostStore {
     try {
       ({ version } = await connection.request('agents/update', { agentId }));
     } catch (error) {
-      throw this.#explain(error, this.#hosts.get(followed.hostId), agentId);
+      throw this.#explain(error, entry, agentId);
     } finally {
       followed.updating = false;
+    }
+    if (entry) {
+      // Refresh the Host's agent list directly so `#updateNotice` sees what new threads launch now,
+      // even on a blank thread or against an older Host that doesn't re-send `agents/updateAvailable`.
+      if (followed.state?.blank) await this.#loadAgents(entry);
+      else void this.#loadAgents(entry);
     }
     if (version === followed.update?.running) {
       followed.update = undefined;
@@ -2267,8 +2274,7 @@ export class HostStore {
       return;
     }
     // The Host moves no thread nothing was sent in (its agent may have kept nothing of it). The
-    // agent is updated for new threads all the same, which the Host tells its open threads
-    // (`agents/updateAvailable`), and the notice says this one stays (`blank`).
+    // agent is updated for new threads all the same, and the notice says this one stays (`blank`).
     if (followed.state?.blank) {
       this.#changed();
       return;

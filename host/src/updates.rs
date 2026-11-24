@@ -149,14 +149,15 @@ pub(crate) fn look_for_update(shared: &Arc<Shared>, thread: &ThreadHandle) {
     let agent_id = thread.agent_id.clone();
     tokio::spawn(async move {
         if let Some(latest) = shared.updates.latest(&shared, &feed).await {
-            offer(&shared, &agent_id, &latest);
+            offer(&shared, &agent_id, &latest, false);
         }
     });
 }
 
 /// Tell the open threads of `agent_id` about `latest`; those running older ones tell their
-/// clients.
-fn offer(shared: &Shared, agent_id: &str, latest: &str) {
+/// clients. `reannounce` broadcasts even to threads that already heard of `latest`, after
+/// `agents/update` installs it so clients know new threads launch it now.
+fn offer(shared: &Shared, agent_id: &str, latest: &str, reannounce: bool) {
     let threads: Vec<ThreadHandle> = shared
         .registry()
         .threads
@@ -167,6 +168,7 @@ fn offer(shared: &Shared, agent_id: &str, latest: &str) {
     for thread in threads {
         let _ = thread.send(Command::UpdateAvailable {
             latest: latest.to_owned(),
+            reannounce,
         });
     }
 }
@@ -218,7 +220,7 @@ pub(crate) async fn update(shared: &Arc<Shared>, agent_id: &str) -> Result<Strin
     .ok_or_else(|| Error::internal_error().data(format!("{agent_id} has no version to update")))?;
     // The next threads start the new version, not a spare of the old one.
     shared.drop_spares(agent_id);
-    offer(shared, agent_id, &version);
+    offer(shared, agent_id, &version, true);
     Ok(version)
 }
 

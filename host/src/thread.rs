@@ -327,9 +327,11 @@ pub(crate) enum Command {
         done: oneshot::Sender<()>,
     },
     /// The newest version of the thread's agent; clients hear of it if it's newer than the
-    /// one the thread runs.
+    /// one the thread runs. `reannounce` broadcasts again even when `latest` didn't change,
+    /// because `agents/update` just installed it and clients should refresh `agents/list`.
     UpdateAvailable {
         latest: String,
+        reannounce: bool,
     },
     /// Where in a git repository the thread's directory is, read again after a turn.
     Located {
@@ -1122,7 +1124,9 @@ impl Actor {
                 self.stop(Ending::Suspended);
             }
             Command::Advance => self.advance(),
-            Command::UpdateAvailable { latest } => self.update_available(latest),
+            Command::UpdateAvailable { latest, reannounce } => {
+                self.update_available(latest, reannounce);
+            }
             Command::Located { git } => {
                 if let Some(recorded) = self.shared.registry().known.get_mut(&self.root) {
                     recorded.git.clone_from(&git);
@@ -1232,19 +1236,19 @@ impl Actor {
         }
     }
 
-    /// The newest version of the agent is `latest`: tell attached clients, once, if it's
-    /// newer than the one running.
-    fn update_available(&mut self, latest: String) {
+    /// The newest version of the agent is `latest`: tell attached clients if it's newer than
+    /// the one running, once per `latest` unless `reannounce` says `agents/update` just installed
+    /// it.
+    fn update_available(&mut self, latest: String, reannounce: bool) {
         let Some(release) = &self.agent.release else {
             return;
         };
         let newer = compare(&latest, &release.version) == Order::Greater;
-        if !newer
-            || self
-                .update
-                .as_ref()
-                .is_some_and(|update| update.latest == latest)
-        {
+        let already_told = self
+            .update
+            .as_ref()
+            .is_some_and(|update| update.latest == latest);
+        if !newer || (already_told && !reannounce) {
             return;
         }
         let update = AgentUpdate {
