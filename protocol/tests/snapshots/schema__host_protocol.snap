@@ -462,6 +462,10 @@ expression: schema()
       "params": "LaunchMachineRequest",
       "result": "LaunchMachineResponse"
     },
+    "machines/update": {
+      "params": "UpdateMachineRequest",
+      "result": "UpdateMachineResponse"
+    },
     "machines/destroy": {
       "params": "DestroyMachineRequest",
       "result": "DestroyMachineResponse"
@@ -13497,6 +13501,13 @@ expression: schema()
         "state": {
           "type": "string",
           "description": "`\"starting\"`, `\"running\"`, `\"stopped\"`, `\"gone\"`, or a state of the provider's own."
+        },
+        "image": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The container image the machine boots, when known."
         }
       },
       "required": [
@@ -13574,6 +13585,57 @@ expression: schema()
           "format": "uint64",
           "minimum": 0,
           "description": "Milliseconds from offering the join code to the Host being connected."
+        }
+      },
+      "required": [
+        "machine",
+        "host",
+        "tookMs"
+      ]
+    },
+    "UpdateMachineRequest": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "type": "string",
+          "description": "The machine's id or name."
+        },
+        "image": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Image override; uses configured `MachineSettings.image` when absent."
+        },
+        "waitSecs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Seconds to wait for the Host to reconnect after updating (240 by default)."
+        }
+      },
+      "required": [
+        "machine"
+      ],
+      "description": "`machines/update`: update a cloud machine weave made to a new image in place (preserving its\nvolume, Host identity and Tailscale state), and wait for its Host to reconnect.\n[`crate::errors::CREDENTIALS_LOCKED`] while credentials are locked."
+    },
+    "UpdateMachineResponse": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "$ref": "#/$defs/CloudMachine"
+        },
+        "host": {
+          "$ref": "#/$defs/DispatcherHost"
+        },
+        "tookMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Milliseconds from starting the image update to the Host being reconnected."
         }
       },
       "required": [

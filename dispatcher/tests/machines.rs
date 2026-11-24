@@ -78,13 +78,17 @@ fn machine(name: &str, state: MachineState) -> Machine {
         id: format!("m-{name}"),
         name: name.to_owned(),
         state,
+        image: None,
     }
 }
 
 impl Machines for FakeMachines {
     async fn create(&self, spec: &MachineSpec) -> Result<Machine, MachineError> {
         self.made.send(spec.clone()).expect("the test is listening");
-        Ok(machine(&spec.name, MachineState::Starting))
+        Ok(Machine {
+            image: Some(spec.image.clone()),
+            ..machine(&spec.name, MachineState::Starting)
+        })
     }
 
     async fn list(&self) -> Result<Vec<Machine>, MachineError> {
@@ -106,6 +110,13 @@ impl Machines for FakeMachines {
     async fn destroy(&self, id: &str) -> Result<(), MachineError> {
         self.destroyed.lock().expect("the lock").push(id.to_owned());
         Ok(())
+    }
+
+    async fn update_image(&self, id: &str, image: &str) -> Result<Machine, MachineError> {
+        Ok(Machine {
+            image: Some(image.to_owned()),
+            ..machine(id.trim_start_matches("m-"), MachineState::Running)
+        })
     }
 }
 
@@ -261,6 +272,7 @@ mod dispatcher_api {
     use weave_host_protocol::dispatcher::LaunchMachineRequest;
     use weave_host_protocol::dispatcher::ListMachinesRequest;
     use weave_host_protocol::dispatcher::MACHINES_FEATURE;
+    use weave_host_protocol::dispatcher::UpdateMachineRequest;
     use weave_host_protocol::dispatcher::UpdateMachineSettingsRequest;
     use weave_host_protocol::errors;
     use weave_remote::access::RemoteSettings;
@@ -281,13 +293,17 @@ mod dispatcher_api {
     #[derive(Clone)]
     struct RecordedMachines {
         made: mpsc::UnboundedSender<MachineSpec>,
+        updated: mpsc::UnboundedSender<(String, String)>,
         live: Arc<Mutex<Vec<Machine>>>,
         destroyed: Arc<Mutex<Vec<String>>>,
     }
 
     impl Machines for RecordedMachines {
         async fn create(&self, spec: &MachineSpec) -> Result<Machine, MachineError> {
-            let created = machine(&spec.name, MachineState::Running);
+            let created = Machine {
+                image: Some(spec.image.clone()),
+                ..machine(&spec.name, MachineState::Running)
+            };
             self.live.lock().expect("live").push(created.clone());
             self.made.send(spec.clone()).expect("receiver");
             Ok(created)
@@ -298,6 +314,16 @@ mod dispatcher_api {
         }
 
         async fn get(&self, id: &str) -> Result<Machine, MachineError> {
+            if let Some(found) = self
+                .live
+                .lock()
+                .expect("live")
+                .iter()
+                .find(|machine| machine.id == id)
+                .cloned()
+            {
+                return Ok(found);
+            }
             Ok(machine(id.trim_start_matches("m-"), MachineState::Running))
         }
 
@@ -317,6 +343,21 @@ mod dispatcher_api {
                 .push(id.to_owned());
             Ok(())
         }
+
+        async fn update_image(&self, id: &str, image: &str) -> Result<Machine, MachineError> {
+            let mut live = self.live.lock().expect("live");
+            let entry = live
+                .iter_mut()
+                .find(|machine| machine.id == id)
+                .ok_or_else(|| MachineError(format!("unknown machine {id}")))?;
+            entry.image = Some(image.to_owned());
+            let updated = entry.clone();
+            drop(live);
+            self.updated
+                .send((id.to_owned(), image.to_owned()))
+                .expect("receiver");
+            Ok(updated)
+        }
     }
 
     struct FakeBackend {
@@ -326,18 +367,24 @@ mod dispatcher_api {
     }
 
     impl FakeBackend {
-        fn new() -> (Arc<Self>, mpsc::UnboundedReceiver<MachineSpec>) {
+        fn new() -> (
+            Arc<Self>,
+            mpsc::UnboundedReceiver<MachineSpec>,
+            mpsc::UnboundedReceiver<(String, String)>,
+        ) {
             let (made, specs) = mpsc::unbounded_channel();
+            let (updated, updates) = mpsc::unbounded_channel();
             let backend = Arc::new(Self {
                 fly_tokens: Mutex::new(Vec::new()),
                 tailscale_calls: Mutex::new(Vec::new()),
                 machines: RecordedMachines {
                     made,
+                    updated,
                     live: Arc::new(Mutex::new(Vec::new())),
                     destroyed: Arc::new(Mutex::new(Vec::new())),
                 },
             });
-            (backend, specs)
+            (backend, specs, updates)
         }
     }
 
@@ -370,7 +417,7 @@ mod dispatcher_api {
     #[tokio::test(flavor = "multi_thread")]
     async fn dispatcher_launches_lists_and_destroys_using_stored_credentials() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (backend, mut specs) = FakeBackend::new();
+        let (backend, mut specs, mut updates) = FakeBackend::new();
         let mut remote = RemoteSettings::new(
             "127.0.0.1:0".parse().expect("addr"),
             Arc::new(FakeServe) as Arc<dyn Serve>,
@@ -428,6 +475,14 @@ mod dispatcher_api {
                 .await
                 .expect_err("launch locked"),
             client
+                .send(UpdateMachineRequest {
+                    machine: "cloud-1".to_owned(),
+                    image: None,
+                    wait_secs: Some(5),
+                })
+                .await
+                .expect_err("update locked"),
+            client
                 .send(DestroyMachineRequest {
                     machine: "cloud-1".to_owned(),
                 })
@@ -465,7 +520,7 @@ mod dispatcher_api {
             .expect("claude");
 
         // Launch a cloud machine; simulate the cloud Host booting and joining over WebSocket.
-        let cloud = World::new().await;
+        let mut cloud = World::new().await;
         let (launched, spec) = tokio::join!(
             client.send(LaunchMachineRequest {
                 name: "cloud-1".to_owned(),
@@ -528,10 +583,38 @@ mod dispatcher_api {
         .await
         .expect("cloud Host received synced Claude credential");
 
-        // List and destroy via the API; verify no secrets appear in any serialized response.
+        // List, update in place (keeping the same Host identity), and destroy via the API;
+        // verify no secrets appear in any serialized response.
         let listed = client.send(ListMachinesRequest {}).await.expect("listed");
         assert_eq!(listed.machines.len(), 1);
         assert_eq!(listed.machines[0].name, "cloud-1");
+        assert_eq!(
+            listed.machines[0].image.as_deref(),
+            Some("registry.fly.io/weave-hosts:test")
+        );
+
+        let (updated, (updated_id, updated_image)) = tokio::join!(
+            client.send(UpdateMachineRequest {
+                machine: "cloud-1".to_owned(),
+                image: Some("registry.fly.io/weave-hosts:v2".to_owned()),
+                wait_secs: Some(10),
+            }),
+            async {
+                let change = updates.recv().await.expect("machine update");
+                cloud.restart().await;
+                change
+            }
+        );
+        let updated = updated.expect("updated");
+        assert_eq!(updated_id, "m-cloud-1");
+        assert_eq!(updated_image, "registry.fly.io/weave-hosts:v2");
+        assert_eq!(updated.machine.id, "m-cloud-1");
+        assert_eq!(
+            updated.machine.image.as_deref(),
+            Some("registry.fly.io/weave-hosts:v2")
+        );
+        assert_eq!(updated.host.host_id, launched.host.host_id);
+        assert!(updated.host.connected);
 
         let destroyed = client
             .send(DestroyMachineRequest {
@@ -547,6 +630,7 @@ mod dispatcher_api {
             serde_json::to_string(&configured).expect("json"),
             serde_json::to_string(&launched).expect("json"),
             serde_json::to_string(&listed).expect("json"),
+            serde_json::to_string(&updated).expect("json"),
             serde_json::to_string(&destroyed).expect("json"),
         ] {
             assert!(!payload.contains(FLY_TOKEN), "{payload}");

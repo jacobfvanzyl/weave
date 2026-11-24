@@ -1,0 +1,25 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&UpdateMachineResponse\n{\n    machine: CloudMachine\n    {\n        image: Some(\"registry.fly.io/weave-hosts:abc1234\".to_owned()),\n        ..machine\n    }, host: DispatcherHost\n    {\n        host_id: \"8ZpX3kqW1m0aLr9TQv2cYw\".to_owned(), name:\n        \"cloud-1\".to_owned(), url: String::new(), device_id:\n        \"D7qK2mN4pR8sT1vX\".to_owned(), paired_at: 1_795_400_000_000,\n        joined_at: Some(1_795_400_000_000), here: false, connected: true,\n        status: Reachability::Reachable, why: None, connected_at:\n        Some(1_795_400_010_000), pending: 0,\n    }, took_ms: 9_000,\n})"
+---
+{
+  "machine": {
+    "id": "e784e524b92e83",
+    "name": "cloud-1",
+    "state": "running",
+    "image": "registry.fly.io/weave-hosts:abc1234"
+  },
+  "host": {
+    "hostId": "8ZpX3kqW1m0aLr9TQv2cYw",
+    "name": "cloud-1",
+    "url": "",
+    "deviceId": "D7qK2mN4pR8sT1vX",
+    "pairedAt": 1795400000000,
+    "joinedAt": 1795400000000,
+    "connected": true,
+    "status": "reachable",
+    "connectedAt": 1795400010000,
+    "pending": 0
+  },
+  "tookMs": 9000
+}

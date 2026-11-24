@@ -3253,6 +3253,8 @@ fn machines_wire_shapes() {
     use weave_host_protocol::dispatcher::MachineSettings;
     use weave_host_protocol::dispatcher::MachineSettingsResponse;
     use weave_host_protocol::dispatcher::Reachability;
+    use weave_host_protocol::dispatcher::UpdateMachineRequest;
+    use weave_host_protocol::dispatcher::UpdateMachineResponse;
     use weave_host_protocol::dispatcher::UpdateMachineSettingsRequest;
 
     let settings = MachineSettings {
@@ -3269,6 +3271,7 @@ fn machines_wire_shapes() {
         id: "e784e524b92e83".to_owned(),
         name: "cloud-1".to_owned(),
         state: "running".to_owned(),
+        image: None,
     };
     insta::assert_json_snapshot!(
         "get_machine_settings_request",
@@ -3336,8 +3339,40 @@ fn machines_wire_shapes() {
     insta::assert_json_snapshot!(
         "destroy_machine_response",
         round_trip(&DestroyMachineResponse {
-            machine,
+            machine: machine.clone(),
             host_removed: true,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "update_machine_request",
+        message(&UpdateMachineRequest {
+            machine: "cloud-1".to_owned(),
+            image: Some("registry.fly.io/weave-hosts:abc1234".to_owned()),
+            wait_secs: Some(240),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "update_machine_response",
+        round_trip(&UpdateMachineResponse {
+            machine: CloudMachine {
+                image: Some("registry.fly.io/weave-hosts:abc1234".to_owned()),
+                ..machine
+            },
+            host: DispatcherHost {
+                host_id: "8ZpX3kqW1m0aLr9TQv2cYw".to_owned(),
+                name: "cloud-1".to_owned(),
+                url: String::new(),
+                device_id: "D7qK2mN4pR8sT1vX".to_owned(),
+                paired_at: 1_795_400_000_000,
+                joined_at: Some(1_795_400_000_000),
+                here: false,
+                connected: true,
+                status: Reachability::Reachable,
+                why: None,
+                connected_at: Some(1_795_400_010_000),
+                pending: 0,
+            },
+            took_ms: 9_000,
         })
     );
 }

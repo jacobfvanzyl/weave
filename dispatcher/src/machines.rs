@@ -35,6 +35,8 @@ use weave_host_protocol::dispatcher::ListHostsRequest;
 use weave_host_protocol::dispatcher::MachineSettings;
 use weave_host_protocol::dispatcher::OfferHostRequest;
 use weave_host_protocol::dispatcher::OfferHostResponse;
+use weave_host_protocol::dispatcher::UpdateMachineRequest;
+use weave_host_protocol::dispatcher::UpdateMachineResponse;
 use weave_host_protocol::dispatcher::UpdateMachineSettingsRequest;
 
 use crate::Dispatcher;
@@ -92,6 +94,8 @@ pub struct Machine {
     pub id: String,
     pub name: String,
     pub state: MachineState,
+    /// The container image the machine is configured to boot, when known.
+    pub image: Option<String>,
 }
 
 impl From<Machine> for CloudMachine {
@@ -100,6 +104,7 @@ impl From<Machine> for CloudMachine {
             id: machine.id,
             name: machine.name,
             state: machine.state.to_string(),
+            image: machine.image,
         }
     }
 }
@@ -163,6 +168,13 @@ pub trait Machines: Send + Sync {
 
     /// Destroy a machine and its disk.
     fn destroy(&self, id: &str) -> impl Future<Output = Result<(), MachineError>> + Send;
+
+    /// Swap a machine's container image in place, keeping its disk and identity.
+    fn update_image(
+        &self,
+        id: &str,
+        image: &str,
+    ) -> impl Future<Output = Result<Machine, MachineError>> + Send;
 }
 
 /// Object-safe form of [`Machines`], used by [`MachineBackend`].
@@ -173,6 +185,11 @@ pub trait DynMachines: Send + Sync {
     fn start<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), MachineError>>;
     fn stop<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), MachineError>>;
     fn destroy<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), MachineError>>;
+    fn update_image<'a>(
+        &'a self,
+        id: &'a str,
+        image: &'a str,
+    ) -> BoxFuture<'a, Result<Machine, MachineError>>;
 }
 
 impl<M: Machines> DynMachines for M {
@@ -198,6 +215,14 @@ impl<M: Machines> DynMachines for M {
 
     fn destroy<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), MachineError>> {
         Box::pin(Machines::destroy(self, id))
+    }
+
+    fn update_image<'a>(
+        &'a self,
+        id: &'a str,
+        image: &'a str,
+    ) -> BoxFuture<'a, Result<Machine, MachineError>> {
+        Box::pin(Machines::update_image(self, id, image))
     }
 }
 
@@ -598,6 +623,82 @@ impl Shared {
             host: launched.host,
             took_ms: u64::try_from(launched.took.as_millis()).unwrap_or(u64::MAX),
         })
+    }
+
+    pub(crate) async fn update_machine(
+        self: &Arc<Self>,
+        request: UpdateMachineRequest,
+    ) -> Result<UpdateMachineResponse, Error> {
+        let by = request.machine.trim();
+        if by.is_empty() || by.chars().any(char::is_control) {
+            return Err(invalid("name a machine by its name or id"));
+        }
+        let settings = self.machine_settings()?;
+        let image = request
+            .image
+            .or_else(|| settings.image.clone())
+            .filter(|image| !image.trim().is_empty())
+            .ok_or_else(|| {
+                invalid(
+                    "no image given: pass --image or set a default with `weave hosts machines \
+                     config --image <image>`",
+                )
+            })?;
+        let machines = self.fly_client(&settings)?;
+        let listed = machines.list().await.map_err(|error| internal(error.0))?;
+        let machine = listed
+            .into_iter()
+            .find(|machine| machine.id == by || machine.name == by)
+            .ok_or_else(|| invalid(format!("no machine {by} that weave made")))?;
+
+        // Snapshot the Host's connection timestamp before rebooting so we wait for a fresh
+        // reconnect rather than returning immediately on the pre-update connection.
+        let before = self
+            .hosts()?
+            .into_iter()
+            .find(|host| host.name.eq_ignore_ascii_case(&machine.name));
+        let previous_connected_at = before.as_ref().and_then(|host| host.connected_at);
+        let mut saw_disconnect = !before.as_ref().is_some_and(|host| host.connected);
+
+        let began = tokio::time::Instant::now();
+        let wait = request
+            .wait_secs
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_WAIT);
+        let updated = machines
+            .update_image(&machine.id, &image)
+            .await
+            .map_err(|error| internal(error.0))?;
+
+        let deadline = began + wait;
+        loop {
+            if let Ok(hosts) = self.hosts()
+                && let Some(host) = hosts
+                    .into_iter()
+                    .find(|host| host.name.eq_ignore_ascii_case(&machine.name))
+            {
+                if !host.connected {
+                    saw_disconnect = true;
+                } else if saw_disconnect || host.connected_at != previous_connected_at {
+                    let current = machines.get(&updated.id).await.unwrap_or(updated);
+                    return Ok(UpdateMachineResponse {
+                        machine: current.into(),
+                        host,
+                        took_ms: u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    });
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(internal(format!(
+                    "updated machine {} ({}) to {image}, but {} didn't reconnect within {}s",
+                    updated.name,
+                    updated.id,
+                    updated.name,
+                    wait.as_secs()
+                )));
+            }
+            tokio::time::sleep(self.config.machine_poll).await;
+        }
     }
 
     pub(crate) async fn destroy_machine(

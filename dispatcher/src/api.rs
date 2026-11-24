@@ -110,6 +110,7 @@ use weave_host_protocol::dispatcher::SetCredentialRequest;
 use weave_host_protocol::dispatcher::UnlockCredentialsRequest;
 use weave_host_protocol::dispatcher::UnwatchBotsRequest;
 use weave_host_protocol::dispatcher::UpdateBotRequest;
+use weave_host_protocol::dispatcher::UpdateMachineRequest;
 use weave_host_protocol::dispatcher::UpdateMachineSettingsRequest;
 use weave_host_protocol::dispatcher::UpdateProjectRequest;
 use weave_host_protocol::dispatcher::WatchBotsRequest;
@@ -777,6 +778,8 @@ async fn handlers(
             .map(|machines| ListMachinesResponse { machines }));
     handle!(builder, connection, shared, request: LaunchMachineRequest =>
         shared.launch_machine(request).await);
+    handle!(builder, connection, shared, request: UpdateMachineRequest =>
+        shared.update_machine(request).await);
     handle!(builder, connection, shared, request: DestroyMachineRequest =>
         shared.destroy_machine(&request.machine).await);
     handle!(builder, connection, shared, _request: ListBotsRequest =>

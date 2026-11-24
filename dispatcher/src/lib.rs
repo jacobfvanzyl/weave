@@ -395,6 +395,15 @@ impl Dispatcher {
         self.shared.launch_machine(request).await
     }
 
+    /// Update a cloud machine weave made to a new image in place and wait for its Host to
+    /// reconnect.
+    pub async fn update_machine(
+        &self,
+        request: weave_host_protocol::dispatcher::UpdateMachineRequest,
+    ) -> Result<weave_host_protocol::dispatcher::UpdateMachineResponse, Error> {
+        self.shared.update_machine(request).await
+    }
+
     /// Destroy a cloud machine weave made and remove its Host from the Dispatcher.
     pub async fn destroy_machine(
         &self,

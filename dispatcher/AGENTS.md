@@ -289,8 +289,9 @@ keys both ways, removal, a Host paired before Hosts joined, and one joining over
   swap in a fake). The seventeenth migration's `machine_settings` table keeps non-secret settings
   (Fly app/org/region, default image, Tailscale OAuth client ID/tag, and the credential names
   holding the Fly API token and Tailscale OAuth client secret, `fly` and `tailscale` by default).
-  `machines/config`, `machines/configure`, `machines/list`, `machines/launch` and
-  `machines/destroy` expose them on the Dispatcher API; `list`, `launch` and `destroy` require
+  `machines/config`, `machines/configure`, `machines/list`, `machines/launch`,
+  `machines/update` and `machines/destroy` expose them on the Dispatcher API; `list`, `launch`,
+  `update` and `destroy` require
   unlocked credentials (`credentialsLocked` while locked). `launch` checks the name, mints a
   single-use ephemeral Tailscale key when `tailscaleClientId` is set (`machines/tailscale.rs`),
   offers a join code, creates the machine, waits for its Host to connect (which then receives its

@@ -1515,6 +1515,9 @@ pub struct CloudMachine {
     pub name: String,
     /// `"starting"`, `"running"`, `"stopped"`, `"gone"`, or a state of the provider's own.
     pub state: String,
+    /// The container image the machine boots, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
 }
 
 /// Non-secret settings for cloud machines launched by the Dispatcher (ADR 0036, WVE-239).
@@ -1696,4 +1699,32 @@ pub struct DestroyMachineResponse {
     pub machine: CloudMachine,
     /// Whether a Host of that name was also removed from the Dispatcher.
     pub host_removed: bool,
+}
+
+/// `machines/update`: update a cloud machine weave made to a new image in place (preserving its
+/// volume, Host identity and Tailscale state), and wait for its Host to reconnect.
+/// [`crate::errors::CREDENTIALS_LOCKED`] while credentials are locked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "machines/update", response = UpdateMachineResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMachineRequest {
+    /// The machine's id or name.
+    pub machine: String,
+    /// Image override; uses configured `MachineSettings.image` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Seconds to wait for the Host to reconnect after updating (240 by default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_secs: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMachineResponse {
+    pub machine: CloudMachine,
+    pub host: DispatcherHost,
+    /// Milliseconds from starting the image update to the Host being reconnected.
+    pub took_ms: u64,
 }

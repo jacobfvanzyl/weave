@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&UpdateMachineRequest\n{\n    machine: \"cloud-1\".to_owned(), image:\n    Some(\"registry.fly.io/weave-hosts:abc1234\".to_owned()), wait_secs:\n    Some(240),\n})"
+---
+{
+  "method": "machines/update",
+  "params": {
+    "machine": "cloud-1",
+    "image": "registry.fly.io/weave-hosts:abc1234",
+    "waitSecs": 240
+  }
+}

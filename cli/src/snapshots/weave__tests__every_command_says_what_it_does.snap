@@ -1,6 +1,5 @@
 ---
 source: cli/src/main.rs
-assertion_line: 762
 expression: text
 ---
 $ weave --help
@@ -823,6 +822,7 @@ Usage: weave hosts machines [OPTIONS] [COMMAND]
 
 Commands:
   config  Show or update the Dispatcher's non-secret cloud machine settings (Fly app/region/org, default image, Tailscale OAuth client ID/tag, and credential names). Secrets stay in `weave credentials`
+  update  Update one or all running cloud machines to a new image in place, keeping their volume, Host identity, and Tailscale state
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -867,6 +867,33 @@ Options:
 
       --json
           Print the settings as JSON
+
+  -h, --help
+          Print help
+
+$ weave hosts machines update --help
+Update one or all running cloud machines to a new image in place, keeping their volume, Host identity, and Tailscale state
+
+Usage: weave hosts machines update [OPTIONS] [MACHINE]
+
+Arguments:
+  [MACHINE]
+          The machine's name or id, as `weave hosts machines` lists them
+
+Options:
+      --all
+          Update every cloud machine weave made
+
+      --image <IMAGE>
+          The image to roll onto; uses the Dispatcher's configured default without one
+
+      --wait <WAIT>
+          How long to wait for each Host to reconnect, in seconds
+          
+          [default: 240]
+
+      --json
+          Print what the Dispatcher answered as JSON
 
   -h, --help
           Print help

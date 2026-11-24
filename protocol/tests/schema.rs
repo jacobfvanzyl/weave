@@ -226,6 +226,7 @@ fn schema() -> Value {
         "machines/configure" => dispatcher::UpdateMachineSettingsRequest,
         "machines/list" => dispatcher::ListMachinesRequest,
         "machines/launch" => dispatcher::LaunchMachineRequest,
+        "machines/update" => dispatcher::UpdateMachineRequest,
         "machines/destroy" => dispatcher::DestroyMachineRequest,
     };
     let dispatcher_notifications = notifications! { generator, inlined;

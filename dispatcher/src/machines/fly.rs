@@ -14,6 +14,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use serde_json::json;
 
+use crate::machines::ENV_JOIN_CODE;
+use crate::machines::ENV_TAILSCALE_KEY;
 use crate::machines::Machine;
 use crate::machines::MachineError;
 use crate::machines::MachineSpec;
@@ -88,6 +90,8 @@ struct FlyMachine {
 #[derive(Default, Deserialize)]
 struct FlyMachineConfig {
     #[serde(default)]
+    image: String,
+    #[serde(default)]
     mounts: Vec<FlyMount>,
     #[serde(default)]
     metadata: std::collections::BTreeMap<String, String>,
@@ -117,10 +121,16 @@ impl FlyMachine {
             "destroying" | "destroyed" => MachineState::Gone,
             other => MachineState::Other(other.to_owned()),
         };
+        let image = if self.config.image.is_empty() {
+            None
+        } else {
+            Some(self.config.image)
+        };
         Machine {
             id: self.id,
             name: self.name,
             state,
+            image,
         }
     }
 }
@@ -359,13 +369,51 @@ impl Machines for Fly {
         }
         Ok(())
     }
+
+    async fn update_image(&self, id: &str, image: &str) -> Result<Machine, MachineError> {
+        let path = format!("{}/machines/{id}", self.app());
+        let raw = self.done(Method::GET, &path, None).await?;
+        let machine: FlyMachine = Self::read("machine", raw.clone())?;
+        if !machine.made_here() {
+            return Err(MachineError(format!(
+                "machine {id} wasn't made by weave, so it is left alone"
+            )));
+        }
+        let mut config = raw
+            .get("config")
+            .cloned()
+            .filter(Value::is_object)
+            .ok_or_else(|| MachineError(format!("Fly's machine {id} had no config object")))?;
+        if let Some(obj) = config.as_object_mut() {
+            obj.insert("image".to_owned(), Value::String(image.to_owned()));
+            // Strip single-use bootstrap secrets so reboots never carry spent tokens.
+            if let Some(env) = obj.get_mut("env").and_then(Value::as_object_mut) {
+                env.remove(ENV_TAILSCALE_KEY);
+                env.remove(ENV_JOIN_CODE);
+            }
+        }
+        let updated = self
+            .done(Method::POST, &path, Some(json!({ "config": config })))
+            .await?;
+        Ok(Self::read::<FlyMachine>("machine", updated)?.machine())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
+    use serde_json::Value;
+    use serde_json::json;
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
 
+    use super::Fly;
+    use super::FlyConfig;
     use super::volume_name;
+    use crate::machines::ENV_JOIN_CODE;
+    use crate::machines::ENV_TAILSCALE_KEY;
+    use crate::machines::Machines;
 
     #[test]
     fn a_volume_is_named_in_what_fly_allows() {
@@ -374,5 +422,78 @@ mod tests {
             volume_name("A Very Long Name For A Machine Indeed").len(),
             30
         );
+    }
+
+    #[tokio::test]
+    async fn update_image_swaps_image_preserves_mounts_and_strips_bootstrap_env() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let existing = json!({
+            "id": "m-1",
+            "name": "cloud-1",
+            "state": "started",
+            "config": {
+                "image": "registry.fly.io/weave-hosts:old",
+                "env": {
+                    "WEAVE_HOST_NAME": "cloud-1",
+                    "WEAVE_DISPATCHER_URL": "wss://homelab.ts.net:7342",
+                    ENV_TAILSCALE_KEY: "tskey-spent",
+                    ENV_JOIN_CODE: "code-spent",
+                },
+                "guest": { "cpu_kind": "shared", "cpus": 1, "memory_mb": 1024 },
+                "mounts": [{ "volume": "vol_123", "path": "/data" }],
+                "metadata": { "made_by": "weave" },
+            }
+        });
+        let server = tokio::spawn(async move {
+            let mut posted: Option<Value> = None;
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                let mut buf = vec![0u8; 8192];
+                let n = stream.read(&mut buf).await.expect("read");
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let (status, body) = if req.starts_with("GET ") {
+                    ("200 OK", existing.to_string())
+                } else {
+                    let body_str = req.split("\r\n\r\n").nth(1).unwrap_or("");
+                    let json_body: Value = serde_json::from_str(body_str).expect("json body");
+                    posted = Some(json_body.clone());
+                    let resp = json!({
+                        "id": "m-1",
+                        "name": "cloud-1",
+                        "state": "started",
+                        "config": json_body["config"],
+                    });
+                    ("200 OK", resp.to_string())
+                };
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(reply.as_bytes()).await.expect("write");
+            }
+            posted.expect("POST captured")
+        });
+
+        let mut config = FlyConfig::new("tok", "weave-hosts");
+        config.api = format!("http://{addr}");
+        let fly = Fly::new(config).expect("fly");
+        let updated = fly
+            .update_image("m-1", "registry.fly.io/weave-hosts:new")
+            .await
+            .expect("updated");
+        assert_eq!(updated.id, "m-1");
+        assert_eq!(
+            updated.image.as_deref(),
+            Some("registry.fly.io/weave-hosts:new")
+        );
+
+        let posted = server.await.expect("server");
+        let posted_config = &posted["config"];
+        assert_eq!(posted_config["image"], "registry.fly.io/weave-hosts:new");
+        assert_eq!(posted_config["mounts"][0]["volume"], "vol_123");
+        assert_eq!(posted_config["env"]["WEAVE_HOST_NAME"], "cloud-1");
+        assert!(posted_config["env"].get(ENV_TAILSCALE_KEY).is_none());
+        assert!(posted_config["env"].get(ENV_JOIN_CODE).is_none());
     }
 }

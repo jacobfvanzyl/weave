@@ -9054,6 +9054,10 @@ export interface CloudMachine {
    * `"starting"`, `"running"`, `"stopped"`, `"gone"`, or a state of the provider's own.
    */
   state: string;
+  /**
+   * The container image the machine boots, when known.
+   */
+  image?: string | null;
 }
 /**
  * `machines/launch`: make a cloud machine using the Dispatcher's stored Fly and Tailscale
@@ -9092,6 +9096,40 @@ export interface LaunchMachineResponse {
   host: DispatcherHost;
   /**
    * Milliseconds from offering the join code to the Host being connected.
+   */
+  tookMs: number;
+}
+/**
+ * `machines/update`: update a cloud machine weave made to a new image in place (preserving its
+ * volume, Host identity and Tailscale state), and wait for its Host to reconnect.
+ * [`crate::errors::CREDENTIALS_LOCKED`] while credentials are locked.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "UpdateMachineRequest".
+ */
+export interface UpdateMachineRequest {
+  /**
+   * The machine's id or name.
+   */
+  machine: string;
+  /**
+   * Image override; uses configured `MachineSettings.image` when absent.
+   */
+  image?: string | null;
+  /**
+   * Seconds to wait for the Host to reconnect after updating (240 by default).
+   */
+  waitSecs?: number | null;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "UpdateMachineResponse".
+ */
+export interface UpdateMachineResponse {
+  machine: CloudMachine;
+  host: DispatcherHost;
+  /**
+   * Milliseconds from starting the image update to the Host being reconnected.
    */
   tookMs: number;
 }
@@ -9462,6 +9500,7 @@ export interface DispatcherRequests {
   "machines/configure": { params: UpdateMachineSettingsRequest; result: MachineSettingsResponse };
   "machines/list": { params: ListMachinesRequest; result: ListMachinesResponse };
   "machines/launch": { params: LaunchMachineRequest; result: LaunchMachineResponse };
+  "machines/update": { params: UpdateMachineRequest; result: UpdateMachineResponse };
   "machines/destroy": { params: DestroyMachineRequest; result: DestroyMachineResponse };
 }
 

@@ -16,6 +16,7 @@ use weave_host_protocol::dispatcher::LaunchMachineRequest;
 use weave_host_protocol::dispatcher::ListMachinesRequest;
 use weave_host_protocol::dispatcher::MACHINES_FEATURE;
 use weave_host_protocol::dispatcher::MachineSettings;
+use weave_host_protocol::dispatcher::UpdateMachineRequest;
 use weave_host_protocol::dispatcher::UpdateMachineSettingsRequest;
 
 use crate::dispatcher::connect;
@@ -60,6 +61,28 @@ enum MachinesCommand {
     /// default image, Tailscale OAuth client ID/tag, and credential names). Secrets stay in
     /// `weave credentials`.
     Config(ConfigArgs),
+    /// Update one or all running cloud machines to a new image in place, keeping their volume,
+    /// Host identity, and Tailscale state.
+    Update(UpdateArgs),
+}
+
+#[derive(Args)]
+struct UpdateArgs {
+    /// The machine's name or id, as `weave hosts machines` lists them.
+    #[arg(required_unless_present = "all", conflicts_with = "all")]
+    machine: Option<String>,
+    /// Update every cloud machine weave made.
+    #[arg(long)]
+    all: bool,
+    /// The image to roll onto; uses the Dispatcher's configured default without one.
+    #[arg(long)]
+    image: Option<String>,
+    /// How long to wait for each Host to reconnect, in seconds.
+    #[arg(long, default_value_t = 240)]
+    wait: u64,
+    /// Print what the Dispatcher answered as JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -162,8 +185,73 @@ pub(super) async fn launch_host(paths: &DispatcherPaths, args: LaunchArgs) -> an
 pub(super) async fn machines(paths: &DispatcherPaths, args: MachinesArgs) -> anyhow::Result<()> {
     match args.command {
         Some(MachinesCommand::Config(config)) => configure(paths, config).await,
+        Some(MachinesCommand::Update(update)) => update_machines(paths, update).await,
         None => list_machines(paths, args.json).await,
     }
+}
+
+async fn update_machines(paths: &DispatcherPaths, args: UpdateArgs) -> anyhow::Result<()> {
+    let json = args.json;
+    let dispatcher = connect(paths).await?;
+    let outcome = async {
+        require(&dispatcher, MACHINES_FEATURE, "cloud machines")?;
+        let targets = if args.all {
+            dispatcher
+                .send(ListMachinesRequest {})
+                .await
+                .map_err(said)?
+                .machines
+                .into_iter()
+                .map(|machine| machine.name)
+                .collect::<Vec<_>>()
+        } else {
+            args.machine.into_iter().collect()
+        };
+        let mut updated = Vec::with_capacity(targets.len());
+        for target in targets {
+            let response = dispatcher
+                .send(UpdateMachineRequest {
+                    machine: target,
+                    image: args.image.clone(),
+                    wait_secs: Some(args.wait),
+                })
+                .await
+                .map_err(said)?;
+            updated.push(response);
+        }
+        Ok::<_, anyhow::Error>(updated)
+    }
+    .await;
+    dispatcher.shutdown().await;
+    let updated = outcome?;
+    if json {
+        if args.all {
+            println!("{}", serde_json::to_string_pretty(&updated)?);
+        } else if let Some(one) = updated.first() {
+            println!("{}", serde_json::to_string_pretty(one)?);
+        }
+        return Ok(());
+    }
+    if updated.is_empty() {
+        println!("No machines to update.");
+        return Ok(());
+    }
+    for one in updated {
+        let image = one
+            .machine
+            .image
+            .as_deref()
+            .map(|image| format!(" to {image}"))
+            .unwrap_or_default();
+        println!(
+            "Updated {} ({}){} and reconnected in {} seconds.",
+            one.host.name,
+            one.machine.id,
+            image,
+            one.took_ms / 1000
+        );
+    }
+    Ok(())
 }
 
 async fn list_machines(paths: &DispatcherPaths, json: bool) -> anyhow::Result<()> {
@@ -187,7 +275,13 @@ async fn list_machines(paths: &DispatcherPaths, json: bool) -> anyhow::Result<()
         println!("No machines; `weave hosts launch --name <name>` makes one.");
     }
     for machine in machines {
-        println!("{}  {}  {}", machine.id, machine.name, machine.state);
+        match machine.image.as_deref() {
+            Some(image) => println!(
+                "{}  {}  {}  {}",
+                machine.id, machine.name, machine.state, image
+            ),
+            None => println!("{}  {}  {}", machine.id, machine.name, machine.state),
+        }
     }
     Ok(())
 }

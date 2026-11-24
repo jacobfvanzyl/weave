@@ -11,13 +11,21 @@ state=/data
 export HOME="$state/home"
 mkdir -p "$HOME" "$state/tailscale" /var/run/tailscale
 
-if [ -n "${TS_AUTHKEY:-}" ] || [ -s "$state/tailscale/tailscaled.state" ]; then
+# Check for existing Tailscale state before starting tailscaled, which creates the file on boot.
+had_ts_state=0
+[ -s "$state/tailscale/tailscaled.state" ] && had_ts_state=1
+
+if [ -n "${TS_AUTHKEY:-}" ] || [ "$had_ts_state" = 1 ]; then
   tailscaled --statedir="$state/tailscale" --socket=/var/run/tailscale/tailscaled.sock \
     >"$state/tailscaled.log" 2>&1 &
   until [ -S /var/run/tailscale/tailscaled.sock ]; do sleep 0.2; done
   # The key is used the first time; after that the node's own state signs it in.
-  tailscale up ${TS_AUTHKEY:+--authkey="$TS_AUTHKEY"} \
-    --hostname="${WEAVE_HOST_NAME:-weave-host}" --accept-dns=true
+  if [ "$had_ts_state" = 0 ] && [ -n "${TS_AUTHKEY:-}" ]; then
+    tailscale up --authkey="$TS_AUTHKEY" \
+      --hostname="${WEAVE_HOST_NAME:-weave-host}" --accept-dns=true
+  else
+    tailscale up --hostname="${WEAVE_HOST_NAME:-weave-host}" --accept-dns=true
+  fi
   echo "tailnet: $(tailscale ip -4 2>/dev/null || echo 'no address')"
 fi
 
