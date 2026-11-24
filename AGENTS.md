@@ -25,9 +25,16 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | `docs/hardware/` | The person's hardware that agents use, such as the bridge Pi: what it's for, how it's set up, and the rules for using it. |
 | `.agents/tools/linear/` | Deliberately isolated, pinned tracker CLI. |
 
-Preserve credentials, Host state, unrelated dirty work, and remote deployments. Do not commit secrets or edit installed dependencies directly. Repository cleanup is not remote deployment teardown. Before Docker work, check memory and verify the preferred explicit context; do not assume local Docker.
+Preserve credentials, Host state, unrelated dirty work, and remote deployments. Do not commit secrets or edit installed dependencies directly. Repository cleanup is not remote deployment teardown. Before Docker work, take the context your instructions name and pass it explicitly; do not assume local Docker.
 
 Issues use Personal Linear workspace `jacobfvanzyl`, team WVE, and the pinned CLI in `docs/agents/issue-tracker.md`; install it with Bun 1.3.14 (`bun install --cwd .agents/tools/linear --frozen-lockfile`). Follow `docs/agents/triage-labels.md` and use the canonical tracker state for task titles. Tracked implementation needs an issue association. Domain vocabulary lives in `CONTEXT.md`; read `docs/agents/domain.md` and relevant ADRs before changing it.
+
+How work goes here:
+
+- **"Pick up WVE-NN" means plan it first.** Read the issue and the code, then bring a short plan: the person's commands, what agents see, what clients show, the issue's open questions, and your recommendations. Settle them with the person and build only once they agree. Research and read-only spikes are fine meanwhile.
+- **Move the issue's status yourself, without asking,** as the work actually moves: In Progress when it starts, then In Review, Done or Canceled. Read the issue back to check, retitle the thread to match, and mention the move in your reply. Move it because the work moved, not because a commit or a run exists.
+- **Commit and push on `main`.** Don't make a feature branch unless asked. Make one commit per logical change, with the WVE issue in its subject (`feat(app): … (WVE-NN)`). Before pushing, `git fetch`, and push only if `origin/main` hasn't diverged. Ask before rewriting anything already pushed.
+- **weave serves one person** (ADR 0035): don't design for several people on a Host, channels or hosted tenancy.
 
 ## The Rust workspace
 
@@ -132,7 +139,7 @@ incrementally, and plain `cargo clean` removes it; `sweep-build` leaves it as it
 
 The workspace also builds and passes its tests on Linux, x86_64 and aarch64 (WVE-116), where the
 Host runs as a systemd user service. There's no CI, so check changes to platform code there, in
-Docker on the context memory names (never assume local Docker), with the working tree piped in
+Docker on the context your instructions name (never assume local Docker), with the working tree piped in
 and named volumes for the registry and `target/`; `--platform linux/arm64` runs the same on
 aarch64 where the engine emulates it:
 
