@@ -35,7 +35,7 @@ pub(super) struct LaunchArgs {
     #[arg(long, default_value_t = 1)]
     cpus: u32,
     /// The size of the disk the Host keeps its state on, in gigabytes.
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 5)]
     disk: u32,
     /// How long to wait for the Host to join, in seconds, before destroying the machine.
     #[arg(long, default_value_t = 240)]

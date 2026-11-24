@@ -26,7 +26,7 @@ const PRESETS: &[Preset] = &[
     Preset {
         id: "claude",
         package: "@agentclientprotocol/claude-agent-acp",
-        version: "0.86.0",
+        version: "0.110.1",
         args: &[],
         binary_variable: Some("CLAUDE_CODE_EXECUTABLE"),
         // Claude Code speaks MCP 2026-07-28, which the Host MCP server needs, only on its v2
@@ -39,7 +39,7 @@ const PRESETS: &[Preset] = &[
     Preset {
         id: "codex",
         package: "@agentclientprotocol/codex-acp",
-        version: "2.1.1",
+        version: "2.10.0",
         args: &[],
         binary_variable: Some("CODEX_PATH"),
         env: &[],
@@ -47,7 +47,7 @@ const PRESETS: &[Preset] = &[
     Preset {
         id: "gemini",
         package: "@google/gemini-cli",
-        version: "0.63.0",
+        version: "0.71.1",
         args: &["--acp"],
         binary_variable: None,
         env: &[],
@@ -180,7 +180,7 @@ mod tests {
         );
         assert_eq!(
             AgentSpec::preset("claude").map(|spec| spec.display_command()),
-            Some("npx -y @agentclientprotocol/claude-agent-acp@0.86.0".to_owned())
+            Some("npx -y @agentclientprotocol/claude-agent-acp@0.110.1".to_owned())
         );
     }
 

@@ -285,7 +285,8 @@ impl Launch {
             tailscale_key: None,
             cpus: 1,
             memory_mb: 1024,
-            state_gb: 1,
+            // Room for Host state plus npm-cached ACP adapters (Claude + Codex exceed 1 GB).
+            state_gb: 5,
             wait: DEFAULT_WAIT,
             poll: DEFAULT_POLL,
         }

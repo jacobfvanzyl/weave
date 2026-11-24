@@ -1,5 +1,6 @@
 ---
 source: cli/src/main.rs
+assertion_line: 762
 expression: text
 ---
 $ weave --help
@@ -802,7 +803,7 @@ Options:
       --disk <DISK>
           The size of the disk the Host keeps its state on, in gigabytes
           
-          [default: 1]
+          [default: 5]
 
       --wait <WAIT>
           How long to wait for the Host to join, in seconds, before destroying the machine
