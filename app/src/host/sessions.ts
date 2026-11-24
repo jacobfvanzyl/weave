@@ -7,7 +7,8 @@
 // (`sessions/add`): the threads and terminals Blocks were given, not all its directory holds.
 import type { KnownSession, LayoutChange } from '@/app/app-controller';
 import { sessionKey } from '@/app/app-controller';
-import { emptyLayout, tidy, withoutEmptyTabs } from '@/session/layout';
+import { blockOfThread, threadOf } from '@/session/blocks';
+import { emptyLayout, prune, tidy, withoutEmptyTabs } from '@/session/layout';
 import { CONNECTION_CLOSED, type HostConnection, HostError } from './connection';
 import { HOST_PROTOCOL, type HostSession, type SessionLayout } from './protocol';
 
@@ -167,6 +168,23 @@ export class HostSessions {
     kept.shown = after;
     this.#deps.changed();
     void this.#save(kept);
+  }
+
+  /** Whether any Session on `hostId` holds a Block for `threadId` in its current layout. */
+  hasThread(hostId: string, threadId: string): boolean {
+    for (const kept of this.#kept.values()) {
+      if (kept.hostId === hostId && blockOfThread(this.#shown(kept), threadId)) return true;
+    }
+    return false;
+  }
+
+  /** Takes Blocks showing `threadId` out of any Session layout on `hostId`, as for an expired blank thread. */
+  pruneThread(hostId: string, threadId: string) {
+    for (const kept of this.#kept.values()) {
+      if (kept.hostId === hostId && blockOfThread(this.#shown(kept), threadId)) {
+        this.update(hostId, kept.directory, (current) => prune(current, (block) => threadOf(block) !== threadId));
+      }
+    }
   }
 
   #entry(hostId: string, directory: string): Kept {

@@ -935,8 +935,11 @@ struct Actor {
 impl Actor {
     async fn run(mut self) {
         loop {
-            // A blank thread has nothing to come back to, so it doesn't wait long.
-            let grace = if self.blank.load(Ordering::Relaxed) {
+            // A blank thread has nothing to come back to, so it doesn't wait long — unless a
+            // Session's layout still holds a Block for it (e.g. an inactive tab).
+            let grace = if self.blank.load(Ordering::Relaxed)
+                && !self.shared.sessions.holds_thread(&self.root)
+            {
                 self.shared.config.blank_grace
             } else {
                 self.shared.config.idle_grace

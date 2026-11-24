@@ -335,6 +335,19 @@ impl Sessions {
         lock(&self.state).records.contains_key(directory)
     }
 
+    /// Whether any Session's layout currently holds a `weave.thread` Block for `thread_id`.
+    /// Used so an unprompted thread sitting in an inactive tab keeps normal idle grace rather
+    /// than expiring after the short blank grace.
+    pub(crate) fn holds_thread(&self, thread_id: &ThreadId) -> bool {
+        let needle: &str = &thread_id.0;
+        lock(&self.state).records.values().any(|record| {
+            record
+                .layout
+                .as_ref()
+                .is_some_and(|layout| layout_has_thread(layout, needle))
+        })
+    }
+
     /// End the Session at `directory`, and tell its watchers. Whether there was one.
     pub(crate) fn end(&self, directory: &Path) -> bool {
         self.end_where(|path| path == directory)
@@ -441,6 +454,28 @@ impl Sessions {
         };
         crate::journal::create_private_dir(dir)?;
         crate::devices::write_private(&file_for(dir, &record.directory), record)
+    }
+}
+
+/// Whether a Session layout JSON tree contains a `weave.thread` Block pointing at `thread_id`.
+fn layout_has_thread(value: &serde_json::Value, thread_id: &str) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            if map.get("type").and_then(serde_json::Value::as_str) == Some("weave.thread")
+                && map
+                    .get("props")
+                    .and_then(|props| props.get("threadId"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some(thread_id)
+            {
+                return true;
+            }
+            map.values().any(|child| layout_has_thread(child, thread_id))
+        }
+        serde_json::Value::Array(items) => {
+            items.iter().any(|child| layout_has_thread(child, thread_id))
+        }
+        _ => false,
     }
 }
 
@@ -646,5 +681,37 @@ mod tests {
         let refused = sessions.set(Path::new("/tmp"), layout, None, None, &all);
         assert!(refused.is_err());
         assert_eq!(sessions.directories(), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn holds_thread_tracks_blocks_in_session_layouts() {
+        let sessions = Sessions::load(None);
+        let dir = Path::new("/tmp/work");
+        let kept = ThreadId::new("blank-1");
+        let gone = ThreadId::new("blank-2");
+        assert!(!sessions.holds_thread(&kept));
+
+        let with_block = serde_json::json!({
+            "version": 2,
+            "tabs": [{
+                "id": "tab-1",
+                "blocks": [{
+                    "id": "b-1",
+                    "type": "weave.thread",
+                    "props": { "threadId": "blank-1" }
+                }]
+            }]
+        });
+        sessions
+            .set(dir, with_block, None, None, &all)
+            .expect("sets layout with thread block");
+        assert!(sessions.holds_thread(&kept));
+        assert!(!sessions.holds_thread(&gone));
+
+        let without_block = serde_json::json!({"version": 2, "tabs": []});
+        sessions
+            .set(dir, without_block, Some(1), None, &all)
+            .expect("removes thread block");
+        assert!(!sessions.holds_thread(&kept));
     }
 }

@@ -1709,15 +1709,20 @@ export class HostStore {
     };
   }
 
-  /** Stops receiving a thread. One nobody has prompted closes, as the TUI leaves it. */
+  /**
+   * Stops receiving a thread. One nobody has prompted closes unless a Session's layout holds a
+   * Block for it (so switching tabs or Sessions keeps the tab alive).
+   */
   #leave(followed: Followed) {
     const connection = this.#hosts.get(followed.hostId)?.connection;
     const key = threadKey(followed.hostId, followed.threadId);
     const blank = followed.state?.blank ?? false;
+    const held = blank && this.#sessions.hasThread(followed.hostId, followed.threadId);
     // One opened only to be read closes again, unless another client needs it.
     const peeked = this.#closeWhenLeft.delete(key);
-    void connection?.request('thread/detach', { threadId: followed.threadId, close: blank || peeked ? 'ifUnused' : 'never' }).catch(() => {});
-    if (blank || peeked) this.#followed.delete(key);
+    const close = (blank && !held) || peeked;
+    void connection?.request('thread/detach', { threadId: followed.threadId, close: close ? 'ifUnused' : 'never' }).catch(() => {});
+    if (close) this.#followed.delete(key);
   }
 
   #attach(followed: Followed) {
@@ -1756,6 +1761,17 @@ export class HostStore {
       return;
     }
     if (event.type === 'openFailed') {
+      // A blank thread that expired while away (idle grace or Host restart) has no record on the
+      // Host: prune its stale Block from any Session layout instead of stranding an error pane.
+      const unknown = failedWith(event.error, HOST_PROTOCOL.errors.unknownThread);
+      const listed = entry.threads.some(({ info }) => info.sessionId === followed.threadId);
+      if (unknown && !listed && (!followed.state || followed.state.blank) && this.#sessions.hasThread(entry.hostId, followed.threadId)) {
+        this.#followed.delete(keyOf(followed));
+        this.#sessions.pruneThread(entry.hostId, followed.threadId);
+        this.#changed();
+        return;
+      }
+      if (!followed.state) this.#followed.delete(keyOf(followed));
       const agentId = entry.threads.find(({ info }) => info.sessionId === followed.threadId)?.agentId;
       this.#fail(keyOf(followed), `Couldn't open the thread: ${describe(this.#explain(event.error, entry, agentId))}`);
       return;

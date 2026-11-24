@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { sessionKey, threadKey } from '@/app/app-controller';
 import { threadBlock, threadOf } from '@/session/blocks';
-import { layoutBlocks, placeBlock } from '@/session/layout';
+import { layoutBlocks, placeBlock, removeBlock } from '@/session/layout';
 import { blocksText } from '@/chat/acp-transcript';
 import type { TransportEvents } from './connection';
 import { APP_PROTOCOL } from './connection';
@@ -1241,6 +1241,65 @@ describe('HostStore Sessions', () => {
     await store.actions.removeProject?.('p-2');
     expect(sent.remove).toEqual({ project: 'p-2' });
     expect(names()).toEqual(['loom']);
+    store.stop();
+  });
+
+  it('keeps a blank thread alive while its Block sits in a Session layout, closes it when removed, and prunes it if it expired', async () => {
+    const detaches: Array<{ threadId: string; close?: string }> = [];
+    let expired = false;
+    const host = scriptedHost(() => [], {
+      'threads/list': () => ({ result: { threads: [] } }),
+      'thread/attach': (params) => {
+        const { threadId } = params as { threadId: string };
+        if (expired) {
+          return { error: { code: HOST_PROTOCOL.errors.unknownThread, message: `the Host has no record of thread ${threadId}; name its agent and directory` } };
+        }
+        return { result: { ...host.state, threadId, blank: true, replay: { from: 1, reset: true } } };
+      },
+      'thread/detach': (params) => {
+        detaches.push(params as { threadId: string; close?: string });
+        return { result: {} };
+      },
+    });
+    const store = storeFor(host.socket);
+    await store.start();
+    await settle();
+
+    const sKey = sessionKey(HOST, '/work');
+    const tKey = threadKey(HOST, THREAD);
+    store.actions.selectSession?.(sKey);
+    const block = threadBlock(THREAD, 'blk-1');
+    store.actions.updateLayout?.(sKey, (layout) => placeBlock(layout, block, { tab: layout.tabs[0].id }));
+    store.actions.showThreads?.([tKey], tKey);
+    await settle();
+    expect(store.snapshot().open?.[tKey]).toBeDefined();
+
+    // Switching away to another tab or Session keeps the blank thread open (`close: 'never'`).
+    store.actions.showThreads?.([], undefined);
+    await settle();
+    expect(detaches).toEqual([{ threadId: THREAD, close: 'never' }]);
+
+    // Switching back reattaches cleanly while the Host still has it.
+    store.actions.showThreads?.([tKey], tKey);
+    await settle();
+    expect(store.snapshot().threadErrors).toBeUndefined();
+    expect(store.snapshot().open?.[tKey]).toBeDefined();
+
+    // Closing the Block removes it from the Session layout first, so leaving now closes the blank thread.
+    store.actions.updateLayout?.(sKey, (layout) => removeBlock(layout, 'blk-1'));
+    store.actions.showThreads?.([], undefined);
+    await settle();
+    expect(detaches[detaches.length - 1]).toEqual({ threadId: THREAD, close: 'ifUnused' });
+
+    // If a blank thread in a Session layout expired on the Host (e.g. after a restart), returning
+    // prunes its dead Block instead of showing an unknown-thread error banner.
+    store.actions.updateLayout?.(sKey, (layout) => placeBlock(layout, threadBlock('expired-1', 'blk-2'), { tab: layout.tabs[0].id }));
+    expired = true;
+    store.actions.showThreads?.([threadKey(HOST, 'expired-1')], threadKey(HOST, 'expired-1'));
+    await settle();
+    expect(store.snapshot().threadErrors).toBeUndefined();
+    const remaining = layoutBlocks(store.snapshot().session!.layout).map(threadOf);
+    expect(remaining).not.toContain('expired-1');
     store.stop();
   });
 });
