@@ -35,6 +35,7 @@ mod client;
 mod credentials;
 mod devices;
 mod dispatcher;
+mod dotfiles;
 mod files;
 mod git;
 pub mod git_credentials;
@@ -344,6 +345,8 @@ pub(crate) struct Shared {
     pub(crate) dispatcher: dispatcher::Joined,
     /// The person's credentials the Dispatcher gave this Host (ADR 0036).
     pub(crate) credentials: credentials::Credentials,
+    /// The person's dotfiles the Dispatcher synced to this Host (ADR 0037).
+    pub(crate) dotfiles: dotfiles::Dotfiles,
     /// The connections serving services' tools, and calls waiting on them (WVE-171).
     pub(crate) service_tools: service_tools::ServiceTools,
     pub(crate) updates: updates::Updates,
@@ -1285,13 +1288,14 @@ impl Daemon {
         let devices = devices::Devices::load(config.devices.clone());
         let joined = dispatcher::Joined::load(config.dispatcher.clone());
         // Kept beside the record of the Dispatcher that gave them.
-        let credentials = credentials::Credentials::load(
-            config
-                .dispatcher
-                .as_ref()
-                .and_then(|settings| settings.record.parent().map(Path::to_path_buf)),
-            config.home.clone().unwrap_or_else(client::home),
-        );
+        let dispatcher_dir = config
+            .dispatcher
+            .as_ref()
+            .and_then(|settings| settings.record.parent().map(Path::to_path_buf));
+        let home = config.home.clone().unwrap_or_else(client::home);
+        let credentials = credentials::Credentials::load(dispatcher_dir.clone(), home.clone());
+        let dotfiles =
+            dotfiles::Dotfiles::load(dispatcher_dir.map(|dir| dir.join("dotfiles")), home);
         let admissions = Arc::new(admissions::Admissions::load(
             config.journals.as_deref(),
             JOURNAL_RETENTION,
@@ -1328,6 +1332,7 @@ impl Daemon {
                 devices,
                 dispatcher: joined,
                 credentials,
+                dotfiles,
                 service_tools: service_tools::ServiceTools::default(),
                 updates: updates::Updates::default(),
                 serve_entry: serve_entry::ServeEntry::new(config.former_serve.take()),

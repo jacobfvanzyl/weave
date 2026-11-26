@@ -3376,3 +3376,148 @@ fn machines_wire_shapes() {
         })
     );
 }
+
+#[test]
+fn dotfiles_messages() {
+    use weave_host_protocol::dispatcher::ClearDotfilesRequest;
+    use weave_host_protocol::dispatcher::DotfilesHostStatus;
+    use weave_host_protocol::dispatcher::DotfilesSettings;
+    use weave_host_protocol::dispatcher::DotfilesStatus;
+    use weave_host_protocol::dispatcher::DotfilesStatusRequest;
+    use weave_host_protocol::dispatcher::SetDotfilesHostRequest;
+    use weave_host_protocol::dispatcher::SetDotfilesRequest;
+    use weave_host_protocol::dispatcher::SyncDotfilesRequest;
+    use weave_host_protocol::dotfiles::ApplyDotfilesRequest;
+    use weave_host_protocol::dotfiles::DotfilesActiveMode;
+    use weave_host_protocol::dotfiles::DotfilesBlobChunk;
+    use weave_host_protocol::dotfiles::DotfilesConflict;
+    use weave_host_protocol::dotfiles::DotfilesEntry;
+    use weave_host_protocol::dotfiles::DotfilesEntryKind;
+    use weave_host_protocol::dotfiles::DotfilesHostReport;
+    use weave_host_protocol::dotfiles::DotfilesMode;
+    use weave_host_protocol::dotfiles::PlanDotfilesRequest;
+    use weave_host_protocol::dotfiles::PlanDotfilesResponse;
+    use weave_host_protocol::dotfiles::PutDotfilesBlobsRequest;
+
+    let report = DotfilesHostReport {
+        mode: DotfilesActiveMode::Synced,
+        commit: Some("81abc8a0".to_owned()),
+        local_path: None,
+        dirty: false,
+        ahead: None,
+        linked: 12,
+        removed: 1,
+        conflicts: vec![DotfilesConflict {
+            path: ".zshrc".to_owned(),
+            reason: "an unmanaged file already exists there".to_owned(),
+        }],
+    };
+    insta::assert_json_snapshot!(
+        "plan_dotfiles_request",
+        message(&PlanDotfilesRequest {
+            remote: Some("github.com/jacobfvanzyl/.dotfiles".to_owned()),
+            branch: Some("main".to_owned()),
+            mode: DotfilesMode::Auto,
+            clear: false,
+            commit: Some("81abc8a0".to_owned()),
+            entries: vec![
+                DotfilesEntry {
+                    path: ".zshrc".to_owned(),
+                    kind: DotfilesEntryKind::File {
+                        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                            .to_owned(),
+                        size: 0,
+                        executable: false,
+                    },
+                },
+                DotfilesEntry {
+                    path: ".config/kanata/kanata.kbd".to_owned(),
+                    kind: DotfilesEntryKind::Symlink {
+                        target: "../../kanata.kbd".to_owned(),
+                    },
+                },
+            ],
+        })
+    );
+    insta::assert_json_snapshot!(
+        "plan_dotfiles_response",
+        round_trip(&PlanDotfilesResponse {
+            missing: vec![
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_owned(),
+            ],
+            report: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "put_dotfiles_blobs_request",
+        message(&PutDotfilesBlobsRequest {
+            chunks: vec![DotfilesBlobChunk {
+                sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    .to_owned(),
+                offset: 0,
+                total_size: 4,
+                data: "aGVsbG8=".to_owned(),
+            }],
+        })
+    );
+    insta::assert_json_snapshot!(
+        "apply_dotfiles_request",
+        message(&ApplyDotfilesRequest {
+            commit: "81abc8a0".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!("dotfiles_host_report", round_trip(&report));
+    insta::assert_json_snapshot!(
+        "dotfiles_status_request",
+        message(&DotfilesStatusRequest {})
+    );
+    insta::assert_json_snapshot!(
+        "set_dotfiles_request",
+        message(&SetDotfilesRequest {
+            repo: "https://github.com/jacobfvanzyl/.dotfiles.git".to_owned(),
+            branch: Some("main".to_owned()),
+            git_credential: Some(Some("git-personal".to_owned())),
+            poll_interval_secs: Some(60),
+        })
+    );
+    insta::assert_json_snapshot!("clear_dotfiles_request", message(&ClearDotfilesRequest {}));
+    insta::assert_json_snapshot!("sync_dotfiles_request", message(&SyncDotfilesRequest {}));
+    insta::assert_json_snapshot!(
+        "set_dotfiles_host_request",
+        message(&SetDotfilesHostRequest {
+            host: "macbook".to_owned(),
+            mode: DotfilesMode::Local,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "dotfiles_status_response",
+        round_trip(&DotfilesStatus {
+            settings: DotfilesSettings {
+                repo: Some("https://github.com/jacobfvanzyl/.dotfiles.git".to_owned()),
+                remote: Some("github.com/jacobfvanzyl/.dotfiles".to_owned()),
+                branch: "main".to_owned(),
+                git_credential: Some("git-personal".to_owned()),
+                poll_interval_secs: 60,
+                commit: Some("81abc8a0".to_owned()),
+                fetched_at: Some(1_795_400_000_000),
+                fetch_error: None,
+            },
+            hosts: vec![DotfilesHostStatus {
+                host_id: "8ZpX3kqW1m0aLr9TQv2cYw".to_owned(),
+                host_name: "homelab".to_owned(),
+                connected: true,
+                configured_mode: DotfilesMode::Auto,
+                active_mode: Some(DotfilesActiveMode::Synced),
+                commit: Some("81abc8a0".to_owned()),
+                local_path: None,
+                dirty: false,
+                ahead: None,
+                linked: 12,
+                removed: 0,
+                conflicts: Vec::new(),
+                synced_at: Some(1_795_400_005_000),
+                error: None,
+            }],
+        })
+    );
+}

@@ -35,6 +35,7 @@ mod carry;
 pub mod client;
 pub mod credentials;
 mod devices;
+mod dotfiles;
 mod follows;
 mod joins;
 mod link;
@@ -72,6 +73,7 @@ use weave_host_protocol::dispatcher::CredentialKind;
 use weave_host_protocol::dispatcher::CredentialsStatus;
 use weave_host_protocol::dispatcher::DispatcherHost;
 use weave_host_protocol::dispatcher::DispatcherStatus;
+use weave_host_protocol::dispatcher::DotfilesStatus;
 use weave_host_protocol::dispatcher::Occurrence;
 use weave_host_protocol::dispatcher::OfferHostResponse;
 use weave_host_protocol::dispatcher::Overlap;
@@ -81,8 +83,10 @@ use weave_host_protocol::dispatcher::Schedule;
 use weave_host_protocol::dispatcher::ScheduledRun;
 use weave_host_protocol::dispatcher::SendToBotRequest;
 use weave_host_protocol::dispatcher::SentToBot;
+use weave_host_protocol::dispatcher::SetDotfilesRequest;
 use weave_host_protocol::dispatcher::UpdateBotRequest;
 use weave_host_protocol::dispatcher::UpdateProjectRequest;
+use weave_host_protocol::dotfiles::DotfilesMode;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::threads::ThreadId;
 use weave_host_protocol::threads::ThreadListing;
@@ -210,8 +214,13 @@ pub(crate) struct Shared {
     pub(crate) renewing: tokio::sync::Mutex<()>,
     /// Per-credential renewal retry backoff.
     pub(crate) renew_backoffs: renewer::Backoffs,
+    /// Dotfiles git mirror and per-Host sync serialization (ADR 0037).
+    pub(crate) dotfiles: dotfiles::Dotfiles,
+    /// Rung when dotfiles settings change or credentials unlock.
+    pub(crate) dotfiles_changed: Notify,
     scheduler: Mutex<Option<JoinHandle<()>>>,
     renewer_task: Mutex<Option<JoinHandle<()>>>,
+    dotfiles_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Dispatcher {
@@ -245,13 +254,18 @@ impl Dispatcher {
             credentials_changed: Notify::new(),
             renewing: tokio::sync::Mutex::new(()),
             renew_backoffs: renewer::Backoffs::default(),
+            dotfiles: dotfiles::Dotfiles::default(),
+            dotfiles_changed: Notify::new(),
             scheduler: Mutex::new(None),
             renewer_task: Mutex::new(None),
+            dotfiles_task: Mutex::new(None),
         });
         let scheduler = tokio::spawn(scheduler::run(Arc::clone(&shared)));
         *lock(&shared.scheduler) = Some(scheduler);
         let renewer_task = tokio::spawn(renewer::run(Arc::clone(&shared)));
         *lock(&shared.renewer_task) = Some(renewer_task);
+        let dotfiles_task = tokio::spawn(dotfiles::run(Arc::clone(&shared)));
+        *lock(&shared.dotfiles_task) = Some(dotfiles_task);
         Ok(Self { shared })
     }
 
@@ -281,6 +295,10 @@ impl Dispatcher {
         let renewer_task = lock(&self.shared.renewer_task).take();
         if let Some(renewer_task) = renewer_task {
             let _ = renewer_task.await;
+        }
+        let dotfiles_task = lock(&self.shared.dotfiles_task).take();
+        if let Some(dotfiles_task) = dotfiles_task {
+            let _ = dotfiles_task.await;
         }
         let links: Vec<Link> = lock(&self.shared.links)
             .drain()
@@ -342,6 +360,35 @@ impl Dispatcher {
     /// Renew a sign-in now by running its vendor's program, save it, and sync connected Hosts.
     pub async fn renew_credential(&self, name: &str) -> Result<Credential, Error> {
         self.shared.renew_credential(name).await
+    }
+
+    /// Current dotfiles configuration and per-Host sync status (ADR 0037).
+    pub fn dotfiles_status(&self) -> Result<DotfilesStatus, Error> {
+        self.shared.dotfiles_status()
+    }
+
+    /// Configure the dotfiles repository, fetch immediately, and sync connected Hosts.
+    pub async fn set_dotfiles(&self, request: SetDotfilesRequest) -> Result<DotfilesStatus, Error> {
+        self.shared.set_dotfiles(request).await
+    }
+
+    /// Clear the dotfiles configuration and unlink weave-managed symlinks on synced Hosts.
+    pub async fn clear_dotfiles(&self) -> Result<DotfilesStatus, Error> {
+        self.shared.clear_dotfiles().await
+    }
+
+    /// Fetch the dotfiles repository immediately and sync all connected Hosts.
+    pub async fn sync_dotfiles(&self) -> Result<DotfilesStatus, Error> {
+        self.shared.sync_dotfiles_now().await
+    }
+
+    /// Override one Host's dotfiles mode and sync it if connected.
+    pub async fn set_dotfiles_host(
+        &self,
+        host: &str,
+        mode: DotfilesMode,
+    ) -> Result<DotfilesStatus, Error> {
+        self.shared.set_dotfiles_host(host, mode).await
     }
 
     /// A credential's kind and value, as a Host is given it: for this process only, never
@@ -560,6 +607,7 @@ impl Shared {
             self.renew_backoffs.clear_all();
             self.sync_credentials();
             self.credentials_changed.notify_one();
+            self.dotfiles_changed.notify_one();
         })
     }
 

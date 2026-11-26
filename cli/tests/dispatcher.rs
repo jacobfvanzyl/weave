@@ -1887,3 +1887,110 @@ fn git_credential_helper_authenticates_only_the_projects_remote() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+#[test]
+fn dotfiles_cli_sets_syncs_overrides_and_clears() {
+    use weave_host_protocol::dispatcher::DotfilesStatus;
+    use weave_host_protocol::dotfiles::DotfilesActiveMode;
+    use weave_host_protocol::dotfiles::DotfilesMode;
+
+    let mut world = World::new();
+    world.start_host_elsewhere("cloud");
+    let (url, code) = world.offer();
+    let connected = world.weave(&[
+        "dispatcher",
+        "connect",
+        &url,
+        &code,
+        "--name",
+        "laptop",
+        "--no-host",
+    ]);
+    assert!(connected.status.success(), "{}", said(&connected));
+
+    let repo_root = world.dir.path().join("dotfiles-src");
+    let bare = repo_root.join("remote.git");
+    let work = repo_root.join("work");
+    std::fs::create_dir_all(&bare).expect("bare");
+    std::fs::create_dir_all(&work).expect("work");
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "{}: {}", args.join(" "), said(&out));
+    };
+    git(&bare, &["init", "--bare", "--initial-branch=main"]);
+    git(&work, &["init", "--initial-branch=main"]);
+    git(
+        &work,
+        &["remote", "add", "origin", bare.to_str().expect("utf8")],
+    );
+    std::fs::write(work.join(".zshrc"), b"export CLI_TEST=1\n").expect("zshrc");
+    git(&work, &["add", "-A"]);
+    git(&work, &["commit", "-m", "v1"]);
+    git(&work, &["push", "-u", "origin", "main"]);
+
+    let set = world.weave(&[
+        "dotfiles",
+        "set",
+        bare.to_str().expect("utf8"),
+        "--poll",
+        "0",
+        "--json",
+    ]);
+    assert!(set.status.success(), "{}", said(&set));
+    let parsed: DotfilesStatus = serde_json::from_slice(&set.stdout).expect("json");
+    assert!(parsed.settings.commit.is_some());
+    assert_eq!(parsed.hosts.len(), 1);
+    assert_eq!(
+        parsed.hosts[0].active_mode,
+        Some(DotfilesActiveMode::Synced)
+    );
+    assert_eq!(parsed.hosts[0].linked, 1);
+
+    let cloud_home = world.dir.path().join("elsewhere/home");
+    assert_eq!(
+        std::fs::read(cloud_home.join(".zshrc")).expect("zshrc"),
+        b"export CLI_TEST=1\n"
+    );
+
+    // Push a second commit and run `weave dotfiles sync`.
+    std::fs::write(work.join(".zshrc"), b"export CLI_TEST=2\n").expect("zshrc2");
+    git(&work, &["add", "-A"]);
+    git(&work, &["commit", "-m", "v2"]);
+    git(&work, &["push"]);
+    let synced = world.weave(&["dotfiles", "sync"]);
+    assert!(synced.status.success(), "{}", said(&synced));
+    assert_eq!(
+        std::fs::read(cloud_home.join(".zshrc")).expect("zshrc2"),
+        b"export CLI_TEST=2\n"
+    );
+
+    // Override mode to off -> unlinks `.zshrc`.
+    let off = world.weave(&["dotfiles", "host", "cloud", "--mode", "off", "--json"]);
+    assert!(off.status.success(), "{}", said(&off));
+    let off_status: DotfilesStatus = serde_json::from_slice(&off.stdout).expect("json");
+    assert_eq!(off_status.hosts[0].configured_mode, DotfilesMode::Off);
+    assert_eq!(
+        off_status.hosts[0].active_mode,
+        Some(DotfilesActiveMode::Off)
+    );
+    assert!(!cloud_home.join(".zshrc").exists());
+
+    // Status and clear work cleanly.
+    let status = world.weave(&["dotfiles"]);
+    assert!(status.status.success(), "{}", said(&status));
+    let cleared = world.weave(&["dotfiles", "clear", "--json"]);
+    assert!(cleared.status.success(), "{}", said(&cleared));
+    let cleared_status: DotfilesStatus = serde_json::from_slice(&cleared.stdout).expect("json");
+    assert_eq!(cleared_status.settings.repo, None);
+}

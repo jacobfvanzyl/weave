@@ -1,0 +1,9 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&PlanDotfilesResponse\n{\n    missing:\n    vec![\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\".to_owned(),],\n    report: None,\n})"
+---
+{
+  "missing": [
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ]
+}

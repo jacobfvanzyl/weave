@@ -1,0 +1,13 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&SetDotfilesRequest\n{\n    repo: \"https://github.com/jacobfvanzyl/.dotfiles.git\".to_owned(), branch:\n    Some(\"main\".to_owned()), git_credential:\n    Some(Some(\"git-personal\".to_owned())), poll_interval_secs: Some(60),\n})"
+---
+{
+  "method": "dotfiles/set",
+  "params": {
+    "repo": "https://github.com/jacobfvanzyl/.dotfiles.git",
+    "branch": "main",
+    "gitCredential": "git-personal",
+    "pollIntervalSecs": 60
+  }
+}

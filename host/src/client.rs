@@ -68,6 +68,12 @@ use weave_host_protocol::dispatcher::CarryRequest;
 use weave_host_protocol::dispatcher::JoinDispatcherRequest;
 use weave_host_protocol::dispatcher::JoinDispatcherResponse;
 use weave_host_protocol::dispatcher::LeaveDispatcherRequest;
+use weave_host_protocol::dotfiles::ApplyDotfilesRequest;
+use weave_host_protocol::dotfiles::DotfilesHostReport;
+use weave_host_protocol::dotfiles::FEATURE as DOTFILES_FEATURE;
+use weave_host_protocol::dotfiles::PlanDotfilesRequest;
+use weave_host_protocol::dotfiles::PlanDotfilesResponse;
+use weave_host_protocol::dotfiles::PutDotfilesBlobsRequest;
 use weave_host_protocol::errors;
 use weave_host_protocol::files::LIST_FEATURE as LIST_FILES_FEATURE;
 use weave_host_protocol::files::ListFilesRequest;
@@ -509,6 +515,18 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            answer!(connection, plan_dotfiles),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, put_dotfiles_blobs),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, apply_dotfiles),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             answer!(connection, list_terminals),
             agent_client_protocol::on_receive_request!(),
         )
@@ -792,7 +810,7 @@ async fn handlers(
 /// Hosts for this Host's agents (ADR 0029) need; carrying the person's devices' connections,
 /// which only the Dispatcher the Host joined may ask (ADR 0030); and making a Bot's home, a
 /// repository of its own (`repos/init`, WVE-178).
-const FOR_SERVICES: [&str; 23] = [
+const FOR_SERVICES: [&str; 26] = [
     "host/hello",
     "host/challenge",
     "host/status",
@@ -816,6 +834,9 @@ const FOR_SERVICES: [&str; 23] = [
     "dispatcher/carry",
     "repos/init",
     "credentials/sync",
+    "dotfiles/plan",
+    "dotfiles/put",
+    "dotfiles/apply",
 ];
 
 /// What in `request` a client allowed only `methods` may not ask, if anything: another method,
@@ -1113,6 +1134,7 @@ impl Connection {
                 WORKTREES_FEATURE.to_owned(),
                 REPOS_INIT_FEATURE.to_owned(),
                 CREDENTIALS_FEATURE.to_owned(),
+                DOTFILES_FEATURE.to_owned(),
                 RESOLVED_REMOTES_FEATURE.to_owned(),
                 QUEUE_FEATURE.to_owned(),
                 REQUEST_KEYS_FEATURE.to_owned(),
@@ -1473,6 +1495,48 @@ impl Connection {
             .credentials
             .sync(request.credentials)
             .map(|()| Empty {})
+    }
+
+    /// `dotfiles/plan`: plan a dotfiles sync from the Dispatcher this Host joined (ADR 0037).
+    async fn plan_dotfiles(
+        &self,
+        request: PlanDotfilesRequest,
+    ) -> Result<PlanDotfilesResponse, Error> {
+        self.hello_info()?;
+        if !matches!(self.peer, Peer::Joined(_)) {
+            return Err(Error::new(
+                errors::FORBIDDEN,
+                "only the Dispatcher this Host joined syncs its dotfiles",
+            ));
+        }
+        self.shared.dotfiles.plan(&self.shared.git, request).await
+    }
+
+    /// `dotfiles/put`: receive missing dotfiles blob chunks from the Dispatcher this Host joined.
+    async fn put_dotfiles_blobs(&self, request: PutDotfilesBlobsRequest) -> Result<Empty, Error> {
+        self.hello_info()?;
+        if !matches!(self.peer, Peer::Joined(_)) {
+            return Err(Error::new(
+                errors::FORBIDDEN,
+                "only the Dispatcher this Host joined syncs its dotfiles",
+            ));
+        }
+        self.shared.dotfiles.put(request).await.map(|()| Empty {})
+    }
+
+    /// `dotfiles/apply`: apply a staged dotfiles plan from the Dispatcher this Host joined.
+    async fn apply_dotfiles(
+        &self,
+        request: ApplyDotfilesRequest,
+    ) -> Result<DotfilesHostReport, Error> {
+        self.hello_info()?;
+        if !matches!(self.peer, Peer::Joined(_)) {
+            return Err(Error::new(
+                errors::FORBIDDEN,
+                "only the Dispatcher this Host joined syncs its dotfiles",
+            ));
+        }
+        self.shared.dotfiles.apply(request).await
     }
 
     /// `repos/init`: a repository of its own, with the client's first files committed there.

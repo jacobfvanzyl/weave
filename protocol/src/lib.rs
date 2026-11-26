@@ -37,6 +37,7 @@ pub mod agents;
 pub mod credentials;
 pub mod devices;
 pub mod dispatcher;
+pub mod dotfiles;
 pub mod errors;
 pub mod events;
 pub mod files;

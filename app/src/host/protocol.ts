@@ -841,6 +841,49 @@ export type CredentialUse =
       type: "git";
     };
 /**
+ * One entry in the committed dotfiles tree, relative to `$HOME`.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DotfilesEntry".
+ */
+export type DotfilesEntry = {
+  /**
+   * Forward-slash relative path under `$HOME` (plain components only).
+   */
+  path: string;
+} & DotfilesEntry1;
+export type DotfilesEntry1 =
+  | {
+      /**
+       * Lowercase hex SHA-256 of the file's raw bytes.
+       */
+      sha256: string;
+      size: number;
+      executable?: boolean;
+      type: "file";
+    }
+  | {
+      /**
+       * Symlink target recorded in git (`120000` blob).
+       */
+      target: string;
+      type: "symlink";
+    };
+/**
+ * How a Host should handle the Dispatcher's dotfiles.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DotfilesMode".
+ */
+export type DotfilesMode = "auto" | "sync" | "local" | "off";
+/**
+ * What mode a Host actually applied on its last sync.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DotfilesActiveMode".
+ */
+export type DotfilesActiveMode = "synced" | "local" | "off";
+/**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ProgramState".
  */
@@ -5629,6 +5672,130 @@ export interface HeldCredential {
   expiresAt?: number | null;
 }
 /**
+ * `dotfiles/plan`: begin syncing a dotfiles commit (or clearing managed dotfiles) on a Host.
+ * Refused for any client but the Dispatcher the Host joined ([`crate::errors::FORBIDDEN`]).
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "PlanDotfilesRequest".
+ */
+export interface PlanDotfilesRequest {
+  /**
+   * Canonical remote identity (e.g. `github.com/owner/repo`) for local checkout detection.
+   */
+  remote?: string | null;
+  /**
+   * Configured branch name, used for local ahead-count reporting.
+   */
+  branch?: string | null;
+  /**
+   * How a Host should handle the Dispatcher's dotfiles.
+   */
+  mode?: "auto" | "sync" | "local" | "off";
+  /**
+   * Unlink any weave-managed dotfiles and drop the cache (unless the Host stays `local`).
+   */
+  clear?: boolean;
+  commit?: string | null;
+  entries?: DotfilesEntry[];
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "PlanDotfilesResponse".
+ */
+export interface PlanDotfilesResponse {
+  /**
+   * Lowercase hex SHA-256 digests the Host does not yet hold in its local blob cache.
+   */
+  missing?: string[];
+  /**
+   * Present when no transfer was needed and the Host already finished (`local`, `off`, `clear`,
+   * already at `commit`, or all blobs were already cached and applied).
+   */
+  report?: DotfilesHostReport | null;
+}
+/**
+ * What a Host did for a dotfiles sync, returned by `dotfiles/apply` (or `dotfiles/plan` when
+ * no blob transfer was needed).
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DotfilesHostReport".
+ */
+export interface DotfilesHostReport {
+  mode: DotfilesActiveMode;
+  commit?: string | null;
+  /**
+   * On a `local` Host: path to the local authoring checkout (e.g. `~/.dotfiles`).
+   */
+  localPath?: string | null;
+  /**
+   * On a `local` Host: whether the working tree has uncommitted changes.
+   */
+  dirty?: boolean;
+  /**
+   * On a `local` Host: commits ahead of upstream, when known.
+   */
+  ahead?: number | null;
+  /**
+   * Managed symlinks currently linked in `$HOME`.
+   */
+  linked?: number;
+  /**
+   * Previously managed symlinks unlinked during this sync.
+   */
+  removed?: number;
+  /**
+   * Unmanaged paths skipped rather than overwritten.
+   */
+  conflicts?: DotfilesConflict[];
+}
+/**
+ * A target path in `$HOME` weave skipped rather than clobbering.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DotfilesConflict".
+ */
+export interface DotfilesConflict {
+  path: string;
+  reason: string;
+}
+/**
+ * `dotfiles/put`: send one or more chunks of missing blobs to the Host's blob cache.
+ * Refused for any client but the Dispatcher the Host joined ([`crate::errors::FORBIDDEN`]).
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "PutDotfilesBlobsRequest".
+ */
+export interface PutDotfilesBlobsRequest {
+  chunks: DotfilesBlobChunk[];
+}
+/**
+ * One chunk (or full body, when `offset == 0` and decoded length == `totalSize`) of a blob
+ * requested in [`PlanDotfilesResponse::missing`].
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DotfilesBlobChunk".
+ */
+export interface DotfilesBlobChunk {
+  sha256: string;
+  offset: number;
+  totalSize: number;
+  /**
+   * Standard base64 of this chunk's raw bytes.
+   */
+  data: string;
+}
+/**
+ * `dotfiles/apply`: apply the plan staged by the preceding `dotfiles/plan` once all missing
+ * blobs have been uploaded with `dotfiles/put`. Refused for any client but the Dispatcher the
+ * Host joined ([`crate::errors::FORBIDDEN`]).
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ApplyDotfilesRequest".
+ */
+export interface ApplyDotfilesRequest {
+  commit: string;
+}
+/**
  * `terminals/list`: the terminals of the scope `directory` is in, oldest first.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -9158,6 +9325,128 @@ export interface DestroyMachineResponse {
   hostRemoved: boolean;
 }
 /**
+ * `dotfiles/status`: read the dotfiles configuration and every Host's sync state.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DotfilesStatusRequest".
+ */
+export interface DotfilesStatusRequest {}
+/**
+ * Current dotfiles configuration, latest mirror commit, and every Host's status.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DotfilesStatus".
+ */
+export interface DotfilesStatus {
+  settings: DotfilesSettings;
+  hosts?: DotfilesHostStatus[];
+}
+/**
+ * Configured dotfiles source and latest fetch state on the Dispatcher (ADR 0037, WVE-243).
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DotfilesSettings".
+ */
+export interface DotfilesSettings {
+  /**
+   * Git repository URL to pull from; absent when dotfiles sync isn't configured.
+   */
+  repo?: string | null;
+  /**
+   * Canonical remote identity (e.g. `github.com/owner/repo`), matched against Hosts' local
+   * checkouts in `auto` mode.
+   */
+  remote?: string | null;
+  /**
+   * Branch tracked in `repo` (`main` by default).
+   */
+  branch: string;
+  /**
+   * Name of a `token` credential in `weave credentials` used to fetch a private repository.
+   */
+  gitCredential?: string | null;
+  /**
+   * How often the Dispatcher checks `git ls-remote`, in seconds; `0` disables polling.
+   */
+  pollIntervalSecs: number;
+  /**
+   * Latest commit SHA fetched into the Dispatcher's mirror.
+   */
+  commit?: string | null;
+  /**
+   * When the mirror last successfully fetched `commit`.
+   */
+  fetchedAt?: number | null;
+  /**
+   * Why the latest fetch failed, if it did.
+   */
+  fetchError?: string | null;
+}
+/**
+ * One Host's dotfiles mode and last reported sync state.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DotfilesHostStatus".
+ */
+export interface DotfilesHostStatus {
+  hostId: string;
+  hostName: string;
+  connected: boolean;
+  configuredMode: DotfilesMode;
+  activeMode?: DotfilesActiveMode | null;
+  commit?: string | null;
+  localPath?: string | null;
+  dirty?: boolean;
+  ahead?: number | null;
+  linked?: number;
+  removed?: number;
+  conflicts?: DotfilesConflict[];
+  syncedAt?: number | null;
+  error?: string | null;
+}
+/**
+ * `dotfiles/set`: configure (or update) the dotfiles repository on the Dispatcher and fetch +
+ * sync connected Hosts right away.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SetDotfilesRequest".
+ */
+export interface SetDotfilesRequest {
+  repo: string;
+  branch?: string | null;
+  gitCredential?: string | null;
+  pollIntervalSecs?: number | null;
+}
+/**
+ * `dotfiles/clear`: remove the dotfiles configuration and have synced Hosts unlink their
+ * weave-managed symlinks (leaving `local` Hosts untouched).
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ClearDotfilesRequest".
+ */
+export interface ClearDotfilesRequest {}
+/**
+ * `dotfiles/sync`: fetch from git immediately and push updates to all connected Hosts.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SyncDotfilesRequest".
+ */
+export interface SyncDotfilesRequest {}
+/**
+ * `dotfiles/setHost`: override a single Host's dotfiles mode (`auto`, `sync`, `local`, `off`)
+ * and sync that Host immediately if connected.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SetDotfilesHostRequest".
+ */
+export interface SetDotfilesHostRequest {
+  /**
+   * Host id or name.
+   */
+  host: string;
+  mode: DotfilesMode;
+}
+/**
  * `devices/paired`: a device took the offer this connection made.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -9265,7 +9554,8 @@ export const HOST_PROTOCOL = {
       "botsHome": "bots_home",
       "botsWatch": "bots_watch",
       "botsAvatar": "bots_avatar",
-      "credentials": "credentials"
+      "credentials": "credentials",
+      "dotfiles": "dotfiles"
     },
     "defaultPauseAfter": 43200000
   },
@@ -9317,6 +9607,7 @@ export const HOST_PROTOCOL = {
     "worktrees": "worktrees",
     "reposInit": "repos_init",
     "credentials": "credentials",
+    "dotfiles": "dotfiles",
     "queue": "queue",
     "getThread": "threads/get",
     "requestKeys": "requestKeys",
@@ -9410,6 +9701,9 @@ export interface HostRequests {
   "worktrees/release": { params: ReleaseWorktreeRequest; result: ReleaseWorktreeResponse };
   "repos/init": { params: InitRepositoryRequest; result: InitRepositoryResponse };
   "credentials/sync": { params: SyncCredentialsRequest; result: Empty };
+  "dotfiles/plan": { params: PlanDotfilesRequest; result: PlanDotfilesResponse };
+  "dotfiles/put": { params: PutDotfilesBlobsRequest; result: Empty };
+  "dotfiles/apply": { params: ApplyDotfilesRequest; result: DotfilesHostReport };
   "terminals/list": { params: ListTerminalsRequest; result: TerminalsResponse };
   "terminals/watch": { params: WatchTerminalsRequest; result: TerminalsResponse };
   "terminals/unwatch": { params: UnwatchTerminalsRequest; result: Empty };
@@ -9502,6 +9796,11 @@ export interface DispatcherRequests {
   "machines/launch": { params: LaunchMachineRequest; result: LaunchMachineResponse };
   "machines/update": { params: UpdateMachineRequest; result: UpdateMachineResponse };
   "machines/destroy": { params: DestroyMachineRequest; result: DestroyMachineResponse };
+  "dotfiles/status": { params: DotfilesStatusRequest; result: DotfilesStatus };
+  "dotfiles/set": { params: SetDotfilesRequest; result: DotfilesStatus };
+  "dotfiles/clear": { params: ClearDotfilesRequest; result: DotfilesStatus };
+  "dotfiles/sync": { params: SyncDotfilesRequest; result: DotfilesStatus };
+  "dotfiles/setHost": { params: SetDotfilesHostRequest; result: DotfilesStatus };
 }
 
 /** What each notification the Dispatcher sends carries. */

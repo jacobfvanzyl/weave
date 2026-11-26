@@ -334,6 +334,14 @@ async fn follow(
     }
     // What the Host is to hold of the person's credentials (ADR 0036), if they're unlocked.
     shared.sync_credentials_to(&host.host_id, &handle).await;
+    // Sync the person's dotfiles in the background so a cold transfer never blocks watch/carry
+    // (ADR 0037).
+    {
+        let shared = Arc::clone(shared);
+        let host_id = host.host_id.clone();
+        let handle = handle.clone();
+        tokio::spawn(async move { shared.sync_dotfiles_to(&host_id, &handle).await });
+    }
     send_pending(shared, host, &handle, seen).await;
     settle(shared, host, &connection, None).await;
     look(shared, host, &handle, seen, None).await;

@@ -1,0 +1,28 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&DotfilesStatus\n{\n    settings: DotfilesSettings\n    {\n        repo:\n        Some(\"https://github.com/jacobfvanzyl/.dotfiles.git\".to_owned()),\n        remote: Some(\"github.com/jacobfvanzyl/.dotfiles\".to_owned()), branch:\n        \"main\".to_owned(), git_credential: Some(\"git-personal\".to_owned()),\n        poll_interval_secs: 60, commit: Some(\"81abc8a0\".to_owned()),\n        fetched_at: Some(1_795_400_000_000), fetch_error: None,\n    }, hosts:\n    vec![DotfilesHostStatus\n    {\n        host_id: \"8ZpX3kqW1m0aLr9TQv2cYw\".to_owned(), host_name:\n        \"homelab\".to_owned(), connected: true, configured_mode:\n        DotfilesMode::Auto, active_mode: Some(DotfilesActiveMode::Synced),\n        commit: Some(\"81abc8a0\".to_owned()), local_path: None, dirty: false,\n        ahead: None, linked: 12, removed: 0, conflicts: Vec::new(), synced_at:\n        Some(1_795_400_005_000), error: None,\n    }],\n})"
+---
+{
+  "settings": {
+    "repo": "https://github.com/jacobfvanzyl/.dotfiles.git",
+    "remote": "github.com/jacobfvanzyl/.dotfiles",
+    "branch": "main",
+    "gitCredential": "git-personal",
+    "pollIntervalSecs": 60,
+    "commit": "81abc8a0",
+    "fetchedAt": 1795400000000
+  },
+  "hosts": [
+    {
+      "hostId": "8ZpX3kqW1m0aLr9TQv2cYw",
+      "hostName": "homelab",
+      "connected": true,
+      "configuredMode": "auto",
+      "activeMode": "synced",
+      "commit": "81abc8a0",
+      "linked": 12,
+      "removed": 0,
+      "syncedAt": 1795400005000
+    }
+  ]
+}

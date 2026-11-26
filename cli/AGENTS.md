@@ -313,3 +313,9 @@ when run as a service. `weave projects add --git-credential <name>` and `weave p
 <project> --git-credential <name>` / `--clear-git-credential` attach or detach a token
 credential on a git Project; `weave daemon run` serves `git-credentials.sock`, and the hidden
 `weave git-credential` subcommand answers git's credential helper protocol from it.
+
+`weave dotfiles` (`commands/dotfiles.rs`; ADR 0037, WVE-243) manages the dotfiles repository the
+Dispatcher pulls from git and syncs across Hosts: `status` (the default, showing repo/commit and
+each Host's mode, commit, linked/conflict counts, or local authoring state), `set <repo>`
+(`--branch`, `--git-credential`, `--clear-git-credential`, `--poll`), `sync`, `clear`, and
+`host <host> --mode auto|sync|local|off`, all supporting `--json`.

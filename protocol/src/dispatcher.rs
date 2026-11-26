@@ -34,6 +34,9 @@ use crate::Timestamp;
 use crate::agents::AgentId;
 use crate::devices::DeviceInfo;
 use crate::devices::Jwk;
+use crate::dotfiles::DotfilesActiveMode;
+use crate::dotfiles::DotfilesConflict;
+use crate::dotfiles::DotfilesMode;
 use crate::hello::Auth;
 use crate::hello::ClientInfo;
 use crate::policy::PermissionPolicy;
@@ -99,6 +102,10 @@ pub const CREDENTIALS_FEATURE: &str = "credentials";
 /// machines using tokens from its credential store (ADR 0036, WVE-238, WVE-239): it answers
 /// `machines/*`.
 pub const MACHINES_FEATURE: &str = "machines";
+
+/// The [`DispatcherHello::features`] entry of a Dispatcher that pulls the person's dotfiles from
+/// git and syncs them to Hosts (ADR 0037, WVE-243): it answers `dotfiles/*`.
+pub const DOTFILES_FEATURE: &str = "dotfiles";
 
 /// The [`DispatcherHello::features`] entry of a Dispatcher that keeps Bots (ADR 0028, WVE-118):
 /// it answers `bots/*`, and `schedules/add` takes `bot`, and `at` for a one-off.
@@ -1727,4 +1734,145 @@ pub struct UpdateMachineResponse {
     pub host: DispatcherHost,
     /// Milliseconds from starting the image update to the Host being reconnected.
     pub took_ms: u64,
+}
+
+/// Default automatic polling interval for dotfiles (`git ls-remote`), in seconds.
+pub const DEFAULT_DOTFILES_POLL_SECS: u64 = 60;
+
+/// Configured dotfiles source and latest fetch state on the Dispatcher (ADR 0037, WVE-243).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DotfilesSettings {
+    /// Git repository URL to pull from; absent when dotfiles sync isn't configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// Canonical remote identity (e.g. `github.com/owner/repo`), matched against Hosts' local
+    /// checkouts in `auto` mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+    /// Branch tracked in `repo` (`main` by default).
+    pub branch: String,
+    /// Name of a `token` credential in `weave credentials` used to fetch a private repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_credential: Option<String>,
+    /// How often the Dispatcher checks `git ls-remote`, in seconds; `0` disables polling.
+    pub poll_interval_secs: u64,
+    /// Latest commit SHA fetched into the Dispatcher's mirror.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    /// When the mirror last successfully fetched `commit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<Timestamp>,
+    /// Why the latest fetch failed, if it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch_error: Option<String>,
+}
+
+impl Default for DotfilesSettings {
+    fn default() -> Self {
+        Self {
+            repo: None,
+            remote: None,
+            branch: "main".to_owned(),
+            git_credential: None,
+            poll_interval_secs: DEFAULT_DOTFILES_POLL_SECS,
+            commit: None,
+            fetched_at: None,
+            fetch_error: None,
+        }
+    }
+}
+
+/// One Host's dotfiles mode and last reported sync state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DotfilesHostStatus {
+    pub host_id: String,
+    pub host_name: String,
+    pub connected: bool,
+    pub configured_mode: DotfilesMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_mode: Option<DotfilesActiveMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_path: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dirty: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ahead: Option<u32>,
+    #[serde(default)]
+    pub linked: u32,
+    #[serde(default)]
+    pub removed: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<DotfilesConflict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Current dotfiles configuration, latest mirror commit, and every Host's status.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DotfilesStatus {
+    pub settings: DotfilesSettings,
+    #[serde(default)]
+    pub hosts: Vec<DotfilesHostStatus>,
+}
+
+/// `dotfiles/status`: read the dotfiles configuration and every Host's sync state.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "dotfiles/status", response = DotfilesStatus)]
+pub struct DotfilesStatusRequest {}
+
+/// `dotfiles/set`: configure (or update) the dotfiles repository on the Dispatcher and fetch +
+/// sync connected Hosts right away.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "dotfiles/set", response = DotfilesStatus)]
+#[serde(rename_all = "camelCase")]
+pub struct SetDotfilesRequest {
+    pub repo: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub git_credential: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_interval_secs: Option<u64>,
+}
+
+/// `dotfiles/clear`: remove the dotfiles configuration and have synced Hosts unlink their
+/// weave-managed symlinks (leaving `local` Hosts untouched).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "dotfiles/clear", response = DotfilesStatus)]
+pub struct ClearDotfilesRequest {}
+
+/// `dotfiles/sync`: fetch from git immediately and push updates to all connected Hosts.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "dotfiles/sync", response = DotfilesStatus)]
+pub struct SyncDotfilesRequest {}
+
+/// `dotfiles/setHost`: override a single Host's dotfiles mode (`auto`, `sync`, `local`, `off`)
+/// and sync that Host immediately if connected.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "dotfiles/setHost", response = DotfilesStatus)]
+#[serde(rename_all = "camelCase")]
+pub struct SetDotfilesHostRequest {
+    /// Host id or name.
+    pub host: String,
+    pub mode: DotfilesMode,
 }

@@ -128,6 +128,11 @@ impl DaemonPaths {
     pub fn terminals(&self) -> PathBuf {
         self.dir.join("terminals")
     }
+
+    /// Cached dotfiles blobs, materialized files, and managed symlink manifest (ADR 0037).
+    pub fn dotfiles(&self) -> PathBuf {
+        self.dir.join("dotfiles")
+    }
 }
 
 /// `$XDG_RUNTIME_DIR`, or on Linux the directory systemd keeps for the user, which a login

@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&SetDotfilesHostRequest\n{ host: \"macbook\".to_owned(), mode: DotfilesMode::Local, })"
+---
+{
+  "method": "dotfiles/setHost",
+  "params": {
+    "host": "macbook",
+    "mode": "local"
+  }
+}

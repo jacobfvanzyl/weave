@@ -77,4 +77,10 @@ impl DispatcherPaths {
     pub fn log(&self) -> PathBuf {
         self.dir.join("dispatcher.log")
     }
+
+    /// Where the Dispatcher keeps its bare dotfiles mirror and temporary askpass helpers
+    /// (ADR 0037).
+    pub fn dotfiles(&self) -> PathBuf {
+        self.dir.join("dotfiles")
+    }
 }

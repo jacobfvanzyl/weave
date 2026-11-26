@@ -113,6 +113,9 @@ enum Command {
     /// act as you. Unlock them after the Dispatcher starts, lock them, or keep, list and remove
     /// one.
     Credentials(commands::credentials::CredentialsArgs),
+    /// Your terminal dotfiles repository, which the Dispatcher pulls from git and syncs across
+    /// your Hosts as file-level symlinks.
+    Dotfiles(commands::dotfiles::DotfilesArgs),
     /// Your Bots, which the Dispatcher keeps: assistants with a home of their own on one of
     /// your Hosts, working there in one thread at a time. List them, add, show, change or
     /// remove one, send one a prompt, or start its new thread.
@@ -180,6 +183,9 @@ async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
                 commands::credentials::command(args),
             )
             .await
+        }
+        Command::Dotfiles(args) => {
+            logged(commands::dotfiles::LOG, commands::dotfiles::command(args)).await
         }
         Command::Bots(args) => logged(commands::bots::LOG, commands::bots::command(args)).await,
         Command::Pair(args) => logged(devices::LOG, devices::pair(args)).await,

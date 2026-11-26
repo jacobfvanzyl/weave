@@ -54,12 +54,14 @@ use weave_host_protocol::dispatcher::BOTS_HOME_FEATURE;
 use weave_host_protocol::dispatcher::BOTS_WATCH_FEATURE;
 use weave_host_protocol::dispatcher::BotResponse;
 use weave_host_protocol::dispatcher::CREDENTIALS_FEATURE;
+use weave_host_protocol::dispatcher::ClearDotfilesRequest;
 use weave_host_protocol::dispatcher::CredentialResponse;
 use weave_host_protocol::dispatcher::CredentialsStatusRequest;
 use weave_host_protocol::dispatcher::DISPATCHER_CARRY_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_HOST_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_PROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_SUBPROTOCOL;
+use weave_host_protocol::dispatcher::DOTFILES_FEATURE;
 use weave_host_protocol::dispatcher::DestroyMachineRequest;
 use weave_host_protocol::dispatcher::DispatcherAddress;
 use weave_host_protocol::dispatcher::DispatcherChallenge;
@@ -67,6 +69,7 @@ use weave_host_protocol::dispatcher::DispatcherChallengeRequest;
 use weave_host_protocol::dispatcher::DispatcherHello;
 use weave_host_protocol::dispatcher::DispatcherHelloRequest;
 use weave_host_protocol::dispatcher::DispatcherStatusRequest;
+use weave_host_protocol::dispatcher::DotfilesStatusRequest;
 use weave_host_protocol::dispatcher::GetBotRequest;
 use weave_host_protocol::dispatcher::GetMachineSettingsRequest;
 use weave_host_protocol::dispatcher::GetProjectRequest;
@@ -107,6 +110,9 @@ use weave_host_protocol::dispatcher::RunScheduleRequest;
 use weave_host_protocol::dispatcher::ScheduleResponse;
 use weave_host_protocol::dispatcher::SendToBotRequest;
 use weave_host_protocol::dispatcher::SetCredentialRequest;
+use weave_host_protocol::dispatcher::SetDotfilesHostRequest;
+use weave_host_protocol::dispatcher::SetDotfilesRequest;
+use weave_host_protocol::dispatcher::SyncDotfilesRequest;
 use weave_host_protocol::dispatcher::UnlockCredentialsRequest;
 use weave_host_protocol::dispatcher::UnwatchBotsRequest;
 use weave_host_protocol::dispatcher::UpdateBotRequest;
@@ -239,6 +245,7 @@ pub(crate) fn features() -> Vec<String> {
         BOTS_AVATAR_FEATURE.to_owned(),
         CREDENTIALS_FEATURE.to_owned(),
         MACHINES_FEATURE.to_owned(),
+        DOTFILES_FEATURE.to_owned(),
     ]
 }
 
@@ -782,6 +789,16 @@ async fn handlers(
         shared.update_machine(request).await);
     handle!(builder, connection, shared, request: DestroyMachineRequest =>
         shared.destroy_machine(&request.machine).await);
+    handle!(builder, connection, shared, _request: DotfilesStatusRequest =>
+        shared.dotfiles_status());
+    handle!(builder, connection, shared, request: SetDotfilesRequest =>
+        shared.set_dotfiles(request).await);
+    handle!(builder, connection, shared, _request: ClearDotfilesRequest =>
+        shared.clear_dotfiles().await);
+    handle!(builder, connection, shared, _request: SyncDotfilesRequest =>
+        shared.sync_dotfiles_now().await);
+    handle!(builder, connection, shared, request: SetDotfilesHostRequest =>
+        shared.set_dotfiles_host(&request.host, request.mode).await);
     handle!(builder, connection, shared, _request: ListBotsRequest =>
         shared.bots().map(|bots| ListBotsResponse { bots }));
     handle!(builder, connection, shared, request: GetBotRequest =>

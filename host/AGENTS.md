@@ -385,3 +385,16 @@ away; a Host with no `DaemonConfig::dispatcher` keeps it in memory. The Host kno
 which vendor a credential is for: the Dispatcher does (`dispatcher/src/signins.rs`). Never log
 a value, put one in a journal or a status, or answer one to a client. Its tests are in the
 modules and in `dispatcher/tests/credentials.rs`.
+
+Dotfiles (ADR 0037, WVE-243; `dotfiles.rs`, feature `dotfiles`): the person's terminal dotfiles
+synced from the Dispatcher the Host joined via `dotfiles/plan`, `dotfiles/put` and
+`dotfiles/apply` (`Peer::Joined` only, in `FOR_SERVICES`). Blobs are cached by SHA-256 under
+`$WEAVE_DAEMON_DIR/dotfiles/blobs/`, materialized under `files/` (`0600` under `.ssh/`, `0755`
+when executable, `0644` otherwise), and linked into `$HOME` via file-level symlinks (real parent
+directories, `0700` for `~/.ssh`, never folding `~/.config` or `~/.ssh`). Tracks owned symlinks
+in `manifest.json` for clean removals and blob GC, refuses paths leaving `$HOME`, and reports
+unmanaged existing files or unmanaged symlinked ancestor directories as conflicts rather than
+clobbering them. In `auto` mode, if `$HOME` already holds a local git checkout matching the
+configured canonical remote (`git::inspect_dotfiles_checkout`, resolving SSH aliases via
+`remotes.rs`), the Host stays in `local` authoring mode without touching symlinks and reports its
+local commit, dirty state, and commits ahead.

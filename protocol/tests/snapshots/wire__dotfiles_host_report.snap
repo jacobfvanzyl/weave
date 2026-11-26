@@ -1,0 +1,16 @@
+---
+source: protocol/tests/wire.rs
+expression: round_trip(&report)
+---
+{
+  "mode": "synced",
+  "commit": "81abc8a0",
+  "linked": 12,
+  "removed": 1,
+  "conflicts": [
+    {
+      "path": ".zshrc",
+      "reason": "an unmanaged file already exists there"
+    }
+  ]
+}

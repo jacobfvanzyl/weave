@@ -8,6 +8,7 @@ pub mod credentials;
 pub mod daemon;
 pub mod devices;
 pub mod dispatcher;
+pub mod dotfiles;
 pub mod hosts;
 pub mod projects;
 pub mod run;

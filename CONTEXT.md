@@ -228,6 +228,12 @@ _Avoid_: secret, token, key (a Host's and a device's keys are their own)
 A credential a vendor's own program made when the person signed in to it, which only the Dispatcher renews; a Host's copy of one can't be renewed.
 _Avoid_: login, session, auth
 
+### Dotfiles
+
+**Dotfiles**:
+The person's terminal and tool configuration kept in one git repository, which the Dispatcher pulls from git and syncs incrementally to their Hosts as file-level symlinks under `$HOME`, leaving Hosts with a local authoring checkout of that repository untouched.
+_Avoid_: config sync, profile, stow package
+
 ### Records
 
 **Journal**:

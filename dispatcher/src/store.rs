@@ -8,6 +8,7 @@ mod bots;
 mod calls;
 pub(crate) mod credentials;
 mod devices;
+pub(crate) mod dotfiles;
 mod machines;
 mod projects;
 mod schedules;
@@ -54,7 +55,7 @@ use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 17] = [
+const MIGRATIONS: [&str; 18] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -338,6 +339,34 @@ const MIGRATIONS: [&str; 17] = [
         tailscale_client_id TEXT,
         tailscale_credential TEXT,
         tailscale_tag TEXT
+    );
+",
+    // Dotfiles repository settings and per-Host sync mode/state (ADR 0037, WVE-243).
+    "
+    CREATE TABLE dotfiles_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        repo TEXT,
+        remote TEXT,
+        branch TEXT NOT NULL DEFAULT 'main',
+        git_credential TEXT REFERENCES credentials (name) ON DELETE SET NULL,
+        poll_interval_secs INTEGER NOT NULL DEFAULT 60,
+        commit_sha TEXT,
+        fetched_at INTEGER,
+        fetch_error TEXT
+    );
+    CREATE TABLE dotfiles_hosts (
+        host_id TEXT PRIMARY KEY REFERENCES hosts (host_id) ON DELETE CASCADE,
+        mode TEXT NOT NULL DEFAULT 'auto',
+        active_mode TEXT,
+        commit_sha TEXT,
+        local_path TEXT,
+        dirty INTEGER NOT NULL DEFAULT 0,
+        ahead INTEGER,
+        linked INTEGER NOT NULL DEFAULT 0,
+        removed INTEGER NOT NULL DEFAULT 0,
+        conflicts TEXT NOT NULL DEFAULT '[]',
+        synced_at INTEGER,
+        error TEXT
     );
 ",
 ];

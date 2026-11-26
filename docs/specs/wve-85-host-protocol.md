@@ -186,6 +186,8 @@ request with `unauthenticated`.
   `dispatcher` auth (see [Connections the Dispatcher carries](#connections-the-dispatcher-carries)),
   and `repos_init` (WVE-178): `repos/init` (see [A repository of its own](#a-repository-of-its-own)),
   and `credentials` (WVE-239): `credentials/sync` (see [Credentials](#credentials)),
+  and `dotfiles` (WVE-243): `dotfiles/plan`, `dotfiles/put` and `dotfiles/apply` (see
+  [Dotfiles](#dotfiles)),
   and `resolved_remotes` (WVE-213): `GitLocation.remote` with git's rewrites applied and an SSH
   host resolved (see [A repository's remote](#a-repositorys-remote)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
@@ -1594,6 +1596,39 @@ says how the Host gives it to what needs it.
 A credential past its `expiresAt` is no longer added to an agent's environment or answered by the
 git credential helper. The Host keeps the set sealed beside its record of the Dispatcher, so
 agents start while the Dispatcher is away. Nothing answers a value back.
+
+## Dotfiles
+
+Feature `dotfiles`, ADR 0037, WVE-243. The Dispatcher pulls the person's dotfiles repository from
+git and syncs every committed file to its Hosts ([Dotfiles](wve-175-dispatcher.md#dotfiles)). Only
+the Dispatcher the Host joined may ask, over the connection the Host opened to it; any other
+client is `forbidden`.
+
+**`dotfiles/plan`** `{remote?, branch?, mode, clear?, commit?, entries?}` → `{missing, report?}`
+
+Begins syncing `commit` (or clearing weave-managed symlinks when `clear` is true or `mode` is
+`"off"`). In `"auto"` mode, if `$HOME` already holds a local git checkout matching `remote` (such
+as `~/.dotfiles`, resolved through SSH aliases as in [A repository's remote](#a-repositorys-remote)),
+the Host stays in `"local"` mode, leaves `$HOME` untouched, and answers immediately with `report`
+carrying `localPath`, `commit`, `dirty`, and `ahead`. Otherwise, when `commit` is already applied
+with no conflicts or all referenced SHA-256 blobs are already in `$WEAVE_DAEMON_DIR/dotfiles/blobs/`,
+the Host completes immediately and returns `report`; otherwise it stages the plan and lists the
+missing SHA-256 digests in `missing`.
+
+**`dotfiles/put`** `{chunks: {sha256, offset, totalSize, data}[]}` → `{}`
+
+Uploads chunks (base64, <= 512 KiB raw each) of blobs requested in `dotfiles/plan`. When a blob's
+final chunk arrives, the Host verifies its SHA-256 and commits it to its local blob cache.
+
+**`dotfiles/apply`** `{commit}` → `DotfilesHostReport`
+
+Materializes files under `$WEAVE_DAEMON_DIR/dotfiles/files/` (`0600` under `.ssh/`, `0755` for
+executable blobs, `0644` otherwise), creates real parent directories in `$HOME` (`0700` for
+`~/.ssh`), places file-level symlinks into `$HOME` (never folding `~/.config` or `~/.ssh`),
+unlinks previously managed symlinks absent from `commit`, prunes unreferenced blobs, and returns
+`{mode, commit?, localPath?, dirty?, ahead?, linked, removed, conflicts}`. Unmanaged existing
+files or unmanaged symlinked ancestor directories are never clobbered and are reported in
+`conflicts`.
 
 ## Sessions
 

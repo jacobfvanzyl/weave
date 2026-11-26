@@ -297,3 +297,18 @@ keys both ways, removal, a Host paired before Hosts joined, and one joining over
   offers a join code, creates the machine, waits for its Host to connect (which then receives its
   synced agent sign-ins automatically), and destroys any machine whose Host never joins. The
   Dispatcher still runs no agents.
+- `dotfiles.rs`, `store/dotfiles.rs` (ADR 0037, WVE-243, feature `dotfiles`): the person's
+  terminal dotfiles repository, pulled into a bare mirror at `$WEAVE_DISPATCHER_DIR/dotfiles/repo.git`
+  and synced incrementally to every connected Host (`dotfiles/plan`, `dotfiles/put`,
+  `dotfiles/apply`). Migration 18 adds `dotfiles_settings` (repo, canonical remote, branch,
+  optional `git_credential` referencing `credentials(name) ON DELETE SET NULL`,
+  `poll_interval_secs`, last `commit_sha`, `fetched_at`, `fetch_error`) and `dotfiles_hosts`
+  (per-Host mode override `auto|sync|local|off` and last reported sync state/conflicts). Private
+  repositories authenticate via a short-lived private `GIT_ASKPASS` script fed the token from
+  the unlocked credential store (never written to `.git/config`); while locked, remote fetches
+  record a locked error while connecting Hosts still receive the cached snapshot from disk, and
+  unlocking credentials wakes the background poller (`dotfiles::run` on `Clock`, checking `git
+  ls-remote` on `poll_interval_secs`). Reads only git-tracked blobs & symlinks (`git ls-tree` +
+  `git cat-file --batch`), skipping GNU Stow's root-level metadata defaults and `.DS_Store`.
+  `dotfiles/status`, `dotfiles/set`, `dotfiles/clear`, `dotfiles/sync` and `dotfiles/setHost`
+  expose it on the Dispatcher API; tests are in `tests/dotfiles.rs`.

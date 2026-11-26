@@ -491,6 +491,31 @@ Dispatcher keeps them, and says so with the `credentials` feature.
   temporary directory and sends the resulting file to the Dispatcher.
 - **Not yet:** changing the passphrase.
 
+## Dotfiles
+
+The person's terminal dotfiles (ADR 0037, WVE-243), behind the `dotfiles` feature: one git
+repository the Dispatcher pulls into a bare mirror (`$WEAVE_DISPATCHER_DIR/dotfiles/repo.git`)
+and disseminates incrementally to every connected Host.
+
+- **Configuration** (`dotfiles/set`, `dotfiles/clear`, `dotfiles/status`): `repo`, `branch`
+  (default `"main"`), optional `gitCredential` naming a `token` credential in `weave credentials`
+  for private repositories, and `pollIntervalSecs` (default `60`; `0` disables automatic polling).
+- **Fetching** (automatic via `git ls-remote` on `pollIntervalSecs`, or on demand via
+  `dotfiles/sync`): fetches only when the remote branch SHA moves. When `gitCredential` is set,
+  the token is passed to `git` through a short-lived private `GIT_ASKPASS` helper while
+  credentials are unlocked and never written to `.git/config`. While credentials are locked,
+  remote fetches fail with a locked note while the Dispatcher continues serving its last cached
+  mirror snapshot to connecting Hosts; unlocking credentials wakes the poller immediately.
+- **Tracked files only:** reads the committed tree directly via `git ls-tree` and
+  `git cat-file --batch`, skipping GNU Stow's root-level repository metadata defaults (`.git`,
+  `.gitignore`, `.gitmodules`, `.gitattributes`, `README*`, `LICENSE*`, `COPYING*`, `.stow-*`)
+  and `.DS_Store` anywhere.
+- **Dissemination and per-Host mode** (`dotfiles/setHost`): each Host defaults to `auto` (local
+  authoring checkout if one matching the canonical remote exists under `$HOME`, otherwise synced
+  via `dotfiles/plan` / `dotfiles/put` / `dotfiles/apply` in
+  [the Host protocol](wve-85-host-protocol.md#dotfiles)), and can be overridden to `sync`,
+  `local`, or `off`.
+
 ## Bots
 
 A Bot (ADR 0028, as WVE-118 and WVE-178 settled it there) is a named assistant the person comes back to over

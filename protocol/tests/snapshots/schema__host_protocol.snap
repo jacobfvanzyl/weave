@@ -184,6 +184,18 @@ expression: schema()
       "params": "SyncCredentialsRequest",
       "result": "Empty"
     },
+    "dotfiles/plan": {
+      "params": "PlanDotfilesRequest",
+      "result": "PlanDotfilesResponse"
+    },
+    "dotfiles/put": {
+      "params": "PutDotfilesBlobsRequest",
+      "result": "Empty"
+    },
+    "dotfiles/apply": {
+      "params": "ApplyDotfilesRequest",
+      "result": "DotfilesHostReport"
+    },
     "terminals/list": {
       "params": "ListTerminalsRequest",
       "result": "TerminalsResponse"
@@ -469,6 +481,26 @@ expression: schema()
     "machines/destroy": {
       "params": "DestroyMachineRequest",
       "result": "DestroyMachineResponse"
+    },
+    "dotfiles/status": {
+      "params": "DotfilesStatusRequest",
+      "result": "DotfilesStatus"
+    },
+    "dotfiles/set": {
+      "params": "SetDotfilesRequest",
+      "result": "DotfilesStatus"
+    },
+    "dotfiles/clear": {
+      "params": "ClearDotfilesRequest",
+      "result": "DotfilesStatus"
+    },
+    "dotfiles/sync": {
+      "params": "SyncDotfilesRequest",
+      "result": "DotfilesStatus"
+    },
+    "dotfiles/setHost": {
+      "params": "SetDotfilesHostRequest",
+      "result": "DotfilesStatus"
     }
   },
   "x-weave-dispatcher-notifications": {
@@ -500,7 +532,8 @@ expression: schema()
         "botsHome": "bots_home",
         "botsWatch": "bots_watch",
         "botsAvatar": "bots_avatar",
-        "credentials": "credentials"
+        "credentials": "credentials",
+        "dotfiles": "dotfiles"
       },
       "defaultPauseAfter": 43200000
     },
@@ -552,6 +585,7 @@ expression: schema()
       "worktrees": "worktrees",
       "reposInit": "repos_init",
       "credentials": "credentials",
+      "dotfiles": "dotfiles",
       "queue": "queue",
       "getThread": "threads/get",
       "requestKeys": "requestKeys",
@@ -7618,6 +7652,292 @@ expression: schema()
       ],
       "description": "How a Host gives a credential to what uses it."
     },
+    "PlanDotfilesRequest": {
+      "type": "object",
+      "properties": {
+        "remote": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Canonical remote identity (e.g. `github.com/owner/repo`) for local checkout detection."
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Configured branch name, used for local ahead-count reporting."
+        },
+        "mode": {
+          "$ref": "#/$defs/DotfilesMode",
+          "default": "auto"
+        },
+        "clear": {
+          "type": "boolean",
+          "description": "Unlink any weave-managed dotfiles and drop the cache (unless the Host stays `local`)."
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DotfilesEntry"
+          }
+        }
+      },
+      "description": "`dotfiles/plan`: begin syncing a dotfiles commit (or clearing managed dotfiles) on a Host.\nRefused for any client but the Dispatcher the Host joined ([`crate::errors::FORBIDDEN`])."
+    },
+    "DotfilesMode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "auto",
+          "description": "Stay in `local` authoring mode if a local git checkout matching the configured remote\nexists under `$HOME` (such as `~/.dotfiles`), otherwise sync into `$HOME`."
+        },
+        {
+          "type": "string",
+          "const": "sync",
+          "description": "Always sync managed files into `$HOME` via file-level symlinks."
+        },
+        {
+          "type": "string",
+          "const": "local",
+          "description": "Authoring Host: never touch `$HOME` symlinks; report the local checkout's status."
+        },
+        {
+          "type": "string",
+          "const": "off",
+          "description": "Do not sync; unlink any symlinks weave previously placed on this Host."
+        }
+      ],
+      "description": "How a Host should handle the Dispatcher's dotfiles."
+    },
+    "DotfilesEntry": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Forward-slash relative path under `$HOME` (plain components only)."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "sha256": {
+              "type": "string",
+              "description": "Lowercase hex SHA-256 of the file's raw bytes."
+            },
+            "size": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "executable": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "file"
+            }
+          },
+          "required": [
+            "type",
+            "sha256",
+            "size"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "Symlink target recorded in git (`120000` blob)."
+            },
+            "type": {
+              "type": "string",
+              "const": "symlink"
+            }
+          },
+          "required": [
+            "type",
+            "target"
+          ]
+        }
+      ],
+      "description": "One entry in the committed dotfiles tree, relative to `$HOME`."
+    },
+    "PlanDotfilesResponse": {
+      "type": "object",
+      "properties": {
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Lowercase hex SHA-256 digests the Host does not yet hold in its local blob cache."
+        },
+        "report": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DotfilesHostReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when no transfer was needed and the Host already finished (`local`, `off`, `clear`,\nalready at `commit`, or all blobs were already cached and applied)."
+        }
+      }
+    },
+    "DotfilesHostReport": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/DotfilesActiveMode"
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "localPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "On a `local` Host: path to the local authoring checkout (e.g. `~/.dotfiles`)."
+        },
+        "dirty": {
+          "type": "boolean",
+          "description": "On a `local` Host: whether the working tree has uncommitted changes."
+        },
+        "ahead": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "On a `local` Host: commits ahead of upstream, when known."
+        },
+        "linked": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Managed symlinks currently linked in `$HOME`.",
+          "default": 0
+        },
+        "removed": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Previously managed symlinks unlinked during this sync.",
+          "default": 0
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DotfilesConflict"
+          },
+          "description": "Unmanaged paths skipped rather than overwritten."
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "description": "What a Host did for a dotfiles sync, returned by `dotfiles/apply` (or `dotfiles/plan` when\nno blob transfer was needed)."
+    },
+    "DotfilesActiveMode": {
+      "type": "string",
+      "enum": [
+        "synced",
+        "local",
+        "off"
+      ],
+      "description": "What mode a Host actually applied on its last sync."
+    },
+    "DotfilesConflict": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "reason"
+      ],
+      "description": "A target path in `$HOME` weave skipped rather than clobbering."
+    },
+    "PutDotfilesBlobsRequest": {
+      "type": "object",
+      "properties": {
+        "chunks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DotfilesBlobChunk"
+          }
+        }
+      },
+      "required": [
+        "chunks"
+      ],
+      "description": "`dotfiles/put`: send one or more chunks of missing blobs to the Host's blob cache.\nRefused for any client but the Dispatcher the Host joined ([`crate::errors::FORBIDDEN`])."
+    },
+    "DotfilesBlobChunk": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "totalSize": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "data": {
+          "type": "string",
+          "description": "Standard base64 of this chunk's raw bytes."
+        }
+      },
+      "required": [
+        "sha256",
+        "offset",
+        "totalSize",
+        "data"
+      ],
+      "description": "One chunk (or full body, when `offset == 0` and decoded length == `totalSize`) of a blob\nrequested in [`PlanDotfilesResponse::missing`]."
+    },
+    "ApplyDotfilesRequest": {
+      "type": "object",
+      "properties": {
+        "commit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "commit"
+      ],
+      "description": "`dotfiles/apply`: apply the plan staged by the preceding `dotfiles/plan` once all missing\nblobs have been uploaded with `dotfiles/put`. Refused for any client but the Dispatcher the\nHost joined ([`crate::errors::FORBIDDEN`])."
+    },
     "ListTerminalsRequest": {
       "type": "object",
       "properties": {
@@ -13672,6 +13992,239 @@ expression: schema()
         "machine",
         "hostRemoved"
       ]
+    },
+    "DotfilesStatusRequest": {
+      "type": "object",
+      "description": "`dotfiles/status`: read the dotfiles configuration and every Host's sync state."
+    },
+    "DotfilesStatus": {
+      "type": "object",
+      "properties": {
+        "settings": {
+          "$ref": "#/$defs/DotfilesSettings"
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DotfilesHostStatus"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "settings"
+      ],
+      "description": "Current dotfiles configuration, latest mirror commit, and every Host's status."
+    },
+    "DotfilesSettings": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Git repository URL to pull from; absent when dotfiles sync isn't configured."
+        },
+        "remote": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Canonical remote identity (e.g. `github.com/owner/repo`), matched against Hosts' local\ncheckouts in `auto` mode."
+        },
+        "branch": {
+          "type": "string",
+          "description": "Branch tracked in `repo` (`main` by default)."
+        },
+        "gitCredential": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Name of a `token` credential in `weave credentials` used to fetch a private repository."
+        },
+        "pollIntervalSecs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "How often the Dispatcher checks `git ls-remote`, in seconds; `0` disables polling."
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Latest commit SHA fetched into the Dispatcher's mirror."
+        },
+        "fetchedAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When the mirror last successfully fetched `commit`."
+        },
+        "fetchError": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why the latest fetch failed, if it did."
+        }
+      },
+      "required": [
+        "branch",
+        "pollIntervalSecs"
+      ],
+      "description": "Configured dotfiles source and latest fetch state on the Dispatcher (ADR 0037, WVE-243)."
+    },
+    "DotfilesHostStatus": {
+      "type": "object",
+      "properties": {
+        "hostId": {
+          "type": "string"
+        },
+        "hostName": {
+          "type": "string"
+        },
+        "connected": {
+          "type": "boolean"
+        },
+        "configuredMode": {
+          "$ref": "#/$defs/DotfilesMode"
+        },
+        "activeMode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DotfilesActiveMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "localPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "ahead": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "linked": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "removed": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DotfilesConflict"
+          }
+        },
+        "syncedAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "hostId",
+        "hostName",
+        "connected",
+        "configuredMode"
+      ],
+      "description": "One Host's dotfiles mode and last reported sync state."
+    },
+    "SetDotfilesRequest": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string"
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gitCredential": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pollIntervalSecs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "repo"
+      ],
+      "description": "`dotfiles/set`: configure (or update) the dotfiles repository on the Dispatcher and fetch +\nsync connected Hosts right away."
+    },
+    "ClearDotfilesRequest": {
+      "type": "object",
+      "description": "`dotfiles/clear`: remove the dotfiles configuration and have synced Hosts unlink their\nweave-managed symlinks (leaving `local` Hosts untouched)."
+    },
+    "SyncDotfilesRequest": {
+      "type": "object",
+      "description": "`dotfiles/sync`: fetch from git immediately and push updates to all connected Hosts."
+    },
+    "SetDotfilesHostRequest": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "Host id or name."
+        },
+        "mode": {
+          "$ref": "#/$defs/DotfilesMode"
+        }
+      },
+      "required": [
+        "host",
+        "mode"
+      ],
+      "description": "`dotfiles/setHost`: override a single Host's dotfiles mode (`auto`, `sync`, `local`, `off`)\nand sync that Host immediately if connected."
     },
     "DevicePairedNotification": {
       "type": "object",

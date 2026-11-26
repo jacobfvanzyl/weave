@@ -23,6 +23,7 @@ use weave_host_protocol::agents;
 use weave_host_protocol::credentials;
 use weave_host_protocol::devices;
 use weave_host_protocol::dispatcher;
+use weave_host_protocol::dotfiles;
 use weave_host_protocol::errors;
 use weave_host_protocol::events;
 use weave_host_protocol::files;
@@ -139,6 +140,9 @@ fn schema() -> Value {
         "worktrees/release" => worktrees::ReleaseWorktreeRequest,
         "repos/init" => worktrees::InitRepositoryRequest,
         "credentials/sync" => credentials::SyncCredentialsRequest,
+        "dotfiles/plan" => dotfiles::PlanDotfilesRequest,
+        "dotfiles/put" => dotfiles::PutDotfilesBlobsRequest,
+        "dotfiles/apply" => dotfiles::ApplyDotfilesRequest,
         "terminals/list" => terminals::ListTerminalsRequest,
         "terminals/watch" => terminals::WatchTerminalsRequest,
         "terminals/unwatch" => terminals::UnwatchTerminalsRequest,
@@ -228,6 +232,11 @@ fn schema() -> Value {
         "machines/launch" => dispatcher::LaunchMachineRequest,
         "machines/update" => dispatcher::UpdateMachineRequest,
         "machines/destroy" => dispatcher::DestroyMachineRequest,
+        "dotfiles/status" => dispatcher::DotfilesStatusRequest,
+        "dotfiles/set" => dispatcher::SetDotfilesRequest,
+        "dotfiles/clear" => dispatcher::ClearDotfilesRequest,
+        "dotfiles/sync" => dispatcher::SyncDotfilesRequest,
+        "dotfiles/setHost" => dispatcher::SetDotfilesHostRequest,
     };
     let dispatcher_notifications = notifications! { generator, inlined;
         "devices/paired" => devices::DevicePairedNotification,
@@ -286,6 +295,7 @@ fn schema() -> Value {
                     "botsWatch": dispatcher::BOTS_WATCH_FEATURE,
                     "botsAvatar": dispatcher::BOTS_AVATAR_FEATURE,
                     "credentials": dispatcher::CREDENTIALS_FEATURE,
+                    "dotfiles": dispatcher::DOTFILES_FEATURE,
                 },
                 "defaultPauseAfter": dispatcher::DEFAULT_PAUSE_AFTER,
             },
@@ -337,6 +347,7 @@ fn schema() -> Value {
                 "worktrees": worktrees::FEATURE,
                 "reposInit": worktrees::REPOS_INIT_FEATURE,
                 "credentials": credentials::FEATURE,
+                "dotfiles": dotfiles::FEATURE,
                 "queue": queue::FEATURE,
                 "getThread": threads::GET_FEATURE,
                 "requestKeys": turns::REQUEST_KEYS_FEATURE,

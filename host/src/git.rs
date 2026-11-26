@@ -85,6 +85,16 @@ struct Output {
     stdout: String,
 }
 
+/// Summary of a local git checkout on this Host that may be the person's authoring dotfiles repo.
+#[derive(Clone, Debug)]
+pub(crate) struct LocalDotfilesInfo {
+    pub(crate) root: PathBuf,
+    pub(crate) remote: Option<String>,
+    pub(crate) commit: Option<String>,
+    pub(crate) dirty: bool,
+    pub(crate) ahead: Option<u32>,
+}
+
 impl Git {
     /// Git with `environment`, resolving SSH remotes' hosts with `ssh`.
     pub(crate) fn new(environment: &BTreeMap<String, String>, ssh: Arc<dyn SshHosts>) -> Self {
@@ -467,6 +477,77 @@ impl Git {
         self.run(dir, &["init", "--quiet"], READ_TIMEOUT)
             .await
             .map(drop)
+    }
+
+    /// Resolve an identity string (like `github.com-kp/owner/repo`) through SSH aliases here,
+    /// keeping `file://` local-path identities intact for tests.
+    pub(crate) async fn resolved_remote_identity(&self, identity: &str) -> String {
+        if identity.starts_with("file://") {
+            return identity.to_owned();
+        }
+        self.remotes.resolved(identity).await
+    }
+
+    /// Inspect a candidate local dotfiles git checkout at `dir`, returning its root, canonical
+    /// remote identity, HEAD commit, dirty state, and commits ahead of `origin/<branch>` (or
+    /// upstream). Returns `None` if `dir` is not inside a git work tree.
+    pub(crate) async fn inspect_dotfiles_checkout(
+        &self,
+        dir: &Path,
+        branch: Option<&str>,
+    ) -> Option<LocalDotfilesInfo> {
+        let root = self.work_tree_top(dir).await?;
+        let remote = match self.read(&root, &["remote", "get-url", "origin"]).await {
+            Ok(url) => {
+                let url = url.trim();
+                match self.remotes.identity(url).await {
+                    Some(identity) => Some(identity),
+                    None => {
+                        // Local filesystem remote (common in tests): canonicalize into `file://…`.
+                        let stripped = url.strip_prefix("file://").unwrap_or(url);
+                        let path = Path::new(stripped);
+                        let resolved = if path.is_absolute() {
+                            canonical(path)
+                        } else {
+                            canonical(&root.join(path))
+                        };
+                        Some(format!("file://{}", resolved.display()))
+                    }
+                }
+            }
+            Err(_) => None,
+        };
+        let commit = self
+            .read(&root, &["rev-parse", "HEAD"])
+            .await
+            .ok()
+            .map(|sha| sha.trim().to_owned())
+            .filter(|sha| !sha.is_empty());
+        let dirty = self.has_changes(&root).await.unwrap_or(false);
+        let ahead = {
+            let mut count = None;
+            if let Some(branch) = branch {
+                let spec = format!("origin/{branch}..HEAD");
+                if let Ok(out) = self.read(&root, &["rev-list", "--count", &spec]).await {
+                    count = out.trim().parse::<u32>().ok();
+                }
+            }
+            if count.is_none()
+                && let Ok(out) = self
+                    .read(&root, &["rev-list", "--count", "@{u}..HEAD"])
+                    .await
+            {
+                count = out.trim().parse::<u32>().ok();
+            }
+            count
+        };
+        Some(LocalDotfilesInfo {
+            root,
+            remote,
+            commit,
+            dirty,
+            ahead,
+        })
     }
 
     /// Whether git knows who to commit as in `dir`, from its configuration or the environment,

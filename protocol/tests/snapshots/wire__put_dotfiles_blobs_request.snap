@@ -1,0 +1,17 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&PutDotfilesBlobsRequest\n{\n    chunks:\n    vec![DotfilesBlobChunk\n    {\n        sha256:\n        \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\".to_owned(),\n        offset: 0, total_size: 4, data: \"aGVsbG8=\".to_owned(),\n    }],\n})"
+---
+{
+  "method": "dotfiles/put",
+  "params": {
+    "chunks": [
+      {
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "offset": 0,
+        "totalSize": 4,
+        "data": "aGVsbG8="
+      }
+    ]
+  }
+}
